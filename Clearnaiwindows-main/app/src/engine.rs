@@ -1112,11 +1112,11 @@ fn spawn_mic_pipeline(
                 // post-chain "After" peak).
                 handles.input_level.store(frame.iter().fold(0.0f32, |m, &s| m.max(s.abs())));
 
-                let distance = handles.mic_distance.load();
-                if distance != last_distance {
-                    pre_gain.set_db(dsp_core::distance_gain_db(distance));
-                    auto_gain.set_max_gain(dsp_core::distance_agc_max_gain(distance));
-                    last_distance = distance;
+                let gain_db = handles.mic_gain_db.load().min(dsp_core::MAX_GAIN_DB);
+                if gain_db != last_distance {
+                    pre_gain.set_db(gain_db as f32);
+                    auto_gain.set_max_gain(dsp_core::agc_max_gain_for_db(gain_db));
+                    last_distance = gain_db;
                 }
                 pre_gain.process(&mut frame);
 

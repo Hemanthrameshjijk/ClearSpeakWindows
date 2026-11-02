@@ -989,21 +989,22 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
             } else {
                 ("Far or earbud mic? Raise it, or let ClearNAI listen.".to_string(), t.muted)
             };
+            let gain_db = h.mic_gain_db.load().min(dsp_core::MAX_GAIN_DB);
             let distance = column![
                 row![
-                    text("Mic distance").size(13).color(t.muted),
+                    text("Mic sensitivity").size(13).color(t.muted),
                     container(text("")).width(Length::Fill),
-                    pick_list(
-                        &ui_logic::DISTANCE_NAMES[..],
-                        Some(ui_logic::distance_name(h.mic_distance.load())),
-                        Message::SelectMicDistance
-                    )
-                    .width(Length::Fixed(170.0))
-                    .padding([7, 10])
-                    .text_size(13)
-                    .style(style::select),
+                    text(format!("+{gain_db} dB")).size(13).color(ink),
+                    pick_list(&ui_logic::DISTANCE_NAMES[..], ui_logic::distance_name(gain_db), Message::SelectMicDistance)
+                        .placeholder("Custom")
+                        .width(Length::Fixed(110.0))
+                        .padding([6, 10])
+                        .text_size(13)
+                        .style(style::select),
                 ]
+                .spacing(10)
                 .align_y(iced::Alignment::Center),
+                iced::widget::slider(0..=dsp_core::MAX_GAIN_DB, gain_db, Message::SetMicGain),
                 row![
                     text(distance_note).size(12).color(distance_note_color).width(Length::Fill),
                     btn(text(if listening { "Listening" } else { "Set for my mic" }).size(12).font(bold()).color(t.primary))

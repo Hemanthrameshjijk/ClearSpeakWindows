@@ -149,33 +149,35 @@ pub fn active_profile(saved: &str, cur: &MicSnapshot) -> Option<&'static str> {
     profile_by_name(saved).filter(|p| p.matches(cur)).map(|p| p.name)
 }
 
-/// Mic distance choices, in step order (index = `Settings::mic_distance`).
+/// Quick choices next to the sensitivity slider: label and the gain in dB it sets.
 pub const DISTANCE_NAMES: [&str; 3] = ["Close", "Normal", "Far"];
 
-pub fn distance_name(step: u8) -> &'static str {
-    DISTANCE_NAMES.get(step as usize).copied().unwrap_or(DISTANCE_NAMES[0])
+/// The label for a gain that matches a quick choice exactly; `None` (shown as "Custom") for any other slider value.
+pub fn distance_name(gain_db: u8) -> Option<&'static str> {
+    DISTANCE_NAMES.iter().copied().find(|n| distance_from_name(n) == Some(gain_db))
 }
 
+/// The gain in dB a quick choice sets.
 pub fn distance_from_name(name: &str) -> Option<u8> {
-    DISTANCE_NAMES.iter().position(|n| *n == name).map(|i| i as u8)
+    let i = DISTANCE_NAMES.iter().position(|n| *n == name)?;
+    Some(dsp_core::distance_gain_db(i as u8) as u8)
 }
+
+/// Healthy raw mic peak for speech; the gain suggestions aim for it.
+const TARGET_SPEECH_PEAK: f32 = 0.25;
 
 /// How long "Set for my mic" listens, in Tick (250 ms) counts.
 pub const CALIBRATION_TICKS: u32 = 20;
 
-/// The step for a measured voice: `speech_peak` is the raw mic peak while speaking normally (0..1, taken before any
-/// gain). A healthy mic swings past about 0.25; the quieter the voice, the more gain it needs. `None` when nothing was
-/// heard (peak under 0.004), so a silent test never changes the setting.
-pub fn distance_for_speech_peak(speech_peak: f32) -> Option<u8> {
+/// The gain (dB) for a measured voice: `speech_peak` is the raw mic peak while speaking normally (0..1, before any
+/// gain). The gain brings it up to a healthy level, rounded to whole dB and limited to the slider's range. `None` when
+/// nothing was heard (peak under 0.004), so a silent test never changes the setting.
+pub fn gain_db_for_speech_peak(speech_peak: f32) -> Option<u8> {
     if speech_peak < 0.004 {
-        None
-    } else if speech_peak < 0.06 {
-        Some(2)
-    } else if speech_peak < 0.2 {
-        Some(1)
-    } else {
-        Some(0)
+        return None;
     }
+    let db = 20.0 * (TARGET_SPEECH_PEAK / speech_peak).log10();
+    Some(db.round().clamp(0.0, dsp_core::MAX_GAIN_DB as f32) as u8)
 }
 
 /// Mic-distance test in progress: the loudest raw peaks seen so far (one per Tick) and how many Ticks are left.
@@ -253,10 +255,21 @@ pub struct AlertInput {
 /// Ticks (250 ms each) of mic input looked at before deciding the mic is too quiet for the accent.
 pub const QUIET_WINDOW_TICKS: u32 = 40;
 
-/// True when sound was picked up during the window (so it is not just silence) but never got loud: the signature of a
-/// far or earbud mic, where the accent model gets a weak voice. Only matters while accent is on and no gain is set.
-pub fn mic_too_quiet_for_accent(window_peak: f32, accent_on: bool, distance_step: u8) -> bool {
-    accent_on && distance_step == 0 && (0.004..0.06).contains(&window_peak)
+/// True when someone spoke during the window but the voice is much weaker than the gain set so far can bring up: the
+/// signature of a far or earbud mic, where the accent model gets a weak voice. `peaks` holds one raw mic peak per Tick.
+/// Speech is told apart from a steady noise floor by its swing: the loudest peak must stand well above the typical
+/// (median) one, otherwise it is only room noise and no warning is given.
+pub fn mic_too_quiet_for_accent(peaks: &[f32], accent_on: bool, gain_db: u8) -> bool {
+    if !accent_on || peaks.is_empty() {
+        return false;
+    }
+    let mut sorted = peaks.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = sorted[sorted.len() / 2];
+    let voice = sorted[(sorted.len() * 9 / 10).min(sorted.len() - 1)]; // 90th percentile: ignores one-off clicks
+    let speaking = voice >= 0.01 && voice >= median * 3.0;
+    // Needs more than 6 dB beyond what is already applied.
+    speaking && gain_db_for_speech_peak(voice).is_some_and(|needed| needed > gain_db.saturating_add(6))
 }
 
 pub fn alerts(i: &AlertInput) -> Vec<Alert> {
@@ -264,7 +277,7 @@ pub fn alerts(i: &AlertInput) -> Vec<Alert> {
     if i.mic_too_quiet {
         out.push(Alert {
             key: "mic-quiet",
-            text: "Your microphone is quiet, so the accent will sound worse. Set Mic distance to Normal or Far, or tap Set for my mic.".into(),
+            text: "Your microphone is quiet, so the accent will sound worse. Raise Mic sensitivity, or tap Set for my mic and speak for 5 seconds.".into(),
         });
     }
     if i.engine_disconnected {
@@ -320,30 +333,36 @@ mod tests {
 
     #[test]
     fn quiet_mic_warning_needs_accent_on_close_distance_and_audible_but_weak_sound() {
-        assert!(mic_too_quiet_for_accent(0.03, true, 0));
-        assert!(!mic_too_quiet_for_accent(0.03, false, 0), "accent off: no warning");
-        assert!(!mic_too_quiet_for_accent(0.03, true, 2), "gain already raised");
-        assert!(!mic_too_quiet_for_accent(0.0, true, 0), "silence is not a quiet mic");
-        assert!(!mic_too_quiet_for_accent(0.3, true, 0), "healthy level");
+        // Speech at 0.03 over a floor of 0.005: 10 quiet ticks in 40.
+        let quiet_speech: Vec<f32> = (0..40).map(|i| if i % 4 == 0 { 0.03 } else { 0.005 }).collect();
+        assert!(mic_too_quiet_for_accent(&quiet_speech, true, 0));
+        assert!(!mic_too_quiet_for_accent(&quiet_speech, false, 0), "accent off: no warning");
+        assert!(!mic_too_quiet_for_accent(&quiet_speech, true, 18), "gain already raised enough");
+        let noise_floor = vec![0.02f32; 40];
+        assert!(!mic_too_quiet_for_accent(&noise_floor, true, 0), "steady noise without speech is not a quiet voice");
+        assert!(!mic_too_quiet_for_accent(&[0.0; 40], true, 0), "silence is not a quiet mic");
+        let healthy: Vec<f32> = (0..40).map(|i| if i % 4 == 0 { 0.4 } else { 0.01 }).collect();
+        assert!(!mic_too_quiet_for_accent(&healthy, true, 0), "healthy level");
         let on = AlertInput { mic_too_quiet: true, ..Default::default() };
         assert!(alerts(&on).iter().any(|a| a.key == "mic-quiet"));
     }
 
     #[test]
-    fn quiet_voices_get_more_distance_gain_and_silence_changes_nothing() {
-        assert_eq!(distance_for_speech_peak(0.0), None);
-        assert_eq!(distance_for_speech_peak(0.03), Some(2));
-        assert_eq!(distance_for_speech_peak(0.1), Some(1));
-        assert_eq!(distance_for_speech_peak(0.4), Some(0));
+    fn quiet_voices_get_more_gain_and_silence_changes_nothing() {
+        assert_eq!(gain_db_for_speech_peak(0.0), None);
+        assert_eq!(gain_db_for_speech_peak(0.25), Some(0));
+        assert_eq!(gain_db_for_speech_peak(0.5), Some(0), "never below zero");
+        assert_eq!(gain_db_for_speech_peak(0.025), Some(20));
+        assert_eq!(gain_db_for_speech_peak(0.005), Some(30), "limited to the slider's range");
     }
 
     #[test]
-    fn distance_names_round_trip() {
-        for (i, n) in DISTANCE_NAMES.iter().enumerate() {
-            assert_eq!(distance_from_name(n), Some(i as u8));
-            assert_eq!(distance_name(i as u8), *n);
-        }
-        assert_eq!(distance_name(200), "Close");
+    fn quick_choices_set_known_gains_and_other_values_are_custom() {
+        assert_eq!(distance_from_name("Close"), Some(0));
+        assert_eq!(distance_from_name("Normal"), Some(9));
+        assert_eq!(distance_from_name("Far"), Some(18));
+        assert_eq!(distance_name(9), Some("Normal"));
+        assert_eq!(distance_name(11), None, "an in-between slider value is Custom");
         assert_eq!(distance_from_name("Nope"), None);
     }
 
@@ -361,7 +380,7 @@ mod tests {
         }
         let level = result.expect("done after the full time");
         assert!((level - 0.05).abs() < 1e-6, "pauses must not pull the level down, got {level}");
-        assert_eq!(distance_for_speech_peak(level), Some(2));
+        assert_eq!(gain_db_for_speech_peak(level), Some(14));
     }
 
     #[test]

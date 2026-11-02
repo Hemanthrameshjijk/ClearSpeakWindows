@@ -37,10 +37,10 @@ pub struct Settings {
     /// (`Natural`), matching the previous hardcoded default.
     #[serde(default = "default_studio_preset")]
     pub mic_studio_preset: u8,
-    /// How far the mic is from the mouth: 0 Close (boom mic, no extra gain), 1 Normal, 2 Far (earbud/earpiece mic).
-    /// See `dsp_core::PreGainStage`. Missing in older settings files, which means Close.
+    /// Mic sensitivity: a fixed gain in dB (0..=30) applied before the noise stages, for mics that are far from the
+    /// mouth (earbuds). See `dsp_core::PreGainStage`. Missing in older settings files, which means 0 (no extra gain).
     #[serde(default)]
-    pub mic_distance: u8,
+    pub mic_gain_db: u8,
     /// Layout version of this file (1 = current). Lets a later release migrate old files instead of guessing.
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -225,7 +225,7 @@ impl Default for Settings {
             mic_bvc_on: true,
             mic_studio_on: true,
             mic_studio_preset: default_studio_preset(),
-            mic_distance: 0,
+            mic_gain_db: 0,
             schema_version: default_schema_version(),
             aec_on: false,
             echo_cancel_on: true,

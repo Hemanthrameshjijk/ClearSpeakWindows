@@ -144,9 +144,8 @@ struct MainState {
     /// "Set for my mic" listening in progress, and the result line of the last run.
     calibration: Option<crate::ui_logic::Calibration>,
     calibration_note: Option<String>,
-    /// Loudest raw mic peak in the current look-back window, how many Ticks it has covered, and the last verdict.
-    quiet_window_peak: f32,
-    quiet_window_ticks: u32,
+    /// Raw mic peaks (one per Tick) of the current look-back window, and the last verdict on them.
+    quiet_peaks: Vec<f32>,
     mic_too_quiet: bool,
 }
 
@@ -199,8 +198,7 @@ impl MainState {
             pending_tab: Tab::Home,
             calibration: None,
             calibration_note: None,
-            quiet_window_peak: 0.0,
-            quiet_window_ticks: 0,
+            quiet_peaks: Vec::new(),
             mic_too_quiet: false,
         }
     }
@@ -285,8 +283,10 @@ pub enum Message {
     ToggleEchoCancel(bool),
     ToggleMicStudio(bool),
     SelectMicStudioPreset(&'static str),
-    /// Mic distance picker (label from `ui_logic::DISTANCE_NAMES`).
+    /// Quick choice next to the sensitivity slider (label from `ui_logic::DISTANCE_NAMES`).
     SelectMicDistance(&'static str),
+    /// Mic sensitivity slider: gain in dB (0..=30).
+    SetMicGain(u8),
     /// "Set for my mic": listen for a few seconds and pick the distance step from how loud the voice is.
     CalibrateMic,
     /// Accent conversion on/off - its own switch, independent of BVC.
@@ -742,7 +742,7 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
-    input.mic_too_quiet = state.mic_too_quiet && state.settings.accent_on && state.settings.mic_distance == 0;
+    input.mic_too_quiet = state.mic_too_quiet && state.settings.accent_on;
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
     for a in &alerts {
@@ -786,31 +786,26 @@ fn update_main(state: &mut MainState, message: Message) {
             state.level = state.handles.level.load();
             state.input_level = state.handles.input_level.load();
             // Mic too quiet for the accent: judged over a 10 s window so a pause does not flip it.
-            state.quiet_window_peak = state.quiet_window_peak.max(state.input_level);
-            state.quiet_window_ticks += 1;
-            if state.quiet_window_ticks >= crate::ui_logic::QUIET_WINDOW_TICKS {
-                state.mic_too_quiet = crate::ui_logic::mic_too_quiet_for_accent(
-                    state.quiet_window_peak,
-                    state.settings.accent_on,
-                    state.settings.mic_distance,
-                );
-                state.quiet_window_peak = 0.0;
-                state.quiet_window_ticks = 0;
+            state.quiet_peaks.push(state.input_level);
+            if state.quiet_peaks.len() as u32 >= crate::ui_logic::QUIET_WINDOW_TICKS {
+                state.mic_too_quiet =
+                    crate::ui_logic::mic_too_quiet_for_accent(&state.quiet_peaks, state.settings.accent_on, state.settings.mic_gain_db);
+                state.quiet_peaks.clear();
             }
-            // "Set for my mic": the raw peak is read before any gain, so the result does not depend on the current step.
+            // "Set for my mic": the raw peak is read before any gain, so the result does not depend on the current setting.
             if let Some(cal) = state.calibration.as_mut() {
                 if let Some(level) = cal.tick(state.input_level) {
                     state.calibration = None;
-                    state.calibration_note = Some(match crate::ui_logic::distance_for_speech_peak(level) {
+                    state.calibration_note = Some(match crate::ui_logic::gain_db_for_speech_peak(level) {
                         None => "Could not hear you. Speak normally and try again.".to_string(),
-                        Some(step) => {
-                            state.handles.mic_distance.store(step);
-                            state.settings.mic_distance = step;
+                        Some(db) => {
+                            state.handles.mic_gain_db.store(db);
+                            state.settings.mic_gain_db = db;
                             persist(&state.settings);
-                            match step {
-                                0 => "Your voice is strong: Close is set.".to_string(),
-                                1 => "Your voice is a bit quiet: Normal is set.".to_string(),
-                                _ => "Your voice is quiet: Far is set.".to_string(),
+                            if db == 0 {
+                                "Your voice is strong: no extra gain needed.".to_string()
+                            } else {
+                                format!("Your voice is quiet: sensitivity set to +{db} dB.")
                             }
                         }
                     });
@@ -972,12 +967,18 @@ fn update_main(state: &mut MainState, message: Message) {
             }
         }
         Message::SelectMicDistance(name) => {
-            if let Some(step) = crate::ui_logic::distance_from_name(name) {
-                state.handles.mic_distance.store(step);
-                state.settings.mic_distance = step;
-                state.calibration_note = None;
-                persist(&state.settings);
+            if let Some(db) = crate::ui_logic::distance_from_name(name) {
+                update_main(state, Message::SetMicGain(db));
             }
+        }
+        Message::SetMicGain(db) => {
+            let db = db.min(dsp_core::MAX_GAIN_DB);
+            state.handles.mic_gain_db.store(db);
+            state.settings.mic_gain_db = db;
+            state.calibration_note = None;
+            state.quiet_peaks.clear();
+            state.mic_too_quiet = false;
+            persist(&state.settings);
         }
         Message::CalibrateMic => {
             state.calibration = Some(crate::ui_logic::Calibration::start());
