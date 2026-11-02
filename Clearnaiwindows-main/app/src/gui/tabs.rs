@@ -18,6 +18,7 @@ fn grey() -> Color {
     Color::from_rgb(0.55, 0.55, 0.55)
 }
 
+
 fn red() -> Color {
     Color::from_rgb(0.85, 0.2, 0.2)
 }
@@ -107,12 +108,14 @@ fn any_mic_stage_on(state: &MainState) -> bool {
     h.mic_noise.is_on() || h.mic_bvc.is_on() || h.mic_voice_gate.is_on() || h.mic_studio.is_on() || state.settings.accent_on
 }
 
+/// The call-audio path is switched on and has a source to listen to.
 fn speaker_ready(state: &MainState) -> bool {
-    state.settings.virtual_speaker_source_id.is_some()
+    state.settings.call_audio_on && state.settings.virtual_speaker_source_id.is_some()
 }
 
 pub fn current_chip(state: &MainState) -> StatusChip {
-    ui_logic::status_chip(state.handles.mic_master_enabled.is_on(), any_mic_stage_on(state), speaker_ready(state))
+    // Call audio switched off on purpose is not a problem, so it never shows "Call audio not set up".
+    ui_logic::status_chip(state.handles.mic_master_enabled.is_on(), any_mic_stage_on(state), !state.settings.call_audio_on || speaker_ready(state))
 }
 
 fn mic_snapshot(state: &MainState) -> MicSnapshot {
@@ -124,6 +127,10 @@ fn mic_snapshot(state: &MainState) -> MicSnapshot {
         studio_preset: studio_preset_name(studio_preset_from_index(h.mic_studio_preset.load())),
         bvc_on: h.mic_bvc.is_on(),
         bvc_backend: BvcBackend::from_index(h.bvc_backend.load()).name(),
+        echo: h.echo_cancel.is_on(),
+        transcript: state.settings.transcript_on,
+        call_audio: state.settings.call_audio_on,
+        monitor: h.monitor.is_on(),
     }
 }
 
@@ -237,14 +244,18 @@ fn disabled_select<'a>(state: &MainState, label: &'a str, value: &'a str) -> Ele
     tip(select_row(state, label, field.into()), "Not adjustable yet", state.settings.theme_dark)
 }
 
-/// A device dropdown; `selected_id == None` shows `placeholder` (the system default).
+/// A device dropdown. With a saved choice that is listed, that device is shown. With nothing saved, the system default
+/// device (`default_id`) is shown by its real name, as the engine is using it; `placeholder` appears only when neither
+/// is in the list (a saved device that is unplugged, or the default is not one of `options`).
 fn device_select<'a>(
     options: Vec<DeviceOption>,
     selected_id: &Option<String>,
+    default_id: Option<&str>,
     placeholder: &'a str,
     on: fn(DeviceOption) -> Message,
 ) -> Element<'a, Message> {
-    let selected = selected_id.as_ref().and_then(|id| options.iter().find(|d| &d.id == id).cloned());
+    let wanted = selected_id.as_deref().or(default_id);
+    let selected = wanted.and_then(|id| options.iter().find(|d| d.id == id).cloned());
     pick_list(options, selected, on)
         .placeholder(placeholder)
         .width(Length::Fill)
@@ -378,7 +389,13 @@ fn status_dot_label<'a>(label: &'a str, dot: Color, ink: Color) -> Element<'a, M
 fn top_bar(state: &MainState) -> Element<'_, Message> {
     let dark = state.settings.theme_dark;
     let t = style::tokens_for(dark);
-    let left = if speaker_ready(state) { chip("Call audio ready", ChipKind::Ok, dark) } else { chip("Call audio not set up", ChipKind::Warn, dark) };
+    let left = if !state.settings.call_audio_on {
+        chip("Call audio off", ChipKind::Off, dark)
+    } else if speaker_ready(state) {
+        chip("Call audio ready", ChipKind::Ok, dark)
+    } else {
+        chip("Call audio not set up", ChipKind::Warn, dark)
+    };
     let selected_profile = ui_logic::active_profile(&state.settings.profile, &mic_snapshot(state));
     let bar = row![
         left,
@@ -680,9 +697,6 @@ fn alert_banner(state: &MainState) -> Element<'_, Message> {
     container(col).padding(10).width(Length::Fill).style(container::danger).into()
 }
 
-/// Height of the see-through strip above the collapsed bar, where hover names are drawn (a window can only draw
-/// inside itself). `gui::COMPACT_WINDOW_SIZE` includes it.
-pub const TIP_STRIP: f32 = 28.0;
 
 /// A hover name for a control in the collapsed bar.
 fn tip<'a>(content: Element<'a, Message>, label: impl Into<String>, dark: bool) -> Element<'a, Message> {
@@ -700,10 +714,14 @@ fn tip<'a>(content: Element<'a, Message>, label: impl Into<String>, dark: bool) 
     .into()
 }
 
+/// Height of the see-through strip above the collapsed bar, where hover names are drawn (a window can only draw
+/// inside itself). `gui::COMPACT_WINDOW_SIZE` includes it.
+pub const TIP_STRIP: f32 = 28.0;
+
 /// The collapsed bar (a Krisp-style horizontal pill): logo, microphone and call-audio status with the level meter, four
 /// quick switches (Noise, Voices, Accent, Transcript), Mute, Settings and Expand. Undecorated and draggable; Expand opens
 /// the full window in the middle of the screen.
-pub fn view_compact(state: &MainState) -> Element<'_, Message> {
+pub fn view_bar(state: &MainState) -> Element<'_, Message> {
     use super::icons;
     let dark = state.settings.theme_dark;
     let h = &state.handles;
@@ -779,7 +797,13 @@ pub fn view_compact(state: &MainState) -> Element<'_, Message> {
         StatusChip::Paused => grey(),
         _ => green,
     };
-    let speaker_dot = if speaker_ready(state) { green } else { orange };
+    let speaker_dot = if speaker_ready(state) {
+        green
+    } else if !state.settings.call_audio_on {
+        tk.muted
+    } else {
+        orange
+    };
     let divider = || container(text("")).width(1).height(22).style(move |_| container::Style { background: Some(line.into()), ..Default::default() });
 
     let mute = btn(
@@ -806,7 +830,13 @@ pub fn view_compact(state: &MainState) -> Element<'_, Message> {
         ),
         tip(
             with_dot(icons::SPEAKER, speaker_dot),
-            if speaker_ready(state) { "Call audio: ready" } else { "Call audio: needs a second virtual cable" },
+            if speaker_ready(state) {
+                "Call audio: ready"
+            } else if !state.settings.call_audio_on {
+                "Call audio: off"
+            } else {
+                "Call audio: needs a second virtual cable"
+            },
             dark,
         ),
         divider(),
@@ -815,7 +845,6 @@ pub fn view_compact(state: &MainState) -> Element<'_, Message> {
         tip(switch(icons::TRANSLATE, state.settings.accent_on, Message::ToggleAccent(!state.settings.accent_on)), "Accent conversion", dark),
         tip(switch(icons::CAPTIONS, state.settings.transcript_on, Message::ToggleTranscript(!state.settings.transcript_on)), "Live transcript", dark),
         tip(mute.into(), "Mute or unmute the microphone (Ctrl+Shift+M)", dark),
-        tip(plain(icons::GEAR, Message::OpenFullAt(Tab::Advanced)), "Settings", dark),
         tip(plain(icons::EXPAND, Message::ToggleCompact), "Open the full window", dark),
         tip(plain(icons::CLOSE, Message::WindowClosed), "Close (ClearNAI keeps running in the tray)", dark),
     ]
@@ -852,6 +881,228 @@ pub fn view_compact(state: &MainState) -> Element<'_, Message> {
     iced::widget::mouse_area(column![container(text("")).height(Length::Fixed(TIP_STRIP)), container(pill).padding(4)])
         .on_press(Message::DragWindow)
         .into()
+}
+
+/// The card shown when the program is clicked: your voice (level, device, Cancel noise, accent), the live transcript, a
+/// Refresh that puts the devices back to the defaults, and a big Mute button. Problems show right under the header.
+/// The gear opens the full window, after the settings password. Undecorated and draggable; Escape or the X hides it (ClearNAI keeps running in the tray).
+pub fn view_card(state: &MainState) -> Element<'_, Message> {
+    use super::icons;
+    let dark = state.settings.theme_dark;
+    let h = &state.handles;
+    let t = style::tokens_for(dark);
+    let (ink, panel_bg, line, button_bg) = (t.text, t.surface, t.line, t.soft);
+
+    let icon_btn = |bytes: &'static [u8], msg: Message| -> Element<'_, Message> {
+        btn(container(glyph_icon(bytes, 17.0, ink)).center_x(Length::Fill).center_y(Length::Fill))
+            .width(30)
+            .height(30)
+            .padding(0)
+            .on_press(msg)
+            .style(move |_, status| button::Style {
+                background: matches!(status, button::Status::Hovered | button::Status::Pressed).then(|| button_bg.into()),
+                border: iced::Border { radius: 10.0.into(), ..Default::default() },
+                ..Default::default()
+            })
+            .into()
+    };
+    let section = |content: Element<'static, Message>| -> Element<'static, Message> {
+        container(content).padding(14).width(Length::Fill).style(style::card).into()
+    };
+    // Title and a coloured one-line description at the left, a pill switch at the right.
+    let switch_row = |title: &'static str, desc: String, desc_color: Color, on: bool, msg: fn(bool) -> Message| -> Element<'static, Message> {
+        row![
+            column![text(title).size(15), text(desc).size(12).color(desc_color)].spacing(3).width(Length::Fill),
+            toggler(on).on_toggle(msg).size(24).style(style::toggle),
+        ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center)
+        .into()
+    };
+
+    let status = current_chip(state);
+    let header = row![
+        logo_with_wordmark(dark, 24.0),
+        chip(status.label(), chip_kind(status), dark),
+        container(text("")).width(Length::Fill),
+        icon_btn(icons::GEAR, Message::OpenFullAt(Tab::Advanced)),
+        icon_btn(icons::CLOSE, Message::WindowClosed),
+    ]
+    .spacing(10)
+    .align_y(iced::Alignment::Center);
+
+    let body: Element<'_, Message> = match &state.password {
+        Some(p) => password_box(state, p),
+        None => {
+            // "Cancel noise" is one switch for everything that cleans the mic: noise, background voices and echo.
+            let cancel_on = h.mic_noise.is_on() || h.mic_bvc.is_on() || h.echo_cancel.is_on();
+
+            // What the accent stage is really doing: grey line when off, then green converting, amber starting, red problem.
+            let accent = h.accent.status();
+            let (accent_desc, accent_color) = if !state.settings.accent_on {
+                ("Indian \u{2192} American \u{00B7} adds ~0.5 s delay".to_string(), amber_text(dark))
+            } else {
+                let color = match accent.state {
+                    accent_onnx::pipeline::AccentState::Active => t.success,
+                    accent_onnx::pipeline::AccentState::Loading | accent_onnx::pipeline::AccentState::Starting => t.warning,
+                    accent_onnx::pipeline::AccentState::Paused | accent_onnx::pipeline::AccentState::Unavailable => t.danger,
+                    accent_onnx::pipeline::AccentState::Off => t.muted,
+                };
+                (accent.line(), color)
+            };
+
+            let voice_label = accent_onnx::VOICE_CHOICES[(state.settings.accent_voice_index() - 1) as usize];
+            let selected_profile = ui_logic::active_profile(&state.settings.profile, &mic_snapshot(state));
+            let profile_row = row![
+                glyph_icon(icons::USER, 15.0, t.muted),
+                text("Profile").size(13).color(t.muted),
+                container(text("")).width(Length::Fill),
+                pick_list(&ui_logic::PROFILE_NAMES[..], selected_profile, Message::SelectProfile)
+                    .placeholder("Custom")
+                    .width(Length::Fixed(170.0))
+                    .padding([7, 10])
+                    .text_size(13)
+                    .style(style::select),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+
+            let transcript = h.transcript.status();
+            let (transcript_desc, transcript_color) = if !state.settings.transcript_on {
+                ("Off".to_string(), t.muted)
+            } else {
+                use asr_onnx::pipeline::TranscriptState as S;
+                match transcript.state {
+                    S::Listening | S::Transcribing => (format!("{} \u{00B7} saved for this call", transcript.line()), t.success),
+                    S::Loading => (transcript.line(), t.warning),
+                    S::Unavailable => (transcript.line(), t.danger),
+                    S::Off => (transcript.line(), t.muted),
+                }
+            };
+
+            let voice = section(
+                column![
+                    row![
+                        glyph_icon(icons::MIC, 17.0, t.primary),
+                        text("Your voice").size(16).font(bold()),
+                        container(text("")).width(Length::Fill),
+                        progress_bar(0.0..=1.0, state.level.clamp(0.0, 1.0)).length(Length::Fixed(110.0)).girth(Length::Fixed(6.0)).style(style::meter),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),
+                    device_select(
+                        crate::device_rules::only_virtual(&state.devices.capture, false),
+                        &state.settings.physical_mic_device_id,
+                        state.devices.default_capture.as_deref(),
+                        "Default microphone",
+                        Message::SelectPhysicalMic,
+                    ),
+                    switch_row("Cancel noise", "Background noise and voices".to_string(), t.muted, cancel_on, Message::ToggleCancelNoise),
+                    switch_row("Convert my accent", accent_desc, accent_color, state.settings.accent_on, Message::ToggleAccent),
+                    row![
+                        text("Accent voice").size(13).color(t.muted),
+                        container(text("")).width(Length::Fill),
+                        pick_list(&accent_onnx::VOICE_CHOICES[..], Some(voice_label), Message::SelectAccentVoice)
+                            .width(Length::Fixed(170.0))
+                            .padding([7, 10])
+                            .text_size(13)
+                            .style(style::select),
+                    ]
+                    .align_y(iced::Alignment::Center),
+                ]
+                .spacing(14)
+                .into(),
+            );
+
+            let transcript_card = section(
+                column![
+                    row![
+                        glyph_icon(icons::CAPTIONS, 18.0, ink),
+                        column![text("Live transcript").size(15), text(transcript_desc).size(12).color(transcript_color)].spacing(3).width(Length::Fill),
+                        toggler(state.settings.transcript_on).on_toggle(Message::ToggleTranscript).size(24).style(style::toggle),
+                    ]
+                    .spacing(12)
+                    .align_y(iced::Alignment::Center),
+                    btn(container(text("Open transcript").size(13).font(bold()).color(t.primary)).center_x(Length::Fill))
+                        .width(Length::Fill)
+                        .padding([9, 0])
+                        .on_press(Message::OpenTranscriptFolder)
+                        .style(style::outline),
+                ]
+                .spacing(12)
+                .into(),
+            );
+
+            let refresh = row![
+                text("Changed headset? Refresh switches to the default.").size(12).color(t.muted),
+                container(text("")).width(Length::Fill),
+                btn(text("Refresh").size(12).font(bold()).color(t.primary)).padding([4, 6]).on_press(Message::UseDefaultDevices).style(style::text_button),
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center);
+
+            column![profile_row, voice, transcript_card, refresh].spacing(12).into()
+        }
+    };
+
+    let mut col = column![header, alert_banner(state), scrollable(body).height(Length::Fill)].spacing(12);
+    if state.password.is_none() {
+        let muted = !h.mic_master_enabled.is_on();
+        col = col.push(
+            btn(
+                container(
+                    row![
+                        glyph_icon(icons::MIC, 16.0, Color::WHITE),
+                        text(if muted { "Unmute microphone" } else { "Mute microphone" }).size(14).font(bold()).color(Color::WHITE),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center),
+                )
+                .center_x(Length::Fill),
+            )
+            .width(Length::Fill)
+            .padding([14, 0])
+            .on_press(Message::ToggleMute)
+            .style(if muted { style::danger } else { style::strong }),
+        );
+    }
+
+    let panel = container(col).padding(14).width(Length::Fill).height(Length::Fill).style(move |_| container::Style {
+        background: Some(panel_bg.into()),
+        border: iced::Border { color: line, width: 1.0, radius: 16.0.into() },
+        shadow: iced::Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.18), offset: iced::Vector::new(0.0, 3.0), blur_radius: 10.0 },
+        ..Default::default()
+    });
+    // Press anywhere that is not a control to drag the (undecorated) window.
+    iced::widget::mouse_area(container(panel).padding(4)).on_press(Message::DragWindow).into()
+}
+
+/// The panel's body while the settings are locked: a password box (focused as it appears) with Unlock and Cancel.
+fn password_box<'a>(state: &MainState, p: &super::PasswordPrompt) -> Element<'a, Message> {
+    let tk = style::tokens_for(state.settings.theme_dark);
+    let mut col = column![
+        text("Settings are locked").size(16).font(bold()),
+        text("Enter the password to open the full window.").size(13).color(tk.muted),
+        text_input("Password", &p.input)
+            .id(super::PASSWORD_FIELD_ID)
+            .secure(true)
+            .on_input(Message::PasswordInput)
+            .on_submit(Message::SubmitPassword)
+            .padding([10, 12])
+            .size(14),
+    ]
+    .spacing(12);
+    if p.wrong {
+        col = col.push(text("Wrong password. Try again.").size(13).color(red()));
+    }
+    col.push(
+        row![
+            btn(text("Cancel").size(13)).padding([9, 18]).on_press(Message::CancelPassword).style(style::outline),
+            btn(text("Unlock").size(13).font(bold())).padding([9, 18]).on_press(Message::SubmitPassword).style(style::primary),
+        ]
+        .spacing(10),
+    )
+    .into()
 }
 
 fn home_tab(state: &MainState, wide: bool, win_w: f32) -> Element<'_, Message> {
@@ -985,17 +1236,21 @@ fn home_tab(state: &MainState, wide: bool, win_w: f32) -> Element<'_, Message> {
 
     let ready = speaker_ready(state);
     let spk_enabled = h.speaker_master_enabled.is_on();
-    let spk_chip = if !ready {
+    let call_on = state.settings.call_audio_on;
+    let spk_chip = if !call_on {
+        ("Off", ChipKind::Off)
+    } else if !ready {
         ("Not set up", ChipKind::Warn)
     } else if spk_enabled {
         ("Active", ChipKind::Ok)
     } else {
         ("Off", ChipKind::Off)
     };
-    let setup_btn: Option<Element<'_, Message>> = if ready {
-        None
-    } else {
+    // On but without a source: "Set up". Otherwise the call-audio on / off switch.
+    let setup_btn: Option<Element<'_, Message>> = if call_on && !ready {
         Some(icon_button(icons::SLIDERS, "Set up", Message::SelectTab(Tab::Devices), style::primary, Color::WHITE))
+    } else {
+        Some(toggler(call_on).on_toggle(Message::ToggleCallAudio).size(26).style(style::toggle).into())
     };
     let mut spk_col = column![card_head(state, icons::PHONE, style::Accent::Amber, "Call audio", Some(chip(spk_chip.0, spk_chip.1, dark)), "What you hear from the caller", setup_btn)]
         .spacing(18);
@@ -1013,7 +1268,13 @@ fn home_tab(state: &MainState, wide: bool, win_w: f32) -> Element<'_, Message> {
                         border: iced::Border { radius: 8.0.into(), ..Default::default() },
                         ..Default::default()
                     }),
-                text("Incoming audio isn't being cleaned yet. Set up a virtual cable to get started.").size(13).color(t.muted_strong),
+                text(if call_on {
+                    "Incoming audio isn't being cleaned yet. Set up a virtual cable to get started."
+                } else {
+                    "Call audio is off. Switch it on to clean what you hear from the caller too."
+                })
+                .size(13)
+                .color(t.muted_strong),
             ]
             .spacing(12)
             .align_y(iced::Alignment::Center),
@@ -1191,10 +1452,18 @@ fn call_audio_tab(state: &MainState) -> Element<'_, Message> {
     };
     let ready = speaker_ready(state);
     let mut col = column![].spacing(22);
-    if !ready {
+    if !state.settings.call_audio_on {
+        col = col.push(text("Call audio is off. Switch it on in the Devices tab to clean what you hear from the caller.").size(13).color(t.muted_strong));
+    } else if !ready {
         col = col.push(text("Call audio isn't set up yet. Choose your devices in the Devices tab.").size(13).color(amber_text(dark)));
     }
-    let status_text = if ready { format!("Call audio: {}", status_label(state.speaker_status)) } else { "Call audio: Waiting for a source device".to_string() };
+    let status_text = if ready {
+        format!("Call audio: {}", status_label(state.speaker_status))
+    } else if !state.settings.call_audio_on {
+        "Call audio: Off".to_string()
+    } else {
+        "Call audio: Waiting for a source device".to_string()
+    };
     col = col
         .push(row![text("\u{25CF}").size(10).color(t.success), text(status_text).size(15)].spacing(8).align_y(iced::Alignment::Center))
         .push(setting_row(state, "Call audio path enabled", None, h.speaker_master_enabled.is_on(), Message::ToggleSpeakerMasterEnabled))
@@ -1320,19 +1589,23 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
     let dark = state.settings.theme_dark;
     let t = style::tokens_for(dark);
     let ready = speaker_ready(state);
-    let have_devices = !state.devices.capture.is_empty() || !state.devices.render.is_empty();
-    let ok_mark = |show: bool| -> Option<Element<'_, Message>> { show.then(|| glyph_icon(icons::CHECK_CIRCLE, 20.0, t.success)) };
+    // One on/off switch per route. Microphone: on = not muted. Call audio (source + speakers) shares one switch.
+    let call_on = state.settings.call_audio_on;
+    let mic_on = state.handles.mic_master_enabled.is_on();
+    let mic_switch: Element<'_, Message> = toggler(mic_on).on_toggle(|_| Message::ToggleMute).size(24).style(style::toggle).into();
+    let call_switch = || -> Element<'_, Message> { toggler(call_on).on_toggle(Message::ToggleCallAudio).size(24).style(style::toggle).into() };
 
     let signal = state.input_level > 0.02;
     let mic_card = card(
         column![
-            card_head(state, icons::MIC, style::Accent::Blue, "Microphone input", None, "What others hear from you", ok_mark(have_devices)),
+            card_head(state, icons::MIC, style::Accent::Blue, "Microphone input", None, "What others hear from you", Some(mic_switch)),
             select_row(
                 state,
                 "Input device",
                 device_select(
                     crate::device_rules::only_virtual(&state.devices.capture, false),
                     &state.settings.physical_mic_device_id,
+                    state.devices.default_capture.as_deref(),
                     "Default microphone",
                     Message::SelectPhysicalMic,
                 ),
@@ -1351,21 +1624,22 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
     );
     let out_card = card(
         column![
-            card_head(state, icons::SPEAKER, style::Accent::Green, "Speaker output", None, "What you hear from the caller", ok_mark(have_devices)),
+            card_head(state, icons::SPEAKER, style::Accent::Green, "Speaker output", None, "What you hear from the caller", Some(call_switch())),
             select_row(
                 state,
                 "Output device",
                 device_select(
                     crate::device_rules::only_virtual(&state.devices.render, false),
                     &state.settings.real_speaker_output_device_id,
+                    state.devices.default_render.as_deref(),
                     "Default speakers",
                     Message::SelectRealSpeakerOutput,
                 ),
             ),
             hrule(),
             row![
-                glyph_icon(icons::SPEAKER, 15.0, t.success),
-                text("Output ready").size(13).color(t.success),
+                glyph_icon(icons::SPEAKER, 15.0, if call_on { t.success } else { t.muted }),
+                text(if call_on { "Output ready" } else { "Call audio is off" }).size(13).color(if call_on { t.success } else { t.muted }),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -1373,7 +1647,13 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         .spacing(22),
     );
 
-    let capture_chip = if ready { chip("Selected", ChipKind::Ok, dark) } else { chip("Not selected", ChipKind::Warn, dark) };
+    let capture_chip = if !call_on {
+        chip("Off", ChipKind::Off, dark)
+    } else if ready {
+        chip("Selected", ChipKind::Ok, dark)
+    } else {
+        chip("Not selected", ChipKind::Warn, dark)
+    };
     let capture = card(
         column![
             card_head(
@@ -1381,9 +1661,9 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
                 icons::SPEAKER_BOX,
                 style::Accent::Amber,
                 "Speaker-source capture",
-                None,
-                "Independent virtual cable for incoming call cleanup",
                 Some(capture_chip),
+                "Independent virtual cable for incoming call cleanup",
+                Some(call_switch()),
             ),
             select_row(
                 state,
@@ -1391,6 +1671,7 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
                 device_select(
                     crate::device_rules::call_source_choices(&state.devices, state.settings.virtual_mic_target_id.as_deref()),
                     &state.settings.virtual_speaker_source_id,
+                    None,
                     "Not selected",
                     Message::SelectSpeakerSource,
                 ),
@@ -1421,6 +1702,7 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
                 device_select(
                     crate::device_rules::only_virtual(&state.devices.render, true),
                     &state.settings.virtual_mic_target_id,
+                    None,
                     "Not selected",
                     Message::SelectMicTarget,
                 ),
@@ -1439,7 +1721,7 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
             select_row(
                 state,
                 "Play it on",
-                device_select(state.devices.render.clone(), &state.settings.monitor_device_id, "Not selected", Message::SelectMonitorDevice),
+                device_select(state.devices.render.clone(), &state.settings.monitor_device_id, None, "Not selected", Message::SelectMonitorDevice),
             ),
         ]
         .spacing(22),

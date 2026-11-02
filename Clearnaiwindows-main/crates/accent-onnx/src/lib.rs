@@ -25,17 +25,6 @@ use vocoder::CausalStreamer;
 pub const VOICE_NAMES: [&str; 6] =
     ["american_male_1", "american_male_2", "american_male_3", "american_female_1", "american_female_2", "american_female_3"];
 
-/// GUI labels: index 0 is Off, index `i` (1..=6) selects `VOICE_NAMES[i - 1]`.
-pub const VOICE_LABELS: [&str; 7] = [
-    "Off",
-    "American male 1",
-    "American male 2",
-    "American male 3",
-    "American female 1",
-    "American female 2",
-    "American female 3",
-];
-
 /// Voice picker labels (without "Off"): choice `i` (0..6) is voice index `i + 1`.
 pub const VOICE_CHOICES: [&str; 6] = [
     "American male 1",

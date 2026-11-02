@@ -8,7 +8,7 @@
 //!        +-- jitter buffer <--out ring-- 480 @ 48 kHz  <-----------------------------------+
 //! ```
 //!
-//! Safety net: if the output ring runs dry, or the worker's real-time factor stays above 0.9 for 2 s, the stage
+//! Safety net: if the output ring runs dry, or the worker's real-time factor stays above 0.97 for 5 s, the stage
 //! crossfades (20 ms) to the incoming (BVC-only) signal, keeps the engine running, and reports a "paused"
 //! state; it returns to the accent output once the worker has caught up and the jitter buffer has refilled.
 
@@ -32,11 +32,14 @@ const MAX_BACKLOG48: usize = 4 * PUSH48;
 const RING_SECONDS: usize = 1;
 const RAMP_SAMPLES: f32 = 1920.0; // 40 ms crossfade
 const REPRIME_HOLDOFF_FRAMES: u32 = 100; // 1 s of dry after an underrun before trusting the accent again
-const SLOW_RTF: f32 = 0.9;
-const SLOW_WINDOW: usize = 20; // pushes = 2 s
+// RTF 1.0 is the real limit (above it the output falls behind). Pausing at 0.9 for 2 s flapped on PCs that run right at
+// 0.90-0.95 (log: paused/resumed every few seconds, each a 40 ms crossfade the listener hears), so pause only when
+// clearly over, for 5 s, and resume only once clearly under, for 3 s.
+const SLOW_RTF: f32 = 0.97;
+const SLOW_WINDOW: usize = 50; // pushes = 5 s
 // Must sit clearly above the normal running RTF (0.55-0.8 on this PC) or a paused stage could never recover.
-const RECOVER_RTF: f32 = 0.85;
-const RECOVER_WINDOW: usize = 20; // pushes = 2 s
+const RECOVER_RTF: f32 = 0.80;
+const RECOVER_WINDOW: usize = 30; // pushes = 3 s
 const LEVEL_TARGET_RMS: f32 = 0.06;
 const RESAMPLER_TAPS: usize = 97;
 

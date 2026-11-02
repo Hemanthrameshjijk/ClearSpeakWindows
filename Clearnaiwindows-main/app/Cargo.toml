@@ -73,18 +73,13 @@ iced = { version = "0.14", features = ["tokio", "svg", "image"] }
 # self-extracted into `%LOCALAPPDATA%\ClearNAI` at launch, with no network
 # access involved at all.
 
-[dev-dependencies]
-# Only for the `analyze_wav` diagnostic example - not part of the product
-# binary, does not affect `clearnairt.exe`'s own dependency set.
-hound = "3.5"
-
 [target.'cfg(windows)'.dependencies]
 # Only needed for `setup.rs`'s real Windows compatibility checks:
 # `RtlGetVersion` (via the `Wdk_System_SystemServices` feature) and a direct
 # `wasapi::initialize_mta()` COM-init probe, matching the exact `windows`/
 # `wasapi` versions already pulled in transitively by `audio-io` (see
 # `crates/audio-io/Cargo.toml`) to avoid duplicate incompatible versions.
-windows = { version = "0.62", features = ["Wdk_System_SystemServices", "Wdk_Foundation", "Win32_System_SystemInformation"] }
+windows = { version = "0.62", features = ["Wdk_System_SystemServices", "Wdk_Foundation", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO"] }
 wasapi = "0.24"
 # System-tray icon for the "Minimize to tray" setting (see `src/tray.rs`). Exact pin: published 2026-10-07.
 tray-icon = { version = "=0.26.1", default-features = false }

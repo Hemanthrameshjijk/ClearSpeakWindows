@@ -1,6 +1,6 @@
 //! Real causal, bounded-state 48kHz<->16kHz (exact 3:1) resampler for the
 //! path between ClearNAI's native 48kHz mic pipeline and the 16kHz ONNX models. A direct port of the already-fixed, verified
-//! `poc/real_tse/src/causal_resampler.py`:
+//! reference prototype:
 //! - lowpass FIR (causal, windowed-sinc, Hamming window) then decimate by
 //!   3 for downsampling; zero-stuff by 3 then lowpass FIR (gain-
 //!   compensated x3) for upsampling.
@@ -15,7 +15,7 @@
 //!   the upsampler's own delay - already in 48kHz-domain units - by 3, as
 //!   if it were still in 16kHz-domain units). The resampler's own DSP was
 //!   never broken: corrected round-trip result is SI-SDR 34.25dB /
-//!   correlation 0.9998 on real speech (see `poc/real_tse/results.md` §8).
+//!   correlation 0.9998 on real speech.
 //!   Both directions' `group_delay_samples_48k` fields here are already in
 //!   48kHz-sample units - do not multiply either by 3 when combining them.
 

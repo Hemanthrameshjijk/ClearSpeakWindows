@@ -227,6 +227,20 @@ pub fn app_data_dir() -> PathBuf {
     dir
 }
 
+/// Where the DLLs and models are loaded from. The installer puts them next to the exe (`C:\Program Files\ClearNAI`),
+/// which also works on PCs whose policy blocks programs/DLLs under `%LOCALAPPDATA%`; that folder is read-only for a
+/// normal user, so nothing is extracted or written there. Without that layout (a dev build, the old per-user install)
+/// the files are extracted into `app_data_dir()` as before. Settings, logs and transcripts always use `app_data_dir()`.
+pub fn assets_dir() -> PathBuf {
+    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
+        let shipped = [bvc_hush::DLL_FILE_NAME, bvc_hush::SPEAKER_DLL_FILE_NAME, ONNXRUNTIME_DLL_FILE_NAME];
+        if shipped.iter().all(|f| dir.join(f).is_file()) {
+            return dir;
+        }
+    }
+    app_data_dir()
+}
+
 /// Where the BVC model bundle lives once extracted: under
 /// `app_data_dir()`, using the real filename `bvc-hush` already exports
 /// (never re-hardcoded here, so the two crates can't silently drift apart).

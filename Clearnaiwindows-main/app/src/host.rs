@@ -46,7 +46,8 @@ pub fn bootstrap(settings: &settings::Settings) -> Booted {
     // "CABLE Output", the other end of the cable the mic path renders into, so the speaker path would capture
     // the user's own processed voice and play it back out of the speakers. It stays off until a separate cable
     // is picked (see docs/VIRTUAL_DEVICES.md).
-    let speaker_source = resolved.speaker_source.clone();
+    // With "Call audio" switched off the speaker path does not start at all (the saved source is kept for later).
+    let speaker_source = if resolved.settings.call_audio_on { resolved.speaker_source.clone() } else { None };
     // `None` means "system default output device".
     let real_speaker_output = resolved.real_output.clone();
     let settings = &resolved.settings;
@@ -65,9 +66,14 @@ pub fn bootstrap(settings: &settings::Settings) -> Booted {
     // surfaced to the setup screen rather than crashing - BVC simply stays
     // unavailable, same graceful-degradation pattern as a missing DLL
     // always used to be.
-    let bvc_dir = setup::app_data_dir();
-    let bvc_extraction_error = match setup::ensure_bvc_assets_extracted(&bvc_dir) {
-        Ok(_) => None,
+    let bvc_dir = setup::assets_dir();
+    // Installed layout (files shipped next to the exe): nothing to extract, and that folder is not writable anyway.
+    let bvc_extraction_error = match if bvc_dir == setup::app_data_dir() {
+        setup::ensure_bvc_assets_extracted(&bvc_dir).map(|_| ())
+    } else {
+        Ok(())
+    } {
+        Ok(()) => None,
         Err(e) => {
             crate::log_error!("[clearnairt] WARNING: failed to extract embedded BVC assets: {e:#}");
             Some(format!("{e:#}"))
@@ -321,7 +327,11 @@ fn send(writer: &SharedWriter, msg: &ServerMsg) -> std::io::Result<()> {
 fn open_window(mode: ipc::ShowMode) {
     let Ok(me) = std::env::current_exe() else { return };
     let ui = me.with_file_name("clearnai.exe");
-    let arg = if mode == ipc::ShowMode::Panel { "--panel" } else { "--full" };
+    let arg = match mode {
+        ipc::ShowMode::Panel => "--panel",
+        ipc::ShowMode::Card => "--card",
+        ipc::ShowMode::Full => "--full",
+    };
     if let Err(e) = std::process::Command::new(&ui).arg(arg).spawn() {
         crate::log_error!("[clearnairt] could not open the window ({}): {e}", ui.display());
     }
@@ -378,6 +388,7 @@ pub fn run_engine() {
     // Must happen before anything that touches WASAPI on this thread (see `audio_io::initialize_com_for_this_thread`).
     audio_io::initialize_com_for_this_thread();
     crate::logging::init(&setup::app_data_dir());
+    crate::crash::install(&setup::app_data_dir(), "clearnai.log");
     // audio-io reports everything through one channel; route its informational notes to INFO so the log's ERROR
     // lines are real errors only.
     audio_io::set_error_sink(|msg| match msg.split_once("] INFO: ") {
@@ -434,10 +445,10 @@ pub fn run_engine() {
         });
     }
 
-    // Started by hand or by the installer (no --background): show the window once. Autostart at sign-in passes
+    // Started by hand or by the installer (no --background): show the card once. Autostart at sign-in passes
     // --background and stays in the tray.
     if !std::env::args().any(|a| a == "--background") {
-        open_window(ipc::ShowMode::Full);
+        open_window(ipc::ShowMode::Card);
     }
 
     loop {

@@ -90,7 +90,6 @@ pub const SUN: &[u8] =
 pub const CHEVRON_RIGHT: &[u8] = icon!(r#"<path d="m9 18 6-6-6-6"/>"#);
 pub const CHEVRON_DOWN: &[u8] = icon!(r#"<path d="m6 9 6 6 6-6"/>"#);
 pub const CHECK: &[u8] = icon!(r#"<path d="M20 6 9 17l-5-5"/>"#);
-pub const CHECK_CIRCLE: &[u8] = icon!(r#"<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>"#);
 
 pub const HEADPHONES: &[u8] = icon!(
     r#"<path d="M3 14v-3a9 9 0 0 1 18 0v3"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>"#
@@ -151,7 +150,6 @@ mod tests {
             ("chevron_right", CHEVRON_RIGHT),
             ("chevron_down", CHEVRON_DOWN),
             ("check", CHECK),
-            ("check_circle", CHECK_CIRCLE),
             ("headphones", HEADPHONES),
             ("sparkles", SPARKLES),
             ("waves", WAVES),

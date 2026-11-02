@@ -13,7 +13,7 @@ Accent only runs on the BVC-on path (the BVC-off path would feed it RNNoise-proc
 The GUI says "waiting - turn BVC on" in that case. Off = one atomic load, frame untouched (bit-exact, tested).
 
 The model never runs on the 10 ms mic thread: the stage pushes 480-sample frames into a ring, a worker thread does
-48k->16k (tse-bsrnn `CausalDownsampler3x`) -> input leveler -> log-mel -> converter -> vocoder -> 24k->48k
+48k->16k (`CausalDownsampler3x`) -> input leveler -> log-mel -> converter -> vocoder -> 24k->48k
 (`CausalUpsampler2x`, same recipe as the existing 3x one) and the mic thread pulls 480 samples per frame through a
 60 ms jitter buffer. No allocation on the mic path.
 

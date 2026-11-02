@@ -14,6 +14,7 @@
 //! `settings`, `status_ui`, `shared`, `ui_logic`, `ipc` (the messages) and `gui` are ordinary portable Rust and build
 //! and test anywhere. `engine`, `host` and the pipe halves of `ipc`/`remote` only exist on Windows.
 
+pub mod crash;
 pub mod device_rules;
 pub mod gui;
 pub mod ipc;
@@ -26,6 +27,10 @@ pub mod sysutil;
 pub mod tray;
 pub mod ui_logic;
 
+#[cfg(windows)]
+pub mod driver_pipe;
+#[cfg(windows)]
+pub mod test_input;
 #[cfg(windows)]
 pub mod engine;
 #[cfg(windows)]

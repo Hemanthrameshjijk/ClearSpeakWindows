@@ -29,10 +29,13 @@ pub const PRESET_COUNT: usize = 4;
 /// How the window should appear when it is opened or brought to the front.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShowMode {
-    /// The full window.
+    /// The full window (asks for the settings password first).
     Full,
-    /// The small always-on-top quick panel by the tray (toggles only; Expand opens the full window).
+    /// The small horizontal bar by the tray (toggles only; Expand asks for the password to open the full window).
     Panel,
+    /// The vertical card shown when the program itself is clicked (switches, devices, and the gear that asks for the
+    /// password).
+    Card,
 }
 
 /// Which real device a [`ClientMsg::SetDevice`] changes.

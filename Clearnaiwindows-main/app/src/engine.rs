@@ -339,7 +339,12 @@ pub fn enumerate_devices() -> DeviceList {
         .into_iter()
         .map(|(id, label)| DeviceOption { id, label })
         .collect();
-    DeviceList { render, capture }
+    DeviceList {
+        render,
+        capture,
+        default_render: devices::default_render_device_id(),
+        default_capture: devices::default_capture_device_id(),
+    }
 }
 
 /// Auto-selects the "virtual mic target" render device only if exactly one
@@ -686,7 +691,7 @@ pub fn start(
         let mut cfg = asr_onnx::pipeline::TranscriptConfig::new(crate::setup::onnxruntime_dll_path(bvc_assets_dir));
         cfg.initial_enabled = settings.transcript_on;
         crate::log_info!("[clearnairt] transcript ORT threads = {}", cfg.threads);
-        cfg.save_dir = Some(bvc_assets_dir.join("transcripts"));
+        cfg.save_dir = Some(crate::setup::app_data_dir().join("transcripts"));
         let (stage, transcript_handle) = asr_onnx::pipeline::start(cfg);
         handles.transcript = transcript_handle;
         stage
@@ -719,10 +724,17 @@ pub fn start(
         }
         present
     });
-    let mic_capture = match physical_mic_id.as_deref() {
-        Some(id) => MicCapture::start_on_device_id(id, mic_in_p, handles.counters.clone())
-            .context("starting mic capture on the selected physical microphone device")?,
-        None => MicCapture::start_default(mic_in_p, handles.counters.clone()).context("starting default mic capture")?,
+    // Hidden test microphone (CLEARNAI_TEST_MIC, see test_input.rs): for machines with no microphone, e.g. the test VM.
+    let mic_capture = match crate::test_input::from_env() {
+        Some(source) => {
+            crate::test_input::start(source, mic_in_p);
+            None
+        }
+        None => Some(match physical_mic_id.as_deref() {
+            Some(id) => MicCapture::start_on_device_id(id, mic_in_p, handles.counters.clone())
+                .context("starting mic capture on the selected physical microphone device")?,
+            None => MicCapture::start_default(mic_in_p, handles.counters.clone()).context("starting default mic capture")?,
+        }),
     };
 
     // --- Monitor (diagnostic/testing-only): an optional second, independent
@@ -815,6 +827,10 @@ pub fn start(
         }
     };
 
+    // ClearNAI virtual microphone driver (separate project, see driver_pipe.rs): forwards the final frame to the
+    // driver so apps can pick "ClearNAI Microphone". No driver installed just means the frames are dropped.
+    let driver_pipe = Some(crate::driver_pipe::DriverSink::start());
+
     // Echo reference: the speaker pipeline copies every frame it plays into this ring, and the mic pipeline's
     // echo canceller subtracts what that audio does to the mic. A plain ring (not swappable): both ends live
     // for the life of the process and either side just idles when the other has nothing.
@@ -832,6 +848,7 @@ pub fn start(
         transcript_stage,
         mic_studio_stage,
         driver_writer,
+        driver_pipe,
         echo_ref_c,
     )?;
 
@@ -902,7 +919,7 @@ pub fn start(
     )?;
 
     handles.device_switcher = Arc::new(LiveAudioSwitcher {
-        physical_mic: Mutex::new(Some(mic_capture)),
+        physical_mic: Mutex::new(mic_capture),
         virtual_mic_render: Mutex::new(virtual_mic_render),
         monitor_render: Mutex::new(monitor_render),
         speaker_capture: Mutex::new(speaker_capture),
@@ -1050,6 +1067,7 @@ fn spawn_mic_pipeline(
     mut transcript_stage: asr_onnx::pipeline::TranscriptStage,
     mut studio_stage: Box<dyn Stage>,
     driver_writer: Option<driver_transport::SharedRingWriter>,
+    mut driver_pipe: Option<crate::driver_pipe::DriverSink>,
     mut echo_ref: dsp_core::Consumer<f32>,
 ) -> Result<()> {
     thread::Builder::new()
@@ -1200,6 +1218,10 @@ fn spawn_mic_pipeline(
                 // pattern as `mic_out`'s own `None` case.
                 if let Some(writer) = driver_writer.as_ref() {
                     writer.push_frame(&frame);
+                }
+                // Same frame to the ClearNAI driver's microphone (queued; a sender thread does the system call).
+                if let Some(pipe) = driver_pipe.as_mut() {
+                    pipe.push_frame(&frame);
                 }
                 // When the Monitor toggle is off, push real silence instead
                 // of skipping the push entirely, so the monitor render

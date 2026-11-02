@@ -27,6 +27,14 @@ pub fn only_virtual(options: &[DeviceOption], virtual_wanted: bool) -> Vec<Devic
     options.iter().filter(|d| is_virtual(&d.label) == virtual_wanted).cloned().collect()
 }
 
+/// The "CABLE Input" render endpoint a virtual microphone should go to, when exactly one is installed (the usual
+/// VB-CABLE setup). Two or none means there is no safe pick, so `None`.
+pub fn cable_input_target(devices: &DeviceList) -> Option<DeviceOption> {
+    let mut found = devices.render.iter().filter(|d| d.label.to_ascii_lowercase().contains("cable input"));
+    let only = found.next()?;
+    found.next().is_none().then(|| only.clone())
+}
+
 /// Call-audio source choices: virtual capture ends, minus the end paired with the mic target's cable.
 pub fn call_source_choices(devices: &DeviceList, mic_target_id: Option<&str>) -> Vec<DeviceOption> {
     let paired = mic_target_id
@@ -153,7 +161,19 @@ mod tests {
                 dev("cable-out", "CABLE Output (VB-Audio Virtual Cable)"),
                 dev("epos-mic", "Microphone (EPOS PC 8 USB)"),
             ],
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn cable_input_is_picked_only_when_there_is_exactly_one() {
+        assert_eq!(cable_input_target(&list()).map(|d| d.id), Some("cable-in".to_string()));
+        let mut two = list();
+        two.render.push(dev("cable2-in", "CABLE Input 2 (VB-Audio Virtual Cable)"));
+        assert!(cable_input_target(&two).is_none(), "ambiguous: no safe pick");
+        let mut none = list();
+        none.render.retain(|d| d.id != "cable-in");
+        assert!(cable_input_target(&none).is_none());
     }
 
     #[test]

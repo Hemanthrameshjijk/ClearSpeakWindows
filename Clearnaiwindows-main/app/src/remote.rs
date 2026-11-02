@@ -24,7 +24,7 @@ use crate::shared::{self, DeviceList, EngineHandles, LiveDeviceSwitcher, RemoteL
 const PENDING_GRACE: Duration = Duration::from_millis(1500);
 
 static LINK: OnceLock<Arc<Link>> = OnceLock::new();
-/// 0 = nothing asked, 1 = full window, 2 = quick panel.
+/// 0 = nothing asked, 1 = full window, 2 = bar, 3 = card.
 static SHOW_REQUESTED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// The window's end of the pipe. The file is replaced on reconnect.
@@ -68,14 +68,17 @@ pub fn take_show_request() -> Option<ShowMode> {
     match SHOW_REQUESTED.swap(0, Ordering::Relaxed) {
         1 => Some(ShowMode::Full),
         2 => Some(ShowMode::Panel),
+        3 => Some(ShowMode::Card),
         _ => None,
     }
 }
 
-/// `--panel` / `--full` on the command line (the engine passes one when the tray opens the window).
+/// `--panel` / `--card` / `--full` on the command line (the engine passes one when the tray opens the window). None
+/// means the program was clicked directly.
 pub fn launch_mode() -> Option<ShowMode> {
     std::env::args().find_map(|a| match a.as_str() {
         "--panel" => Some(ShowMode::Panel),
+        "--card" => Some(ShowMode::Card),
         "--full" => Some(ShowMode::Full),
         _ => None,
     })
@@ -486,6 +489,8 @@ fn connect_and_mirror() -> Option<Connected> {
             compat: hello.compat.clone(),
             bvc_extraction_error: hello.bvc_extraction_error.clone(),
             panel_at_start: false,
+            start_card: false,
+            ask_password: false,
         },
     })
 }
@@ -501,7 +506,11 @@ extern "system" {
 }
 
 fn show_event_name(mode: ShowMode) -> Vec<u16> {
-    let name = if mode == ShowMode::Panel { "Local\\ClearNAI-window-show-panel" } else { "Local\\ClearNAI-window-show-full" };
+    let name = match mode {
+        ShowMode::Panel => "Local\\ClearNAI-window-show-panel",
+        ShowMode::Card => "Local\\ClearNAI-window-show-card",
+        ShowMode::Full => "Local\\ClearNAI-window-show-full",
+    };
     name.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
@@ -517,7 +526,7 @@ fn signal_existing_window(mode: ShowMode) {
 
 /// The first window: listen for [`signal_existing_window`].
 fn start_show_listener() {
-    for (mode, code) in [(ShowMode::Full, 1u8), (ShowMode::Panel, 2u8)] {
+    for (mode, code) in [(ShowMode::Full, 1u8), (ShowMode::Panel, 2u8), (ShowMode::Card, 3u8)] {
         let name = show_event_name(mode);
         let h = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
         if h == 0 {
@@ -534,10 +543,11 @@ fn start_show_listener() {
 /// Entry point of `clearnai.exe`.
 pub fn run_window() -> iced::Result {
     if crate::host::another_instance_running("Local\\ClearNAI-window") {
-        signal_existing_window(launch_mode().unwrap_or(ShowMode::Full));
+        signal_existing_window(launch_mode().unwrap_or(ShowMode::Card));
         return Ok(());
     }
     crate::logging::init_named(&crate::setup::app_data_dir(), "clearnai-window.log");
+    crate::crash::install(&crate::setup::app_data_dir(), "clearnai-window.log");
     start_show_listener();
 
     let Some(connected) = connect_and_mirror() else {
@@ -545,14 +555,13 @@ pub fn run_window() -> iced::Result {
         return Ok(());
     };
     let mut initial = connected.initial;
-    // The tray opens the quick panel; the Start menu / desktop icon and the tray menu open the full window. Either way
-    // the choice is for this launch only (the Expand / Collapse buttons are what change the remembered mode).
-    match launch_mode() {
-        Some(ShowMode::Panel) => {
-            initial.settings.compact_mode = true;
-            initial.panel_at_start = true;
-        }
-        Some(ShowMode::Full) | None => initial.settings.compact_mode = false,
-    }
+    // Every launch starts small, by the tray. Clicking the program (Start menu, desktop icon) shows the vertical card;
+    // the tray's single click shows the horizontal bar; the tray's "Open full window" shows the card with the password
+    // box open, because the full window only opens after the settings password.
+    let mode = launch_mode();
+    initial.settings.compact_mode = true;
+    initial.panel_at_start = true;
+    initial.start_card = !matches!(mode, Some(ShowMode::Panel));
+    initial.ask_password = matches!(mode, Some(ShowMode::Full));
     crate::gui::run(initial)
 }

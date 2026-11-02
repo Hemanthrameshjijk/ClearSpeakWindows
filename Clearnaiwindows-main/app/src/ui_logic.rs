@@ -60,8 +60,9 @@ pub fn status_chip(mic_enabled: bool, any_mic_stage_on: bool, speaker_ready: boo
     }
 }
 
-/// A fixed combination of EXISTING mic-path switches (no new processing). Applied through the same message handlers
-/// the individual controls use, so it persists and takes effect live. Accent and transcript are left as they are.
+/// A fixed combination of EXISTING switches (no new processing). Applied through the same message handlers the
+/// individual controls use, so it persists and takes effect live. Accent is left as it is. The `Option` fields are
+/// `None` for a profile that leaves that switch alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Profile {
     pub name: &'static str,
@@ -70,18 +71,42 @@ pub struct Profile {
     pub studio: bool,
     pub studio_preset: &'static str,
     pub bvc_backend: &'static str,
+    pub echo: Option<bool>,
+    pub transcript: Option<bool>,
+    /// The whole speaker side (call audio).
+    pub call_audio: Option<bool>,
+    /// "Hear my processed mic" on the speakers.
+    pub monitor: Option<bool>,
+    /// Point the virtual microphone at "CABLE Input" when exactly one is installed (a one-time routing step, not
+    /// something the profile keeps checking).
+    pub cable_mic: bool,
 }
 
+/// - Default: everything that cleans the microphone on, the transcript off, call audio and the monitor off, and the
+///   virtual microphone on CABLE Input when it is there. Accent stays as it is.
 /// - Office: quiet room, light touch - noise removal + Hush + Natural studio.
 /// - Busy floor: many people talking nearby - adds the quiet-voice gate, studio off to save CPU.
 /// - Presenting: you are the only voice that matters - noise removal + Hush + a fuller Balanced studio tone.
-pub const PROFILES: [Profile; 3] = [
-    Profile { name: "Office", noise: true, voice_gate: false, studio: true, studio_preset: "Natural", bvc_backend: "Hush" },
-    Profile { name: "Busy floor", noise: true, voice_gate: true, studio: false, studio_preset: "Natural", bvc_backend: "Hush" },
-    Profile { name: "Presenting", noise: true, voice_gate: false, studio: true, studio_preset: "Balanced", bvc_backend: "Hush" },
+pub const PROFILES: [Profile; 4] = [
+    Profile {
+        name: "Default",
+        noise: true,
+        voice_gate: false,
+        studio: true,
+        studio_preset: "Natural",
+        bvc_backend: "Hush",
+        echo: Some(true),
+        transcript: Some(false),
+        call_audio: Some(false),
+        monitor: Some(false),
+        cable_mic: true,
+    },
+    Profile { name: "Office", noise: true, voice_gate: false, studio: true, studio_preset: "Natural", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, monitor: None, cable_mic: false },
+    Profile { name: "Busy floor", noise: true, voice_gate: true, studio: false, studio_preset: "Natural", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, monitor: None, cable_mic: false },
+    Profile { name: "Presenting", noise: true, voice_gate: false, studio: true, studio_preset: "Balanced", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, monitor: None, cable_mic: false },
 ];
 
-pub const PROFILE_NAMES: [&str; 3] = [PROFILES[0].name, PROFILES[1].name, PROFILES[2].name];
+pub const PROFILE_NAMES: [&str; 4] = [PROFILES[0].name, PROFILES[1].name, PROFILES[2].name, PROFILES[3].name];
 
 pub fn profile_by_name(name: &str) -> Option<&'static Profile> {
     PROFILES.iter().find(|p| p.name == name)
@@ -96,16 +121,25 @@ pub struct MicSnapshot {
     pub studio_preset: &'static str,
     pub bvc_on: bool,
     pub bvc_backend: &'static str,
+    pub echo: bool,
+    pub transcript: bool,
+    pub call_audio: bool,
+    pub monitor: bool,
 }
 
 impl Profile {
     pub fn matches(&self, cur: &MicSnapshot) -> bool {
+        let same = |want: Option<bool>, now: bool| want.map_or(true, |w| w == now);
         self.noise == cur.noise
             && self.voice_gate == cur.voice_gate
             && self.studio == cur.studio
             && self.studio_preset == cur.studio_preset
             && cur.bvc_on
             && self.bvc_backend == cur.bvc_backend
+            && same(self.echo, cur.echo)
+            && same(self.transcript, cur.transcript)
+            && same(self.call_audio, cur.call_audio)
+            && same(self.monitor, cur.monitor)
     }
 }
 
@@ -199,9 +233,25 @@ pub fn split_warning(w: &str) -> (Option<&str>, String) {
     (title, rest)
 }
 
+/// The password that opens the full window from the quick panel. It keeps casual clicks out of the advanced
+/// settings; it is not a security boundary (it sits in the binary).
+const SETTINGS_PASSWORD: &str = "12345";
+
+pub fn settings_password_ok(input: &str) -> bool {
+    input == SETTINGS_PASSWORD
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_exact_password_opens_settings() {
+        assert!(settings_password_ok("12345"));
+        for bad in ["", "1234", "123456", " 12345", "12345 ", "abcde"] {
+            assert!(!settings_password_ok(bad), "{bad:?} must not unlock");
+        }
+    }
 
     #[test]
     fn chip_priority_is_muted_then_paused_then_call_audio_then_protected() {
@@ -228,14 +278,16 @@ mod tests {
             assert!(tse_engine::BvcBackend::ALL.iter().any(|b| b.name() == p.bvc_backend), "{}", p.name);
             assert!(profile_by_name(p.name).is_some());
         }
-        assert_eq!(PROFILE_NAMES, ["Office", "Busy floor", "Presenting"]);
+        assert_eq!(PROFILE_NAMES, ["Default", "Office", "Busy floor", "Presenting"]);
     }
 
     #[test]
     fn profiles_are_distinct() {
-        assert_ne!(PROFILES[0], PROFILES[1]);
-        assert_ne!(PROFILES[0], PROFILES[2]);
-        assert_ne!(PROFILES[1], PROFILES[2]);
+        for i in 0..PROFILES.len() {
+            for j in i + 1..PROFILES.len() {
+                assert_ne!(PROFILES[i], PROFILES[j], "{} vs {}", PROFILES[i].name, PROFILES[j].name);
+            }
+        }
     }
 
     fn snapshot_of(p: &Profile) -> MicSnapshot {
@@ -246,7 +298,35 @@ mod tests {
             studio_preset: p.studio_preset,
             bvc_on: true,
             bvc_backend: p.bvc_backend,
+            echo: p.echo.unwrap_or(true),
+            transcript: p.transcript.unwrap_or(false),
+            call_audio: p.call_audio.unwrap_or(false),
+            monitor: p.monitor.unwrap_or(false),
         }
+    }
+
+    #[test]
+    fn default_profile_turns_cleaning_on_and_everything_else_off() {
+        let d = profile_by_name("Default").unwrap();
+        assert!(d.noise && d.studio && d.echo == Some(true) && d.cable_mic);
+        assert_eq!((d.transcript, d.call_audio, d.monitor), (Some(false), Some(false), Some(false)));
+        let mut cur = snapshot_of(d);
+        assert_eq!(active_profile("Default", &cur), Some("Default"));
+        cur.call_audio = true; // call audio switched on by hand: no longer the Default profile
+        assert_eq!(active_profile("Default", &cur), None);
+        cur.call_audio = false;
+        cur.transcript = true;
+        assert_eq!(active_profile("Default", &cur), None);
+    }
+
+    #[test]
+    fn profiles_that_leave_a_switch_alone_ignore_it() {
+        let office = profile_by_name("Office").unwrap();
+        let mut cur = snapshot_of(office);
+        cur.transcript = true;
+        cur.call_audio = true;
+        cur.echo = false;
+        assert_eq!(active_profile("Office", &cur), Some("Office"));
     }
 
     #[test]

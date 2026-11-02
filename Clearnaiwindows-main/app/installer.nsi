@@ -37,7 +37,10 @@
 ; extracted exe at this exact path before running makensis - this script
 ; does not fetch it for you, and `makensis` will fail with a clear
 ; "file not found" error if it's missing, rather than silently skipping it.
-!define VBCABLE_INSTALLER "vendor\VBCABLE_Setup_x64.exe"
+; The WHOLE VB-CABLE driver pack folder (setup exe + .inf/.cat/.sys). The setup exe alone fails with "Missing inf file or
+; Driver package corrupted": it needs the driver files next to it.
+!define VBCABLE_DIR "vendor\vbcable"
+!define VBCABLE_EXE "$TEMP\ClearNAI-VBCABLE\VBCABLE_Setup_x64.exe"
 
 ; ~500 MB of models: solid LZMA gives the smallest download (slower to build, fine for CI/release).
 SetCompressor /SOLID lzma
@@ -58,12 +61,11 @@ UninstallIcon "assets\clearnai.ico"
 
 Name "${APP_NAME}"
 OutFile "..\target\release\ClearNAI-Setup.exe"
-InstallDir "$LOCALAPPDATA\ClearNAI"
-; Two-step install: ClearNAI itself installs per-user with NO admin prompt (the app only ever writes under the current
-; user's %LOCALAPPDATA%\ClearNAI, so there is no profile mix-up from a different admin account). Only when the VB-CABLE
-; driver is missing does the VB-CABLE step ask for admin (UAC prompt via "runas"); if it is already installed there
-; is no prompt at all.
-RequestExecutionLevel user
+InstallDir "$PROGRAMFILES64\ClearNAI"
+; Installs to C:\Program Files\ClearNAI (one admin prompt). Managed PCs often block programs and DLLs under
+; %LOCALAPPDATA% ("restrictions in effect on this computer"); Program Files is normally allowed. Settings, logs and
+; transcripts stay per-user in %LOCALAPPDATA%\ClearNAI (the app writes there; Program Files is read-only for users).
+RequestExecutionLevel admin
 ; (shell folders default to the current user, which is what we want, so no SetShellVarContext is needed.)
 
 Function .onInit
@@ -85,6 +87,8 @@ UninstPage uninstConfirm
 UninstPage instfiles
 
 Section "Install"
+  ; Shortcuts for all users (the installer is elevated).
+  SetShellVarContext all
   SetOutPath "$INSTDIR"
   ; Built by the `cargo build --release` step that runs immediately before
   ; this one in CI (see .github/workflows/windows.yml).
@@ -94,8 +98,27 @@ Section "Install"
   nsExec::Exec 'taskkill /F /IM clearnairt.exe'
   Sleep 1000
   Delete "$INSTDIR\clearnairt.exe"
+  ; Remove the old per-user install (%LOCALAPPDATA%\ClearNAI), keeping the user's settings.json and logs.
+  Delete "$LOCALAPPDATA\ClearNAI\clearnai.exe"
+  Delete "$LOCALAPPDATA\ClearNAI\clearnai-engine.exe"
+  Delete "$LOCALAPPDATA\ClearNAI\clearnairt.exe"
+  Delete "$LOCALAPPDATA\ClearNAI\Uninstall.exe"
+  Delete "$LOCALAPPDATA\ClearNAI\*.dll"
+  Delete "$LOCALAPPDATA\ClearNAI\*.tar.gz"
+  RMDir /r "$LOCALAPPDATA\ClearNAI\app_models"
+  RMDir /r "$LOCALAPPDATA\ClearNAI\asr_models"
+  DeleteRegKey HKCU "${UNINSTALL_REG_KEY}"
   File "..\target\release\${APP_EXE}"
   File "..\target\release\${ENGINE_EXE}"
+  ; Libraries and BVC models ship here so nothing is unpacked into a user folder at run time (the exe finds them next
+  ; to itself, see setup::assets_dir). weya_nc_speaker.dll is a second copy of weya_nc.dll.
+  File "assets\weya_nc.dll"
+  File /oname=weya_nc_speaker.dll "assets\weya_nc.dll"
+  File "assets\onnxruntime.dll"
+  File "assets\advanced_dfnet16k_model_best_onnx.tar.gz"
+  File "assets\bpo_v1_onnx.tar.gz"
+  ; Visual C++ runtime next to the exe: onnxruntime.dll needs it and a fresh Windows may not have it installed.
+  File /nonfatal "vendor\vcruntime\*.dll"
 
   ; Accent-conversion model bundle (~270 MB), shipped as a folder next to the exe and installed into
   ; %LOCALAPPDATA%\ClearNAI\app_models on first use (setup.rs compares full contents). Put the files in
@@ -132,23 +155,21 @@ Section "Install"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
-  ; Start the background engine (hidden, in the tray) at every sign-in. The engine keeps this entry in line with the
-  ; "Start with Windows" switch in Advanced.
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}" '"$INSTDIR\${ENGINE_EXE}" --background'
+  ; Start with Windows: the engine writes its own per-user Run entry at first start and keeps it in line with the
+  ; switch in Advanced. This installer is elevated, so it must not write HKCU itself.
 
-  ; Per-user uninstall registry entry (HKCU, not HKLM - matches
-  ; RequestExecutionLevel user above) so ClearNAI shows up in Windows'
+  ; Uninstall registry entry (HKLM, matches RequestExecutionLevel admin above) so ClearNAI shows up in Windows'
   ; "Apps & Features" / "Add or Remove Programs" with a working Uninstall
   ; button, the same as any normally-installed app.
-  WriteRegStr HKCU "${UNINSTALL_REG_KEY}" "DisplayName" "${APP_NAME}"
-  WriteRegStr HKCU "${UNINSTALL_REG_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-  WriteRegStr HKCU "${UNINSTALL_REG_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
-  WriteRegStr HKCU "${UNINSTALL_REG_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
-  WriteRegStr HKCU "${UNINSTALL_REG_KEY}" "Publisher" "${APP_PUBLISHER}"
-  WriteRegStr HKCU "${UNINSTALL_REG_KEY}" "DisplayVersion" "${APP_VERSION}"
-  WriteRegStr HKCU "${UNINSTALL_REG_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegDWORD HKCU "${UNINSTALL_REG_KEY}" "NoModify" 1
-  WriteRegDWORD HKCU "${UNINSTALL_REG_KEY}" "NoRepair" 1
+  WriteRegStr HKLM "${UNINSTALL_REG_KEY}" "DisplayName" "${APP_NAME}"
+  WriteRegStr HKLM "${UNINSTALL_REG_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  WriteRegStr HKLM "${UNINSTALL_REG_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
+  WriteRegStr HKLM "${UNINSTALL_REG_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
+  WriteRegStr HKLM "${UNINSTALL_REG_KEY}" "Publisher" "${APP_PUBLISHER}"
+  WriteRegStr HKLM "${UNINSTALL_REG_KEY}" "DisplayVersion" "${APP_VERSION}"
+  WriteRegStr HKLM "${UNINSTALL_REG_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegDWORD HKLM "${UNINSTALL_REG_KEY}" "NoModify" 1
+  WriteRegDWORD HKLM "${UNINSTALL_REG_KEY}" "NoRepair" 1
 SectionEnd
 
 Section "VB-CABLE Virtual Audio Driver"
@@ -196,17 +217,19 @@ Section "VB-CABLE Virtual Audio Driver"
     Goto skip_vbcable
   ${EndIf}
 
-  SetOutPath "$TEMP"
-  File /nonfatal "${VBCABLE_INSTALLER}"
+  RMDir /r "$TEMP\ClearNAI-VBCABLE"
+  SetOutPath "$TEMP\ClearNAI-VBCABLE"
+  File /nonfatal "${VBCABLE_DIR}\*.*"
 
-  IfFileExists "$TEMP\VBCABLE_Setup_x64.exe" 0 skip_vbcable
+  IfFileExists "${VBCABLE_EXE}" 0 skip_vbcable
     DetailPrint "Launching the VB-CABLE driver installer - click Install Driver in the window that opens (it will show its own admin prompt)..."
     ; This installer is not elevated, and ExecWait cannot start a program that needs admin (error 740), so launch it
     ; with the "runas" verb: Windows shows the UAC prompt just for this step, and ExecShellWait waits for it to close
     ; (it reports no exit code).
-    ExecShellWait "runas" "$TEMP\VBCABLE_Setup_x64.exe" "${VBCABLE_ARGS}" SW_SHOWNORMAL
+    ExecShellWait "runas" "${VBCABLE_EXE}" "${VBCABLE_ARGS}" SW_SHOWNORMAL
     DetailPrint "VB-CABLE installer closed."
-    Delete "$TEMP\VBCABLE_Setup_x64.exe"
+    SetOutPath "$TEMP"
+    RMDir /r "$TEMP\ClearNAI-VBCABLE"
 
     ; VB-Audio's own documentation recommends a reboot for the driver to
     ; register reliably - ask, never force a silent unexpected reboot.
@@ -218,23 +241,31 @@ Section "VB-CABLE Virtual Audio Driver"
   skip_vbcable:
 SectionEnd
 
+; ClearNAI virtual microphone driver (separate project: ClearnaiWindows-Diver). TEST-SIGNED, so this installer only COPIES
+; the package and its helper scripts to "$INSTDIR\driver"; it never installs the driver, trusts the test certificate or changes
+; any Windows security setting. To use it, run Install-ClearNAI-Driver.ps1 from an elevated PowerShell on a test PC (see
+; driver\README.txt). `/nonfatal`: the folder is not part of this repo, so a build without it (CI) still succeeds.
+Section "ClearNAI driver package (copied, not installed)"
+  SetOutPath "$INSTDIR\driver"
+  File /nonfatal "..\..\ClearnaiWindows-Diver\dist\driver\*.*"
+SectionEnd
+
 ; After everything is installed (including the optional driver step): start the engine, which opens the window once.
 Function .onInstSuccess
   ${IfNot} ${Silent}
-    Exec '"$INSTDIR\${ENGINE_EXE}"'
+    ; Through explorer so the engine runs as the normal user, not with this installer's admin rights.
+    Exec '"$WINDIR\explorer.exe" "$INSTDIR\${ENGINE_EXE}"'
   ${EndIf}
 FunctionEnd
 
 Section "Uninstall"
+  SetShellVarContext all
   nsExec::Exec 'taskkill /F /IM ${APP_EXE}'
   nsExec::Exec 'taskkill /F /IM ${ENGINE_EXE}'
   nsExec::Exec 'taskkill /F /IM clearnairt.exe'
   Sleep 1000
-  ; $INSTDIR is also where the running app self-extracts weya_nc.dll, the
-  ; ONNX model bundle, settings.json, and clearnai.log (see
-  ; app/src/setup.rs::app_data_dir) - removing the whole directory cleans
-  ; all of that up in one step, matching what the earlier uninstall.ps1
-  ; script did explicitly.
+  ; $INSTDIR holds only the program files, libraries and models. The user's settings.json, logs and transcripts live
+  ; in %LOCALAPPDATA%\ClearNAI and are left in place.
   ;
   ; Deliberately does NOT touch any VB-Audio Virtual Cable / VoiceMeeter
   ; driver install - those are separate third-party products the user
@@ -251,5 +282,5 @@ Section "Uninstall"
   ; The app's optional "Start with Windows" setting writes this value (HKCU Run).
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
 
-  DeleteRegKey HKCU "${UNINSTALL_REG_KEY}"
+  DeleteRegKey HKLM "${UNINSTALL_REG_KEY}"
 SectionEnd

@@ -111,6 +111,22 @@ mod wasapi_impl {
         list_devices(Direction::Render)
     }
 
+    /// Id of the endpoint Windows currently uses by default for `direction`
+    /// (same id format as `list_devices`), or `None` when there is none.
+    fn default_device_id(direction: Direction) -> Option<String> {
+        DeviceEnumerator::new().ok()?.get_default_device(&direction).ok()?.get_id().ok()
+    }
+
+    /// The default microphone's id, so a picker can show it as the selection.
+    pub fn default_capture_device_id() -> Option<String> {
+        default_device_id(Direction::Capture)
+    }
+
+    /// The default speakers' id, so a picker can show it as the selection.
+    pub fn default_render_device_id() -> Option<String> {
+        default_device_id(Direction::Render)
+    }
+
     /// Opens a specific capture device by its enumerated device id (as
     /// returned by `list_capture_devices`), not just "the current default".
     pub fn open_capture_device_by_id(device_id: &str) -> Result<Device> {

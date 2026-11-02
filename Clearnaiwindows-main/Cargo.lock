@@ -665,7 +665,6 @@ dependencies = [
  "bvc-hush",
  "driver-transport",
  "dsp-core",
- "hound",
  "iced",
  "noise-engine",
  "serde",

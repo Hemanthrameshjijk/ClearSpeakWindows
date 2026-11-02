@@ -165,12 +165,6 @@ impl TranscriptHandle {
         }
     }
 
-    /// Whole transcript as plain text (for copy).
-    pub fn full_text(&self) -> String {
-        let d = self.0.data.lock().unwrap();
-        d.lines.iter().map(|l| format!("[{}] {}", fmt_time(l.at_secs), l.text)).collect::<Vec<_>>().join("\n")
-    }
-
     pub fn clear(&self) {
         self.0.clear_requested.store(true, Relaxed);
         let mut d = self.0.data.lock().unwrap();

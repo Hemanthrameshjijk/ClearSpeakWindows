@@ -490,6 +490,12 @@ impl std::fmt::Display for DeviceOption {
 pub struct DeviceList {
     pub render: Vec<DeviceOption>,
     pub capture: Vec<DeviceOption>,
+    /// Ids of the endpoints Windows uses by default, so a picker with nothing saved can show the real device
+    /// instead of "not selected".
+    #[serde(default)]
+    pub default_render: Option<String>,
+    #[serde(default)]
+    pub default_capture: Option<String>,
 }
 
 impl DeviceList {

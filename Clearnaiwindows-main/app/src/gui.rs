@@ -51,6 +51,10 @@ const DEADLINE_NS: u64 = (dsp_core::FRAME_SAMPLES as u64 * 1_000_000_000) / dsp_
 pub struct Initial {
     /// Opened from the tray as the quick panel: place it at the bottom-right of the screen on the first tick.
     pub panel_at_start: bool,
+    /// Start as the vertical card (clicking the program) instead of the horizontal bar (tray click).
+    pub start_card: bool,
+    /// The full window was asked for (tray "Open full window"): show the card with the password box open.
+    pub ask_password: bool,
     pub settings: Settings,
     pub handles: EngineHandles,
     pub devices: DeviceList,
@@ -129,7 +133,24 @@ struct MainState {
     fit_full: bool,
     /// Whether the window currently has its title bar (the collapsed bar has none).
     decorated: bool,
+    /// Which small shape the window has while `settings.compact_mode`: the vertical card (true) or the horizontal bar.
+    card: bool,
+    /// The full window opens only after the settings password was entered in this window; collapsing locks it again.
+    unlocked: bool,
+    /// The password box, shown in place of the quick panel's controls while `Some`.
+    password: Option<PasswordPrompt>,
+    /// The tab to open once the password is accepted.
+    pending_tab: Tab,
 }
+
+#[derive(Default)]
+struct PasswordPrompt {
+    input: String,
+    wrong: bool,
+}
+
+/// Id of the password box, so it can take the keyboard focus the moment it appears.
+const PASSWORD_FIELD_ID: &str = "settings-password";
 
 impl MainState {
     fn new(
@@ -165,6 +186,10 @@ impl MainState {
             place_panel: false,
             fit_full: false,
             decorated: true,
+            card: false,
+            unlocked: false,
+            password: None,
+            pending_tab: Tab::Home,
         }
     }
 }
@@ -291,8 +316,18 @@ pub enum Message {
     ToggleCompact,
     /// Press on the undecorated collapsed bar: drag the window.
     DragWindow,
-    /// Open the full window on this tab (the collapsed bar's gear).
+    /// Call audio on / off (Devices tab): off stops the whole speaker path, on starts it from the saved source.
+    ToggleCallAudio(bool),
+    /// The card's "Cancel noise": noise removal, background voices and echo removal all on or all off.
+    ToggleCancelNoise(bool),
+    /// The card's "Refresh": re-reads the device list and puts the microphone and the speakers back on the defaults.
+    UseDefaultDevices,
+    /// Open the full window on this tab (the quick panel's gear): asks for the settings password first.
     OpenFullAt(Tab),
+    /// Password box: the text changed / Enter or Unlock pressed / Cancel pressed.
+    PasswordInput(String),
+    SubmitPassword,
+    CancelPassword,
     SelectTab(Tab),
     /// Mute / unmute the mic path (flips `EngineHandles::mic_master_enabled`); also driven by Ctrl+Shift+M.
     ToggleMute,
@@ -317,11 +352,22 @@ const FULL_WINDOW_SIZE: iced::Size = iced::Size::new(940.0, 620.0);
 
 /// Smallest the full window can be dragged to (below ~760 px wide it switches to top tabs).
 const MIN_WINDOW_SIZE: iced::Size = iced::Size::new(480.0, 400.0);
-const COMPACT_WINDOW_SIZE: iced::Size = iced::Size::new(490.0, 84.0);
+/// The small always-on-top window comes in two shapes: the horizontal bar (tray click) and the vertical card (clicking
+/// the program; it also hosts the password box that unlocks the full window).
+const BAR_WINDOW_SIZE: iced::Size = iced::Size::new(490.0, 84.0);
+const CARD_WINDOW_SIZE: iced::Size = iced::Size::new(388.0, 660.0);
 
-fn window_size_and_level(compact: bool) -> (iced::Size, iced::window::Level) {
+fn small_size(card: bool) -> iced::Size {
+    if card {
+        CARD_WINDOW_SIZE
+    } else {
+        BAR_WINDOW_SIZE
+    }
+}
+
+fn window_size_and_level(compact: bool, card: bool) -> (iced::Size, iced::window::Level) {
     if compact {
-        (COMPACT_WINDOW_SIZE, iced::window::Level::AlwaysOnTop)
+        (small_size(card), iced::window::Level::AlwaysOnTop)
     } else {
         (FULL_WINDOW_SIZE, iced::window::Level::Normal)
     }
@@ -336,6 +382,26 @@ fn place_panel_task(size: iced::Size) -> iced::Task<Message> {
             iced::window::move_to(id, iced::Point::new(x, y))
         })
     })
+}
+
+/// Puts a window of `size` in the middle of the screen (a little above centre, clear of the taskbar).
+fn center_task(size: iced::Size) -> iced::Task<Message> {
+    iced::window::latest().and_then(move |id| {
+        iced::window::monitor_size(id).and_then(move |screen| {
+            let x = ((screen.width - size.width) / 2.0).max(0.0);
+            let y = ((screen.height - size.height) / 2.0 - 24.0).max(0.0);
+            iced::window::move_to(id, iced::Point::new(x, y))
+        })
+    })
+}
+
+/// Where the small window sits: the card in the middle of the screen (the program was clicked), the bar by the tray.
+fn place_small_task(card: bool) -> iced::Task<Message> {
+    if card {
+        center_task(CARD_WINDOW_SIZE)
+    } else {
+        place_panel_task(BAR_WINDOW_SIZE)
+    }
 }
 
 /// Sizes the full window to FULL_WINDOW_SIZE but never larger than the screen allows (room is left for the title bar
@@ -355,16 +421,49 @@ fn fit_full_task() -> iced::Task<Message> {
 /// Everything that switches the window between the collapsed bar and the full window: size, always-on-top, title bar,
 /// and where it sits (bottom-right by the tray for the bar, centre of the screen for the full window).
 fn mode_tasks(state: &mut MainState, compact: bool) -> Vec<iced::Task<Message>> {
-    let (size, level) = window_size_and_level(compact);
+    let (size, level) = window_size_and_level(compact, state.card);
+    // The bar and the card are fixed-size; the full window can be dragged down to MIN_WINDOW_SIZE.
+    let min = if compact { size } else { MIN_WINDOW_SIZE };
     let mut tasks = vec![iced::window::latest().and_then(move |id| {
-        iced::Task::batch([iced::window::resize(id, size), iced::window::set_level(id, level)])
+        iced::Task::batch([
+            iced::window::set_min_size(id, Some(min)),
+            iced::window::resize(id, size),
+            iced::window::set_level(id, level),
+        ])
     })];
     if state.decorated == compact {
         state.decorated = !compact;
         tasks.push(iced::window::latest().and_then(iced::window::toggle_decorations));
     }
-    tasks.push(if compact { place_panel_task(size) } else { fit_full_task() });
+    tasks.push(if compact { place_small_task(state.card) } else { fit_full_task() });
     tasks
+}
+
+/// Opens the full window on `tab`, or - when this window has not been unlocked - shows the password box on the card
+/// first (`SubmitPassword` calls this again once the password was right). Asked from the bar, which has no room for a
+/// password box, the window turns into the card.
+fn open_full(state: &mut MainState, tab: Tab) -> iced::Task<Message> {
+    if !state.unlocked {
+        let mut tasks = Vec::new();
+        if !state.card || !state.settings.compact_mode {
+            state.card = true;
+            state.settings.compact_mode = true;
+            tasks.extend(mode_tasks(state, true));
+        }
+        state.password = Some(PasswordPrompt::default());
+        state.pending_tab = tab;
+        tasks.push(iced::widget::operation::focus(PASSWORD_FIELD_ID));
+        return iced::Task::batch(tasks);
+    }
+    state.password = None;
+    state.tab = tab;
+    state.reset_armed = false;
+    if state.settings.compact_mode {
+        state.settings.compact_mode = false;
+        persist(&state.settings);
+        return iced::Task::batch(mode_tasks(state, false));
+    }
+    iced::Task::none()
 }
 
 /// The engine is the only writer of `settings.json`: send it the window's settings and it saves them.
@@ -424,22 +523,35 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
             let mut tasks = Vec::new();
             // Opened from the tray as the quick panel: put it by the tray (bottom-right), once.
             if std::mem::take(&mut state.place_panel) {
-                tasks.push(place_panel_task(COMPACT_WINDOW_SIZE));
+                tasks.push(place_small_task(state.card));
+                if state.password.is_some() {
+                    tasks.push(iced::widget::operation::focus(PASSWORD_FIELD_ID));
+                }
             }
             // First tick of a full window: make sure it fits this screen.
             if std::mem::take(&mut state.fit_full) {
                 tasks.push(fit_full_task());
             }
-            // Another launch of the window (tray, Start menu) asks this one to come to the front, as the quick
-            // panel or as the full window.
+            // Another launch of the window asks this one to come to the front: the tray's single click as the bar,
+            // the program itself as the card, "Open full window" as the password box (the full window once unlocked).
             if let Some(mode) = crate::remote::take_show_request() {
-                let compact = mode == crate::ipc::ShowMode::Panel;
-                if state.settings.compact_mode != compact {
-                    state.settings.compact_mode = compact;
-                    persist(&state.settings);
-                    tasks.extend(mode_tasks(state, compact));
-                } else if compact {
-                    tasks.push(place_panel_task(COMPACT_WINDOW_SIZE));
+                use crate::ipc::ShowMode;
+                if mode == ShowMode::Full {
+                    tasks.push(open_full(state, Tab::Home));
+                } else {
+                    let card = mode == ShowMode::Card;
+                    if !state.settings.compact_mode {
+                        state.unlocked = false; // leaving the full window locks it again
+                    }
+                    state.password = None;
+                    if !state.settings.compact_mode || state.card != card {
+                        state.settings.compact_mode = true;
+                        state.card = card;
+                        persist(&state.settings);
+                        tasks.extend(mode_tasks(state, true));
+                    } else {
+                        tasks.push(place_small_task(state.card));
+                    }
                 }
                 tasks.push(iced::window::latest().and_then(|id| {
                     iced::Task::batch([
@@ -458,22 +570,54 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
     }
     if let Message::OpenFullAt(tab) = message {
         if let Screen::Main(state) = screen {
-            state.tab = tab;
-            state.reset_armed = false;
-            if state.settings.compact_mode {
-                state.settings.compact_mode = false;
-                persist(&state.settings);
-                return iced::Task::batch(mode_tasks(state, false));
+            return open_full(state, tab);
+        }
+        return iced::Task::none();
+    }
+    if let Message::PasswordInput(input) = message {
+        if let Screen::Main(state) = screen {
+            if let Some(p) = &mut state.password {
+                p.input = input;
+                p.wrong = false;
             }
+        }
+        return iced::Task::none();
+    }
+    if matches!(message, Message::CancelPassword) {
+        if let Screen::Main(state) = screen {
+            state.password = None;
+        }
+        return iced::Task::none();
+    }
+    if matches!(message, Message::SubmitPassword) {
+        if let Screen::Main(state) = screen {
+            let ok = state.password.as_ref().is_some_and(|p| crate::ui_logic::settings_password_ok(&p.input));
+            if ok {
+                state.unlocked = true;
+                let tab = state.pending_tab;
+                return open_full(state, tab);
+            }
+            if let Some(p) = &mut state.password {
+                p.input.clear();
+                p.wrong = true;
+            }
+            return iced::widget::operation::focus(PASSWORD_FIELD_ID);
         }
         return iced::Task::none();
     }
     if matches!(message, Message::ToggleCompact) {
         if let Screen::Main(state) = screen {
-            state.settings.compact_mode = !state.settings.compact_mode;
+            if state.settings.compact_mode {
+                // Bar / card -> full window: only with the password.
+                return open_full(state, Tab::Home);
+            }
+            // Full window -> the bar: locks the full window again.
+            state.unlocked = false;
+            state.password = None;
+            state.card = false;
+            state.settings.compact_mode = true;
             persist(&state.settings);
-            let compact = state.settings.compact_mode;
-            return iced::Task::batch(mode_tasks(state, compact));
+            return iced::Task::batch(mode_tasks(state, true));
         }
         return iced::Task::none();
     }
@@ -680,6 +824,23 @@ fn update_main(state: &mut MainState, message: Message) {
                 update_main(state, Message::ToggleMicStudio(p.studio));
                 update_main(state, Message::SelectMicStudioPreset(p.studio_preset));
                 update_main(state, Message::SelectBvcBackend(p.bvc_backend));
+                if let Some(on) = p.echo {
+                    update_main(state, Message::ToggleEchoCancel(on));
+                }
+                if let Some(on) = p.transcript {
+                    update_main(state, Message::ToggleTranscript(on));
+                }
+                if let Some(on) = p.call_audio {
+                    update_main(state, Message::ToggleCallAudio(on));
+                }
+                if let Some(on) = p.monitor {
+                    update_main(state, Message::ToggleMonitor(on));
+                }
+                if p.cable_mic {
+                    if let Some(device) = crate::device_rules::cable_input_target(&state.devices) {
+                        update_main(state, Message::SelectMicTarget(device));
+                    }
+                }
                 state.settings.profile = p.name.to_string();
                 persist(&state.settings);
             }
@@ -830,6 +991,25 @@ fn update_main(state: &mut MainState, message: Message) {
                 s.set_monitor_device(Some(device.id))
             });
         }
+        Message::ToggleCancelNoise(on) => {
+            update_main(state, Message::ToggleMicNoise(on));
+            update_main(state, Message::ToggleMicBvc(on));
+            update_main(state, Message::ToggleEchoCancel(on));
+        }
+        Message::UseDefaultDevices => {
+            state.devices = state.handles.device_switcher.enumerate_devices();
+            state.settings.physical_mic_device_id = None;
+            state.settings.real_speaker_output_device_id = None;
+            persist(&state.settings);
+            state.warnings.retain(|w| !w.contains("real speaker/headphone output device"));
+            // `None` = follow the system default, as at the first launch. Off the UI thread, like every device switch.
+            let seq = state.device_switch_seqs.physical_mic.clone();
+            let this_seq = next_seq(&seq);
+            spawn_device_switch(state.handles.device_switcher.clone(), seq, this_seq, |s| s.set_physical_mic(None));
+            let seq = state.device_switch_seqs.real_speaker_output.clone();
+            let this_seq = next_seq(&seq);
+            spawn_device_switch(state.handles.device_switcher.clone(), seq, this_seq, |s| s.set_real_speaker_output(None));
+        }
         Message::RefreshDevices => {
             // Enumeration itself (unlike a device switch) never opens a
             // device or joins a worker thread, so it's cheap and safe to run
@@ -920,8 +1100,22 @@ fn update_main(state: &mut MainState, message: Message) {
                 persist(&state.settings);
             }
         }
+        Message::ToggleCallAudio(on) => {
+            state.settings.call_audio_on = on;
+            persist(&state.settings);
+            // Off stops the whole speaker path (capture, processing, playback); on starts it from the saved source, if
+            // there is one. Run off the UI thread like every device switch.
+            let source = if on { state.settings.virtual_speaker_source_id.clone() } else { None };
+            let seq = state.device_switch_seqs.speaker_source.clone();
+            let this_seq = next_seq(&seq);
+            spawn_device_switch(state.handles.device_switcher.clone(), seq, this_seq, move |s| {
+                s.set_virtual_speaker_source(source)
+            });
+        }
         Message::SelectSpeakerSource(device) => {
             state.settings.virtual_speaker_source_id = Some(device.id.clone());
+            // Choosing a source is asking for call audio.
+            state.settings.call_audio_on = true;
             persist(&state.settings);
             // Optimistic clear (same "assume the switch works, log on
             // failure elsewhere" trust the toggles already extend to the
@@ -953,6 +1147,9 @@ fn update_main(state: &mut MainState, message: Message) {
         | Message::ToggleCompact
         | Message::CopyTranscript
         | Message::DragWindow
+        | Message::PasswordInput(_)
+        | Message::SubmitPassword
+        | Message::CancelPassword
         | Message::OpenFullAt(_) => {}
     }
 }
@@ -966,6 +1163,7 @@ fn reset_to_defaults(state: &mut MainState) {
     let mut fresh = d.clone();
     fresh.virtual_mic_target_id = keep.virtual_mic_target_id;
     fresh.virtual_speaker_source_id = keep.virtual_speaker_source_id;
+    fresh.call_audio_on = keep.call_audio_on;
     fresh.physical_mic_device_id = keep.physical_mic_device_id;
     fresh.monitor_device_id = keep.monitor_device_id;
     fresh.real_speaker_output_device_id = keep.real_speaker_output_device_id;
@@ -1103,7 +1301,8 @@ fn view_setup(setup: &SetupState) -> Element<'_, Message> {
 fn view(screen: &Screen) -> Element<'_, Message> {
     match screen {
         Screen::Setup(setup) => view_setup(setup),
-        Screen::Main(state) if state.settings.compact_mode => tabs::view_compact(state),
+        Screen::Main(state) if state.settings.compact_mode && state.card => tabs::view_card(state),
+        Screen::Main(state) if state.settings.compact_mode => tabs::view_bar(state),
         Screen::Main(state) => tabs::view_full(state),
     }
 }
@@ -1141,8 +1340,9 @@ fn subscription(screen: &Screen) -> Subscription<Message> {
 
 /// Runs the window. Blocks until it is closed; the engine (a separate process) keeps running.
 pub fn run(initial: Initial) -> iced::Result {
-    let (start_size, start_level) = window_size_and_level(initial.settings.compact_mode);
+    let (start_size, start_level) = window_size_and_level(initial.settings.compact_mode, initial.start_card);
     let start_compact = initial.settings.compact_mode;
+    let start_card = initial.start_card;
     let cell = RefCell::new(Some(initial));
     iced::application(
         move || {
@@ -1175,6 +1375,10 @@ pub fn run(initial: Initial) -> iced::Result {
             } else {
                 let mut main = MainState::new(initial.settings, initial.handles, initial.devices, warnings, initial.keepalive);
                 main.place_panel = initial.panel_at_start;
+                main.card = initial.start_card;
+                if initial.ask_password {
+                    main.password = Some(PasswordPrompt::default());
+                }
                 main.decorated = !main.settings.compact_mode;
                 main.fit_full = !main.settings.compact_mode;
                 Screen::Main(main)
@@ -1202,8 +1406,9 @@ pub fn run(initial: Initial) -> iced::Result {
         icon: window_icon(),
         decorations: !start_compact,
         transparent: true,
-        min_size: Some(MIN_WINDOW_SIZE),
-        position: if start_compact { iced::window::Position::Default } else { iced::window::Position::Centered },
+        min_size: Some(if start_compact { start_size } else { MIN_WINDOW_SIZE }),
+        // The card and the full window open in the middle of the screen; the tray's bar is placed by the tray.
+        position: if start_compact && !start_card { iced::window::Position::Default } else { iced::window::Position::Centered },
         ..Default::default()
     })
     .run()

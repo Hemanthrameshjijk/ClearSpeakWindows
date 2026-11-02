@@ -1,7 +1,7 @@
 name: Windows build and test
 
 # Runs the workspace's real build (x86_64-pc-windows-msvc, the project's
-# actual target - see STATUS.md) and full test suite on GitHub's real
+# actual target) and full test suite on GitHub's real
 # Windows runners. This project has so far only been cross-checked from a
 # Linux sandbox with no Windows box available; this workflow is the first
 # time the MSVC build itself is actually attempted.
@@ -12,8 +12,8 @@ name: Windows build and test
 # need real hardware (dsp-core, studio-dsp, noise-engine, aec, settings,
 # setup) passes on genuine Windows.
 #
-# What this CANNOT verify (needs a real machine - see docs/VIRTUAL_DEVICES.md
-# and STATUS.md): real WASAPI devices/mic/speakers, a real weya_nc.dll +
+# What this CANNOT verify (needs a real machine - see docs/VIRTUAL_DEVICES.md):
+# real WASAPI devices/mic/speakers, a real weya_nc.dll +
 # model bundle on disk, a real VB-Cable install, or the GUI actually
 # rendering/responding to input.
 on:

@@ -83,6 +83,11 @@ pub struct Settings {
     /// particular cannot be auto-selected safely in the common case where
     /// only one virtual cable product is installed.
     pub virtual_speaker_source_id: Option<String>,
+    /// Call audio (cleaning what you hear from the caller) switched on. Default OFF: the whole speaker path
+    /// (capture, processing, playback) stays stopped, whatever source is saved, so the microphone alone is enough.
+    /// Picking a call-audio source turns it on; the saved source is kept while it is off.
+    #[serde(default)]
+    pub call_audio_on: bool,
     /// WASAPI capture-device id to use for the real physical microphone
     /// input, instead of the OS default recording device (e.g. a Bluetooth
     /// headset mic vs. a built-in mic). `None` means "use the system default
@@ -218,6 +223,7 @@ impl Default for Settings {
             speaker_tap_on: true,
             virtual_mic_target_id: None,
             virtual_speaker_source_id: None,
+            call_audio_on: false,
             physical_mic_device_id: None,
             monitor_enabled: false,
             monitor_device_id: None,
@@ -230,7 +236,7 @@ impl Default for Settings {
             transcript_on: false,
             compact_mode: false,
             theme_dark: false,
-            start_with_windows: true,
+            start_with_windows: false,
             minimize_to_tray: false,
             profile: String::new(),
         }
@@ -315,7 +321,9 @@ mod tests {
         assert_eq!(s.mic_studio_preset, 1, "mic Studio preset defaults to Natural");
         assert_eq!(s.speaker_studio_preset, 1, "speaker Studio preset defaults to Natural");
         assert!(s.virtual_mic_target_id.is_none());
-        assert!(s.virtual_speaker_source_id.is_none());
+        assert!(s.virtual_speaker_source_id.is_none(), "call audio stays off until a source is chosen");
+        assert!(!s.call_audio_on, "call audio defaults OFF");
+        assert!(!s.start_with_windows, "start with computer defaults OFF");
         assert!(s.physical_mic_device_id.is_none(), "physical mic device defaults to auto/default");
         assert!(!s.monitor_enabled, "monitor path defaults OFF");
         assert!(s.monitor_device_id.is_none());
