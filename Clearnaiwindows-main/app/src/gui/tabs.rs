@@ -1863,6 +1863,7 @@ fn advanced_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         diag_row("Accent speed / added delay", accent_line),
         diag_row("Call audio underruns", sio.output_underruns.to_string()),
         diag_row("CPU (this app, all cores)", cpu_line),
+        diag_row("ClearNAI version", env!("CARGO_PKG_VERSION").to_string()),
         row![
             btn(text("Export logs").size(13)).padding([9, 14]).on_press(Message::ExportLogs).style(style::outline),
             btn(text(if state.reset_armed { "Click again to reset everything" } else { "Reset to defaults" }).size(13))
