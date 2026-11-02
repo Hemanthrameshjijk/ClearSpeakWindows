@@ -38,7 +38,7 @@ const REPRIME_HOLDOFF_FRAMES: u32 = 100; // 1 s of dry after an underrun before 
 const SLOW_RTF: f32 = 0.97;
 const SLOW_WINDOW: usize = 50; // pushes = 5 s
 // Must sit clearly above the normal running RTF (0.55-0.8 on this PC) or a paused stage could never recover.
-const RECOVER_RTF: f32 = 0.88;
+const RECOVER_RTF: f32 = 0.80;
 const RECOVER_WINDOW: usize = 30; // pushes = 3 s
 const LEVEL_TARGET_RMS: f32 = 0.06;
 const RESAMPLER_TAPS: usize = 97;
