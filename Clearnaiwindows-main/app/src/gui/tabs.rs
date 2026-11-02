@@ -980,6 +980,42 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                 }
             };
 
+            // Mic distance: a fixed gain before the noise stages for mics that are far from the mouth (earbuds).
+            let listening = state.calibration.is_some();
+            let (distance_note, distance_note_color) = if listening {
+                ("Listening... speak normally for 5 seconds".to_string(), t.warning)
+            } else if let Some(note) = &state.calibration_note {
+                (note.clone(), t.muted)
+            } else {
+                ("Far or earbud mic? Raise it, or let ClearNAI listen.".to_string(), t.muted)
+            };
+            let distance = column![
+                row![
+                    text("Mic distance").size(13).color(t.muted),
+                    container(text("")).width(Length::Fill),
+                    pick_list(
+                        &ui_logic::DISTANCE_NAMES[..],
+                        Some(ui_logic::distance_name(h.mic_distance.load())),
+                        Message::SelectMicDistance
+                    )
+                    .width(Length::Fixed(170.0))
+                    .padding([7, 10])
+                    .text_size(13)
+                    .style(style::select),
+                ]
+                .align_y(iced::Alignment::Center),
+                row![
+                    text(distance_note).size(12).color(distance_note_color).width(Length::Fill),
+                    btn(text(if listening { "Listening" } else { "Set for my mic" }).size(12).font(bold()).color(t.primary))
+                        .padding([4, 6])
+                        .on_press_maybe((!listening).then_some(Message::CalibrateMic))
+                        .style(style::text_button),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            ]
+            .spacing(6);
+
             let voice = section(
                 column![
                     row![
@@ -997,6 +1033,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                         "Default microphone",
                         Message::SelectPhysicalMic,
                     ),
+                    distance,
                     switch_row("Cancel noise", "Background noise and voices".to_string(), t.muted, cancel_on, Message::ToggleCancelNoise),
                     switch_row("Convert my accent", accent_desc, accent_color, state.settings.accent_on, Message::ToggleAccent),
                     row![

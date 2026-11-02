@@ -37,6 +37,10 @@ pub struct Settings {
     /// (`Natural`), matching the previous hardcoded default.
     #[serde(default = "default_studio_preset")]
     pub mic_studio_preset: u8,
+    /// How far the mic is from the mouth: 0 Close (boom mic, no extra gain), 1 Normal, 2 Far (earbud/earpiece mic).
+    /// See `dsp_core::PreGainStage`. Missing in older settings files, which means Close.
+    #[serde(default)]
+    pub mic_distance: u8,
     /// "AEC" - removed from the GUI/engine (AEC and the hardware-output
     /// loopback tap it depended on were the largest source of instability
     /// all session and the reference Linux project has no AEC either).
@@ -214,6 +218,7 @@ impl Default for Settings {
             mic_bvc_on: true,
             mic_studio_on: true,
             mic_studio_preset: default_studio_preset(),
+            mic_distance: 0,
             aec_on: false,
             echo_cancel_on: true,
             speaker_noise_on: true,

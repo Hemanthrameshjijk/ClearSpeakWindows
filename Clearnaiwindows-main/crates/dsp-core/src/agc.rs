@@ -42,11 +42,17 @@ const RELEASE: f32 = 0.02;
 /// cannot itself cause the "voice suppressed" symptom it exists to prevent.
 pub struct AutoGainStage {
     envelope: f32,
+    max_gain: f32,
 }
 
 impl AutoGainStage {
     pub fn new() -> Self {
-        Self { envelope: MIN_ENVELOPE }
+        Self { envelope: MIN_ENVELOPE, max_gain: MAX_GAIN }
+    }
+
+    /// Raise (or restore) the boost ceiling, e.g. for a mic that is far from the mouth. Never below unity.
+    pub fn set_max_gain(&mut self, max_gain: f32) {
+        self.max_gain = max_gain.max(1.0);
     }
 }
 
@@ -65,9 +71,9 @@ impl Stage for AutoGainStage {
         let frame_peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
         let coeff = if frame_peak > self.envelope { ATTACK } else { RELEASE };
         self.envelope += (frame_peak - self.envelope) * coeff;
-        let envelope = self.envelope.max(MIN_ENVELOPE);
+        let envelope = self.envelope.max(TARGET_PEAK / self.max_gain);
 
-        let gain = (TARGET_PEAK / envelope).clamp(1.0, MAX_GAIN);
+        let gain = (TARGET_PEAK / envelope).clamp(1.0, self.max_gain);
 
         for s in frame.iter_mut() {
             *s = (*s * gain).clamp(-1.0, 1.0);

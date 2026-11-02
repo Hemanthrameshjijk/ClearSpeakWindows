@@ -13,10 +13,12 @@ pub use rtrb::{Consumer, Producer, RingBuffer};
 mod agc;
 mod clock;
 mod metrics;
+mod pre_gain;
 mod voice_gate;
 mod watchdog;
 
 pub use agc::AutoGainStage;
+pub use pre_gain::{distance_agc_max_gain, distance_gain_db, PreGainStage, DISTANCE_AGC_MAX_GAIN, DISTANCE_GAIN_DB};
 pub use clock::{FrameConfig, FrameDeadline, DEFAULT_FRAME_CONFIG};
 pub use metrics::{
     classify_status, compute_percentiles, FrameCounters, LatencyLog, Percentiles, RealtimeStatus,

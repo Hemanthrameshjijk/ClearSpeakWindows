@@ -141,6 +141,9 @@ struct MainState {
     password: Option<PasswordPrompt>,
     /// The tab to open once the password is accepted.
     pending_tab: Tab,
+    /// "Set for my mic" listening in progress, and the result line of the last run.
+    calibration: Option<crate::ui_logic::Calibration>,
+    calibration_note: Option<String>,
 }
 
 #[derive(Default)]
@@ -190,6 +193,8 @@ impl MainState {
             unlocked: false,
             password: None,
             pending_tab: Tab::Home,
+            calibration: None,
+            calibration_note: None,
         }
     }
 }
@@ -273,6 +278,10 @@ pub enum Message {
     ToggleEchoCancel(bool),
     ToggleMicStudio(bool),
     SelectMicStudioPreset(&'static str),
+    /// Mic distance picker (label from `ui_logic::DISTANCE_NAMES`).
+    SelectMicDistance(&'static str),
+    /// "Set for my mic": listen for a few seconds and pick the distance step from how loud the voice is.
+    CalibrateMic,
     /// Accent conversion on/off - its own switch, independent of BVC.
     ToggleAccent(bool),
     /// Accent voice picker (label from `accent_onnx::VOICE_CHOICES`).
@@ -768,6 +777,25 @@ fn update_main(state: &mut MainState, message: Message) {
             state.status = classify_status(&percentiles, DEADLINE_NS, all_off);
             state.level = state.handles.level.load();
             state.input_level = state.handles.input_level.load();
+            // "Set for my mic": the raw peak is read before any gain, so the result does not depend on the current step.
+            if let Some(cal) = state.calibration.as_mut() {
+                if let Some(level) = cal.tick(state.input_level) {
+                    state.calibration = None;
+                    state.calibration_note = Some(match crate::ui_logic::distance_for_speech_peak(level) {
+                        None => "Could not hear you. Speak normally and try again.".to_string(),
+                        Some(step) => {
+                            state.handles.mic_distance.store(step);
+                            state.settings.mic_distance = step;
+                            persist(&state.settings);
+                            match step {
+                                0 => "Your voice is strong: Close is set.".to_string(),
+                                1 => "Your voice is a bit quiet: Normal is set.".to_string(),
+                                _ => "Your voice is quiet: Far is set.".to_string(),
+                            }
+                        }
+                    });
+                }
+            }
             state.io_counters_snapshot = IoCountersSnapshot::read(&state.handles.counters);
 
             let speaker_all_off = !state.handles.speaker_noise.is_on()
@@ -922,6 +950,18 @@ fn update_main(state: &mut MainState, message: Message) {
                 state.settings.mic_studio_preset = index;
                 persist(&state.settings);
             }
+        }
+        Message::SelectMicDistance(name) => {
+            if let Some(step) = crate::ui_logic::distance_from_name(name) {
+                state.handles.mic_distance.store(step);
+                state.settings.mic_distance = step;
+                state.calibration_note = None;
+                persist(&state.settings);
+            }
+        }
+        Message::CalibrateMic => {
+            state.calibration = Some(crate::ui_logic::Calibration::start());
+            state.calibration_note = None;
         }
         Message::ToggleAccent(on) => {
             state.settings.accent_on = on;

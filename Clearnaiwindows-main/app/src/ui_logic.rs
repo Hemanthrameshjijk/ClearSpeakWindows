@@ -149,6 +149,62 @@ pub fn active_profile(saved: &str, cur: &MicSnapshot) -> Option<&'static str> {
     profile_by_name(saved).filter(|p| p.matches(cur)).map(|p| p.name)
 }
 
+/// Mic distance choices, in step order (index = `Settings::mic_distance`).
+pub const DISTANCE_NAMES: [&str; 3] = ["Close", "Normal", "Far"];
+
+pub fn distance_name(step: u8) -> &'static str {
+    DISTANCE_NAMES.get(step as usize).copied().unwrap_or(DISTANCE_NAMES[0])
+}
+
+pub fn distance_from_name(name: &str) -> Option<u8> {
+    DISTANCE_NAMES.iter().position(|n| *n == name).map(|i| i as u8)
+}
+
+/// How long "Set for my mic" listens, in Tick (250 ms) counts.
+pub const CALIBRATION_TICKS: u32 = 20;
+
+/// The step for a measured voice: `speech_peak` is the raw mic peak while speaking normally (0..1, taken before any
+/// gain). A healthy mic swings past about 0.25; the quieter the voice, the more gain it needs. `None` when nothing was
+/// heard (peak under 0.004), so a silent test never changes the setting.
+pub fn distance_for_speech_peak(speech_peak: f32) -> Option<u8> {
+    if speech_peak < 0.004 {
+        None
+    } else if speech_peak < 0.06 {
+        Some(2)
+    } else if speech_peak < 0.2 {
+        Some(1)
+    } else {
+        Some(0)
+    }
+}
+
+/// Mic-distance test in progress: the loudest raw peaks seen so far (one per Tick) and how many Ticks are left.
+#[derive(Debug, Clone, Default)]
+pub struct Calibration {
+    pub peaks: Vec<f32>,
+    pub ticks_left: u32,
+}
+
+impl Calibration {
+    pub fn start() -> Self {
+        Self { peaks: Vec::new(), ticks_left: CALIBRATION_TICKS }
+    }
+
+    /// Record one Tick's raw peak. Returns the finished measurement (the level of the louder speech, i.e. the 80th
+    /// percentile of the peaks, which ignores pauses) once the time is up.
+    pub fn tick(&mut self, raw_peak: f32) -> Option<f32> {
+        self.peaks.push(raw_peak);
+        self.ticks_left = self.ticks_left.saturating_sub(1);
+        if self.ticks_left > 0 {
+            return None;
+        }
+        let mut sorted = self.peaks.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let i = ((sorted.len() as f32) * 0.8) as usize;
+        Some(sorted[i.min(sorted.len() - 1)])
+    }
+}
+
 /// Case-insensitive substring filter; an empty (or blank) query keeps every line.
 pub fn filter_lines<'a>(lines: &'a [(u32, String)], query: &str) -> Vec<&'a (u32, String)> {
     let q = query.trim().to_lowercase();
@@ -244,6 +300,41 @@ pub fn settings_password_ok(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_voices_get_more_distance_gain_and_silence_changes_nothing() {
+        assert_eq!(distance_for_speech_peak(0.0), None);
+        assert_eq!(distance_for_speech_peak(0.03), Some(2));
+        assert_eq!(distance_for_speech_peak(0.1), Some(1));
+        assert_eq!(distance_for_speech_peak(0.4), Some(0));
+    }
+
+    #[test]
+    fn distance_names_round_trip() {
+        for (i, n) in DISTANCE_NAMES.iter().enumerate() {
+            assert_eq!(distance_from_name(n), Some(i as u8));
+            assert_eq!(distance_name(i as u8), *n);
+        }
+        assert_eq!(distance_name(200), "Close");
+        assert_eq!(distance_from_name("Nope"), None);
+    }
+
+    #[test]
+    fn calibration_reports_the_speech_level_after_its_time_and_ignores_pauses() {
+        let mut c = Calibration::start();
+        let mut result = None;
+        for i in 0..CALIBRATION_TICKS {
+            // Speaking at 0.05 for most of the time, with pauses at 0.001.
+            let peak = if i % 4 == 0 { 0.001 } else { 0.05 };
+            result = c.tick(peak);
+            if i + 1 < CALIBRATION_TICKS {
+                assert!(result.is_none(), "not done before the time is up");
+            }
+        }
+        let level = result.expect("done after the full time");
+        assert!((level - 0.05).abs() < 1e-6, "pauses must not pull the level down, got {level}");
+        assert_eq!(distance_for_speech_peak(level), Some(2));
+    }
 
     #[test]
     fn only_the_exact_password_opens_settings() {
