@@ -730,10 +730,7 @@ fn refresh_alerts(state: &mut MainState) {
         match st.state {
             AccentState::Paused => {
                 paused = true;
-                // A lasting pause (5 s) is a problem worth a banner; a one-second blip is not.
-                if state.accent_paused_ticks >= 20 {
-                    input.accent_paused_rtf = Some(st.rtf);
-                }
+                // No banner for a paused accent: the pause is automatic and recovers by itself.
             }
             AccentState::Unavailable => input.accent_unavailable = Some(st.message),
             _ => {}
@@ -755,7 +752,7 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
-    input.mic_too_quiet = state.mic_too_quiet && state.settings.accent_on && !state.settings.mic_gain_auto;
+    // No "microphone is quiet" banner: the Mic sensitivity slider and Auto handle it silently.
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
     for a in &alerts {
