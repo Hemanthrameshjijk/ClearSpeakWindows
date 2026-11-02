@@ -147,6 +147,8 @@ struct MainState {
     /// Raw mic peaks (one per Tick) of the current look-back window, and the last verdict on them.
     quiet_peaks: Vec<f32>,
     mic_too_quiet: bool,
+    /// How many Ticks in a row the accent has been paused (the banner waits for a lasting pause, not a blip).
+    accent_paused_ticks: u32,
 }
 
 #[derive(Default)]
@@ -200,6 +202,7 @@ impl MainState {
             calibration_note: None,
             quiet_peaks: Vec::new(),
             mic_too_quiet: false,
+            accent_paused_ticks: 0,
         }
     }
 }
@@ -287,6 +290,8 @@ pub enum Message {
     SelectMicDistance(&'static str),
     /// Mic sensitivity slider: gain in dB (0..=30).
     SetMicGain(u8),
+    /// Auto sensitivity on/off.
+    ToggleMicGainAuto(bool),
     /// "Set for my mic": listen for a few seconds and pick the distance step from how loud the voice is.
     CalibrateMic,
     /// Accent conversion on/off - its own switch, independent of BVC.
@@ -719,14 +724,22 @@ fn refresh_alerts(state: &mut MainState) {
     use accent_onnx::pipeline::AccentState;
     let h = &state.handles;
     let mut input = crate::ui_logic::AlertInput::default();
+    let mut paused = false;
     if state.settings.accent_on {
         let st = h.accent.status();
         match st.state {
-            AccentState::Paused => input.accent_paused_rtf = Some(st.rtf),
+            AccentState::Paused => {
+                paused = true;
+                // A lasting pause (5 s) is a problem worth a banner; a one-second blip is not.
+                if state.accent_paused_ticks >= 20 {
+                    input.accent_paused_rtf = Some(st.rtf);
+                }
+            }
             AccentState::Unavailable => input.accent_unavailable = Some(st.message),
             _ => {}
         }
     }
+    state.accent_paused_ticks = if paused { state.accent_paused_ticks + 1 } else { 0 };
     if h.mic_bvc.is_on() {
         match BvcBackend::from_index(h.bvc_backend.load()) {
             BvcBackend::Hush => {
@@ -742,7 +755,7 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
-    input.mic_too_quiet = state.mic_too_quiet && state.settings.accent_on;
+    input.mic_too_quiet = state.mic_too_quiet && state.settings.accent_on && !state.settings.mic_gain_auto;
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
     for a in &alerts {
@@ -788,6 +801,16 @@ fn update_main(state: &mut MainState, message: Message) {
             // Mic too quiet for the accent: judged over a 10 s window so a pause does not flip it.
             state.quiet_peaks.push(state.input_level);
             if state.quiet_peaks.len() as u32 >= crate::ui_logic::QUIET_WINDOW_TICKS {
+                // Auto sensitivity: follow the voice level in small steps (only when someone was speaking).
+                if state.settings.mic_gain_auto {
+                    if let Some(next) = crate::ui_logic::speech_level(&state.quiet_peaks)
+                        .and_then(|v| crate::ui_logic::auto_gain_next(state.settings.mic_gain_db, v))
+                    {
+                        state.handles.mic_gain_db.store(next);
+                        state.settings.mic_gain_db = next;
+                        persist(&state.settings);
+                    }
+                }
                 state.mic_too_quiet =
                     crate::ui_logic::mic_too_quiet_for_accent(&state.quiet_peaks, state.settings.accent_on, state.settings.mic_gain_db);
                 state.quiet_peaks.clear();
@@ -971,7 +994,13 @@ fn update_main(state: &mut MainState, message: Message) {
                 update_main(state, Message::SetMicGain(db));
             }
         }
+        Message::ToggleMicGainAuto(on) => {
+            state.settings.mic_gain_auto = on;
+            persist(&state.settings);
+        }
         Message::SetMicGain(db) => {
+            // Moving the slider by hand means "I choose": Auto goes off.
+            state.settings.mic_gain_auto = false;
             let db = db.min(dsp_core::MAX_GAIN_DB);
             state.handles.mic_gain_db.store(db);
             state.settings.mic_gain_db = db;

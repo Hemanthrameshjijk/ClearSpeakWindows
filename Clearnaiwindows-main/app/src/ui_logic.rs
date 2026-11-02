@@ -255,21 +255,38 @@ pub struct AlertInput {
 /// Ticks (250 ms each) of mic input looked at before deciding the mic is too quiet for the accent.
 pub const QUIET_WINDOW_TICKS: u32 = 40;
 
-/// True when someone spoke during the window but the voice is much weaker than the gain set so far can bring up: the
-/// signature of a far or earbud mic, where the accent model gets a weak voice. `peaks` holds one raw mic peak per Tick.
-/// Speech is told apart from a steady noise floor by its swing: the loudest peak must stand well above the typical
-/// (median) one, otherwise it is only room noise and no warning is given.
-pub fn mic_too_quiet_for_accent(peaks: &[f32], accent_on: bool, gain_db: u8) -> bool {
-    if !accent_on || peaks.is_empty() {
-        return false;
+/// The loudness of the voice in a window of raw mic peaks (one per Tick), or `None` when nobody was speaking.
+/// Speech is told apart from a steady noise floor by its swing: the loud peaks must stand well above the typical
+/// (median) one. The 90th percentile ignores one-off clicks.
+pub fn speech_level(peaks: &[f32]) -> Option<f32> {
+    if peaks.is_empty() {
+        return None;
     }
     let mut sorted = peaks.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = sorted[sorted.len() / 2];
-    let voice = sorted[(sorted.len() * 9 / 10).min(sorted.len() - 1)]; // 90th percentile: ignores one-off clicks
-    let speaking = voice >= 0.01 && voice >= median * 3.0;
-    // Needs more than 6 dB beyond what is already applied.
-    speaking && gain_db_for_speech_peak(voice).is_some_and(|needed| needed > gain_db.saturating_add(6))
+    let voice = sorted[(sorted.len() * 9 / 10).min(sorted.len() - 1)];
+    (voice >= 0.01 && voice >= median * 3.0).then_some(voice)
+}
+
+/// True when someone spoke during the window but the voice is much weaker than the gain set so far can bring up: the
+/// signature of a far or earbud mic, where the accent model gets a weak voice.
+pub fn mic_too_quiet_for_accent(peaks: &[f32], accent_on: bool, gain_db: u8) -> bool {
+    accent_on
+        && speech_level(peaks)
+            .and_then(gain_db_for_speech_peak)
+            .is_some_and(|needed| needed > gain_db.saturating_add(6))
+}
+
+/// Auto sensitivity: the next gain for a voice measured at `voice_peak`. Moves toward the gain that gives a healthy
+/// level, at most 3 dB at a time, and not at all when already within 2 dB (so it never hunts back and forth).
+pub fn auto_gain_next(current_db: u8, voice_peak: f32) -> Option<u8> {
+    let needed = gain_db_for_speech_peak(voice_peak)? as i16;
+    let diff = needed - current_db as i16;
+    if diff.abs() <= 2 {
+        return None;
+    }
+    Some((current_db as i16 + diff.clamp(-3, 3)).clamp(0, dsp_core::MAX_GAIN_DB as i16) as u8)
 }
 
 pub fn alerts(i: &AlertInput) -> Vec<Alert> {
@@ -330,6 +347,31 @@ pub fn settings_password_ok(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_gain_moves_toward_the_needed_gain_in_small_steps_and_does_not_hunt() {
+        // A voice at 0.025 needs 20 dB.
+        assert_eq!(auto_gain_next(0, 0.025), Some(3));
+        assert_eq!(auto_gain_next(18, 0.025), None, "within 2 dB: leave it alone");
+        assert_eq!(auto_gain_next(21, 0.025), None);
+        assert_eq!(auto_gain_next(29, 0.25), Some(26), "a louder voice lowers the gain, 3 dB at a time");
+        assert_eq!(auto_gain_next(0, 0.5), None, "never below zero");
+        assert_eq!(auto_gain_next(10, 0.0), None, "no voice measured: unchanged");
+        let mut db = 0u8;
+        for _ in 0..20 {
+            if let Some(n) = auto_gain_next(db, 0.025) {
+                db = n;
+            }
+        }
+        assert_eq!(db, 18, "settles within 2 dB of the needed 20");
+    }
+
+    #[test]
+    fn speech_level_ignores_a_steady_noise_floor() {
+        assert_eq!(speech_level(&vec![0.02f32; 40]), None);
+        let speech: Vec<f32> = (0..40).map(|i| if i % 4 == 0 { 0.03 } else { 0.005 }).collect();
+        assert_eq!(speech_level(&speech), Some(0.03));
+    }
 
     #[test]
     fn quiet_mic_warning_needs_accent_on_close_distance_and_audible_but_weak_sound() {

@@ -41,6 +41,10 @@ pub struct Settings {
     /// mouth (earbuds). See `dsp_core::PreGainStage`. Missing in older settings files, which means 0 (no extra gain).
     #[serde(default)]
     pub mic_gain_db: u8,
+    /// Auto: while on, the sensitivity follows how loud the voice is (small steps, only while speaking). Touching the
+    /// slider turns it off.
+    #[serde(default = "default_true")]
+    pub mic_gain_auto: bool,
     /// Layout version of this file (1 = current). Lets a later release migrate old files instead of guessing.
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -226,6 +230,7 @@ impl Default for Settings {
             mic_studio_on: true,
             mic_studio_preset: default_studio_preset(),
             mic_gain_db: 0,
+            mic_gain_auto: true,
             schema_version: default_schema_version(),
             aec_on: false,
             echo_cancel_on: true,

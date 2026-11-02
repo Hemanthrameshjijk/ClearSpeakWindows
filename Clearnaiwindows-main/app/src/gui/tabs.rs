@@ -1006,6 +1006,16 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                 .align_y(iced::Alignment::Center),
                 iced::widget::slider(0..=dsp_core::MAX_GAIN_DB, gain_db, Message::SetMicGain),
                 row![
+                    text(if state.settings.mic_gain_auto { "Auto: follows your voice level" } else { "Manual: you set the level" })
+                        .size(12)
+                        .color(t.muted)
+                        .width(Length::Fill),
+                    text("Auto").size(13).color(t.muted),
+                    toggler(state.settings.mic_gain_auto).on_toggle(Message::ToggleMicGainAuto).size(20).style(style::toggle),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+                row![
                     text(distance_note).size(12).color(distance_note_color).width(Length::Fill),
                     btn(text(if listening { "Listening" } else { "Set for my mic" }).size(12).font(bold()).color(t.primary))
                         .padding([4, 6])
