@@ -520,7 +520,7 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
     .width(Length::Fill)
     .style(style::card);
 
-    let mut nav = column![].spacing(4);
+    let mut nav = column![].spacing(2);
     for tab in Tab::ALL {
         let current = tab == state.tab;
         let ink = if current { t.primary } else { t.muted_strong };
@@ -534,7 +534,7 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
         if current {
             entry = entry.push(glyph_icon(icons::CHEVRON_RIGHT, 15.0, t.primary));
         }
-        nav = nav.push(btn(entry).width(Length::Fill).padding([10, 12]).on_press(Message::SelectTab(tab)).style(style::nav_item(current)));
+        nav = nav.push(btn(entry).width(Length::Fill).padding([7, 12]).on_press(Message::SelectTab(tab)).style(style::nav_item(current)));
     }
 
     let theme_row = sidebar_row(
@@ -564,14 +564,13 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
         .align_y(iced::Alignment::Center),
     )
     .width(Length::Fill)
-    .padding([8, 10])
+    .padding([6, 10])
     .on_press(Message::SelectTab(Tab::Advanced))
     .style(style::nav_item(false));
 
     let top = column![
         container(logo_with_wordmark(dark, 34.0)).padding([6, 8]),
         workspace,
-        container(text("WORKSPACE").size(11).color(t.muted).font(bold())).padding([10, 12]),
         nav,
     ]
     .spacing(8);
@@ -582,7 +581,7 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
         hrule(),
         profile_row,
     ]
-    .spacing(6);
+    .spacing(2);
     // Short windows: the navigation scrolls, Help center / Dark mode / Profile never leave the screen.
     let sidebar = container(column![scrollable(top).height(Length::Fill), bottom].spacing(8))
         .padding([16, 14])
