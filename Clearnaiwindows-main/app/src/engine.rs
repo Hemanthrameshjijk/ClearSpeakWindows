@@ -17,15 +17,9 @@
 //!
 //! # What has and hasn't been verified
 //!
-//! This module compiles and its unit tests pass on a real Windows machine
-//! with a real `x86_64-pc-windows-gnu` toolchain (not just cross-compile
-//! type-checked from Linux, as earlier revisions of this module were). It
-//! has still never been *run* as the actual `clearnairt.exe` binary against
-//! real hardware in that environment: no real WASAPI device, no real
-//! `weya_nc.dll` session, no real VB-Cable install were exercised there.
-//! Every claim about behavior below is a claim about what the code is
-//! *written* to do, verified by compilation and unit tests, not something
-//! observed running end-to-end against real audio hardware.
+//! This module runs as `clearnai-engine.exe` on real Windows machines with real WASAPI devices, the Hush
+//! model and a VB-CABLE install, and has been used live (mic, virtual microphone, accent, transcript). Unit tests
+//! cover the pure logic; device behaviour (Bluetooth dropouts, profile flips) is only ever seen on real hardware.
 
 #![cfg(windows)]
 
@@ -994,8 +988,8 @@ fn trim_backlog(consumer: &SwapConsumer, counters: &dsp_core::FrameCounters) {
         counters.dropped_frames.fetch_add(1, Ordering::Relaxed);
         crate::log_error!(
             "[clearnairt] mic input backlog exceeded {MAX_TOLERATED_BACKLOG_SAMPLES} samples \
-             (clock drift between capture and render devices); trimmed {dropped} samples to keep \
-             latency bounded"
+             (processing fell behind real time: the PC was busy, or the headset dropped out and caught up); \
+             trimmed {dropped} samples to keep latency bounded"
         );
     }
 }

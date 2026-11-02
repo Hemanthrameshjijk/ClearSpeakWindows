@@ -41,6 +41,9 @@ pub struct Settings {
     /// See `dsp_core::PreGainStage`. Missing in older settings files, which means Close.
     #[serde(default)]
     pub mic_distance: u8,
+    /// Layout version of this file (1 = current). Lets a later release migrate old files instead of guessing.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     /// "AEC" - removed from the GUI/engine (AEC and the hardware-output
     /// loopback tap it depended on were the largest source of instability
     /// all session and the reference Linux project has no AEC either).
@@ -198,6 +201,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_schema_version() -> u32 {
+    1
+}
+
 fn default_studio_preset() -> u8 {
     1 // Natural
 }
@@ -219,6 +226,7 @@ impl Default for Settings {
             mic_studio_on: true,
             mic_studio_preset: default_studio_preset(),
             mic_distance: 0,
+            schema_version: default_schema_version(),
             aec_on: false,
             echo_cancel_on: true,
             speaker_noise_on: true,
