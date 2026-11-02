@@ -307,12 +307,7 @@ fn tab_body(state: &MainState, wide: bool, win_w: f32) -> Element<'_, Message> {
         Tab::CallAudio => call_audio_tab(state),
         Tab::Transcript => transcript_tab(state),
         Tab::Devices => devices_tab(state, wide),
-        Tab::Advanced => match &state.password {
-            Some(p) if !state.unlocked => {
-                container(container(password_box(state, p)).max_width(360)).center_x(Length::Fill).padding([40, 0]).into()
-            }
-            _ => advanced_tab(state, wide),
-        },
+        Tab::Advanced => advanced_tab(state, wide),
     }
 }
 
@@ -1135,7 +1130,7 @@ fn password_box<'a>(state: &MainState, p: &super::PasswordPrompt) -> Element<'a,
     let tk = style::tokens_for(state.settings.theme_dark);
     let mut col = column![
         text("Settings are locked").size(16).font(bold()),
-        text("Enter the password to open Settings.").size(13).color(tk.muted),
+        text("Enter the password to open the full window.").size(13).color(tk.muted),
         text_input("Password", &p.input)
             .id(super::PASSWORD_FIELD_ID)
             .secure(true)

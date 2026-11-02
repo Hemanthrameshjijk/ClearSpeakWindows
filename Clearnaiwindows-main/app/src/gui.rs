@@ -139,6 +139,8 @@ struct MainState {
     unlocked: bool,
     /// The password box, shown in place of the quick panel's controls while `Some`.
     password: Option<PasswordPrompt>,
+    /// The tab to open once the password is accepted.
+    pending_tab: Tab,
     /// "Set for my mic" listening in progress, and the result line of the last run.
     calibration: Option<crate::ui_logic::Calibration>,
     calibration_note: Option<String>,
@@ -195,6 +197,7 @@ impl MainState {
             card: false,
             unlocked: false,
             password: None,
+            pending_tab: Tab::Home,
             calibration: None,
             calibration_note: None,
             quiet_peaks: Vec::new(),
@@ -461,20 +464,27 @@ fn mode_tasks(state: &mut MainState, compact: bool) -> Vec<iced::Task<Message>> 
 /// first (`SubmitPassword` calls this again once the password was right). Asked from the bar, which has no room for a
 /// password box, the window turns into the card.
 fn open_full(state: &mut MainState, tab: Tab) -> iced::Task<Message> {
+    if !state.unlocked {
+        let mut tasks = Vec::new();
+        if !state.card || !state.settings.compact_mode {
+            state.card = true;
+            state.settings.compact_mode = true;
+            tasks.extend(mode_tasks(state, true));
+        }
+        state.password = Some(PasswordPrompt::default());
+        state.pending_tab = tab;
+        tasks.push(iced::widget::operation::focus(PASSWORD_FIELD_ID));
+        return iced::Task::batch(tasks);
+    }
+    state.password = None;
     state.tab = tab;
     state.reset_armed = false;
-    let locked = tab == Tab::Advanced && !state.unlocked;
-    state.password = locked.then(PasswordPrompt::default);
-    let mut tasks = Vec::new();
     if state.settings.compact_mode {
         state.settings.compact_mode = false;
         persist(&state.settings);
-        tasks.extend(mode_tasks(state, false));
+        return iced::Task::batch(mode_tasks(state, false));
     }
-    if locked {
-        tasks.push(iced::widget::operation::focus(PASSWORD_FIELD_ID));
-    }
-    iced::Task::batch(tasks)
+    iced::Task::none()
 }
 
 /// The engine is the only writer of `settings.json`: send it the window's settings and it saves them.
@@ -594,16 +604,9 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
         }
         return iced::Task::none();
     }
-    if let Message::SelectTab(tab) = message {
-        if let Screen::Main(state) = screen {
-            return open_full(state, tab);
-        }
-        return iced::Task::none();
-    }
     if matches!(message, Message::CancelPassword) {
         if let Screen::Main(state) = screen {
             state.password = None;
-            state.tab = Tab::Home;
         }
         return iced::Task::none();
     }
@@ -612,7 +615,8 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
             let ok = state.password.as_ref().is_some_and(|p| crate::ui_logic::settings_password_ok(&p.input));
             if ok {
                 state.unlocked = true;
-                return open_full(state, Tab::Advanced);
+                let tab = state.pending_tab;
+                return open_full(state, tab);
             }
             if let Some(p) = &mut state.password {
                 p.input.clear();
@@ -1460,9 +1464,7 @@ pub fn run(initial: Initial) -> iced::Result {
                 main.place_panel = initial.panel_at_start;
                 main.card = initial.start_card;
                 if initial.ask_password {
-                    // "Open full window" opens it straight away; only the Advanced tab asks for the password.
-                    main.settings.compact_mode = false;
-                    main.card = false;
+                    main.password = Some(PasswordPrompt::default());
                 }
                 main.decorated = !main.settings.compact_mode;
                 main.fit_full = !main.settings.compact_mode;
