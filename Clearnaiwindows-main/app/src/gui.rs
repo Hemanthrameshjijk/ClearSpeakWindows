@@ -144,6 +144,10 @@ struct MainState {
     /// "Set for my mic" listening in progress, and the result line of the last run.
     calibration: Option<crate::ui_logic::Calibration>,
     calibration_note: Option<String>,
+    /// Loudest raw mic peak in the current look-back window, how many Ticks it has covered, and the last verdict.
+    quiet_window_peak: f32,
+    quiet_window_ticks: u32,
+    mic_too_quiet: bool,
 }
 
 #[derive(Default)]
@@ -195,6 +199,9 @@ impl MainState {
             pending_tab: Tab::Home,
             calibration: None,
             calibration_note: None,
+            quiet_window_peak: 0.0,
+            quiet_window_ticks: 0,
+            mic_too_quiet: false,
         }
     }
 }
@@ -735,6 +742,7 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
+    input.mic_too_quiet = state.mic_too_quiet && state.settings.accent_on && state.settings.mic_distance == 0;
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
     for a in &alerts {
@@ -777,6 +785,18 @@ fn update_main(state: &mut MainState, message: Message) {
             state.status = classify_status(&percentiles, DEADLINE_NS, all_off);
             state.level = state.handles.level.load();
             state.input_level = state.handles.input_level.load();
+            // Mic too quiet for the accent: judged over a 10 s window so a pause does not flip it.
+            state.quiet_window_peak = state.quiet_window_peak.max(state.input_level);
+            state.quiet_window_ticks += 1;
+            if state.quiet_window_ticks >= crate::ui_logic::QUIET_WINDOW_TICKS {
+                state.mic_too_quiet = crate::ui_logic::mic_too_quiet_for_accent(
+                    state.quiet_window_peak,
+                    state.settings.accent_on,
+                    state.settings.mic_distance,
+                );
+                state.quiet_window_peak = 0.0;
+                state.quiet_window_ticks = 0;
+            }
             // "Set for my mic": the raw peak is read before any gain, so the result does not depend on the current step.
             if let Some(cal) = state.calibration.as_mut() {
                 if let Some(level) = cal.tick(state.input_level) {

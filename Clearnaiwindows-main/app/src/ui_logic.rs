@@ -246,10 +246,27 @@ pub struct AlertInput {
     pub cpu_struggling: bool,
     /// The window lost its connection to the background engine (it reconnects by itself).
     pub engine_disconnected: bool,
+    /// Accent is on, the mic distance is still Close, and the last seconds of mic input were audible but quiet.
+    pub mic_too_quiet: bool,
+}
+
+/// Ticks (250 ms each) of mic input looked at before deciding the mic is too quiet for the accent.
+pub const QUIET_WINDOW_TICKS: u32 = 40;
+
+/// True when sound was picked up during the window (so it is not just silence) but never got loud: the signature of a
+/// far or earbud mic, where the accent model gets a weak voice. Only matters while accent is on and no gain is set.
+pub fn mic_too_quiet_for_accent(window_peak: f32, accent_on: bool, distance_step: u8) -> bool {
+    accent_on && distance_step == 0 && (0.004..0.06).contains(&window_peak)
 }
 
 pub fn alerts(i: &AlertInput) -> Vec<Alert> {
     let mut out = Vec::new();
+    if i.mic_too_quiet {
+        out.push(Alert {
+            key: "mic-quiet",
+            text: "Your microphone is quiet, so the accent will sound worse. Set Mic distance to Normal or Far, or tap Set for my mic.".into(),
+        });
+    }
     if i.engine_disconnected {
         out.push(Alert { key: "engine-disconnected", text: "Lost contact with the ClearNAI background engine. Reconnecting; audio keeps running if the engine is still alive.".into() });
     }
@@ -300,6 +317,17 @@ pub fn settings_password_ok(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_mic_warning_needs_accent_on_close_distance_and_audible_but_weak_sound() {
+        assert!(mic_too_quiet_for_accent(0.03, true, 0));
+        assert!(!mic_too_quiet_for_accent(0.03, false, 0), "accent off: no warning");
+        assert!(!mic_too_quiet_for_accent(0.03, true, 2), "gain already raised");
+        assert!(!mic_too_quiet_for_accent(0.0, true, 0), "silence is not a quiet mic");
+        assert!(!mic_too_quiet_for_accent(0.3, true, 0), "healthy level");
+        let on = AlertInput { mic_too_quiet: true, ..Default::default() };
+        assert!(alerts(&on).iter().any(|a| a.key == "mic-quiet"));
+    }
 
     #[test]
     fn quiet_voices_get_more_distance_gain_and_silence_changes_nothing() {
