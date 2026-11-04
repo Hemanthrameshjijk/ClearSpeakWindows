@@ -1082,10 +1082,6 @@ fn spawn_mic_pipeline(
             // this removes the dependency on the user having set Windows'
             // mic gain correctly).
             let mut auto_gain = dsp_core::AutoGainStage::new();
-            // Mic distance: a fixed gain ahead of the noise stages (earbud / far mics deliver a quiet voice), and
-            // a higher ceiling for the adaptive gain after them. One atomic load per frame; Close changes nothing.
-            let mut pre_gain = dsp_core::PreGainStage::new();
-            let mut last_distance = u8::MAX;
             let mut echo_canceller = aec::NlmsAec::new_default();
             let mut echo_reference = vec![0.0f32; FRAME_SAMPLES];
             loop {
@@ -1111,14 +1107,6 @@ fn spawn_mic_pipeline(
                 // "Before" meter: raw mic peak, same plain peak-store as `handles.level` below (which is the
                 // post-chain "After" peak).
                 handles.input_level.store(frame.iter().fold(0.0f32, |m, &s| m.max(s.abs())));
-
-                let gain_db = handles.mic_gain_db.load().min(dsp_core::MAX_GAIN_DB);
-                if gain_db != last_distance {
-                    pre_gain.set_db(gain_db as f32);
-                    auto_gain.set_max_gain(dsp_core::agc_max_gain_for_db(gain_db));
-                    last_distance = gain_db;
-                }
-                pre_gain.process(&mut frame);
 
                 // Deliberate, narrow exception to "no allocation in the
                 // realtime hot path": a preset change is a rare, deliberate

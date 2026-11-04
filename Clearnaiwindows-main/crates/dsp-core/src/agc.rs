@@ -76,7 +76,7 @@ impl Stage for AutoGainStage {
         let gain = (TARGET_PEAK / envelope).clamp(1.0, self.max_gain);
 
         for s in frame.iter_mut() {
-            *s = crate::pre_gain::soft_limit(*s * gain).clamp(-1.0, 1.0); // compress loud onsets instead of clipping
+            *s = (*s * gain).clamp(-1.0, 1.0);
         }
     }
 }

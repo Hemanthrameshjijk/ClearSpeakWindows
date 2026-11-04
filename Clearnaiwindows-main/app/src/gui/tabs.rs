@@ -980,53 +980,6 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                 }
             };
 
-            // Mic distance: a fixed gain before the noise stages for mics that are far from the mouth (earbuds).
-            let listening = state.calibration.is_some();
-            let (distance_note, distance_note_color) = if listening {
-                ("Listening... speak normally for 5 seconds".to_string(), t.warning)
-            } else if let Some(note) = &state.calibration_note {
-                (note.clone(), t.muted)
-            } else {
-                ("Far or earbud mic? Raise it, or let ClearNAI listen.".to_string(), t.muted)
-            };
-            let gain_db = h.mic_gain_db.load().min(dsp_core::MAX_GAIN_DB);
-            let distance = column![
-                row![
-                    text("Mic sensitivity").size(13).color(t.muted),
-                    container(text("")).width(Length::Fill),
-                    text(format!("+{gain_db} dB")).size(13).color(ink),
-                    pick_list(&ui_logic::DISTANCE_NAMES[..], ui_logic::distance_name(gain_db), Message::SelectMicDistance)
-                        .placeholder("Custom")
-                        .width(Length::Fixed(110.0))
-                        .padding([6, 10])
-                        .text_size(13)
-                        .style(style::select),
-                ]
-                .spacing(10)
-                .align_y(iced::Alignment::Center),
-                iced::widget::slider(0..=dsp_core::MAX_GAIN_DB, gain_db, Message::SetMicGain),
-                row![
-                    text(if state.settings.mic_gain_auto { "Auto: follows your voice level" } else { "Manual: you set the level" })
-                        .size(12)
-                        .color(t.muted)
-                        .width(Length::Fill),
-                    text("Auto").size(13).color(t.muted),
-                    toggler(state.settings.mic_gain_auto).on_toggle(Message::ToggleMicGainAuto).size(20).style(style::toggle),
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
-                row![
-                    text(distance_note).size(12).color(distance_note_color).width(Length::Fill),
-                    btn(text(if listening { "Listening" } else { "Set for my mic" }).size(12).font(bold()).color(t.primary))
-                        .padding([4, 6])
-                        .on_press_maybe((!listening).then_some(Message::CalibrateMic))
-                        .style(style::text_button),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center),
-            ]
-            .spacing(6);
-
             let voice = section(
                 column![
                     row![
@@ -1044,7 +997,6 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                         "Default microphone",
                         Message::SelectPhysicalMic,
                     ),
-                    distance,
                     switch_row("Cancel noise", "Background noise and voices".to_string(), t.muted, cancel_on, Message::ToggleCancelNoise),
                     switch_row("Convert my accent", accent_desc, accent_color, state.settings.accent_on, Message::ToggleAccent),
                     row![

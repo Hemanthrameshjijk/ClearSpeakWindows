@@ -141,12 +141,6 @@ struct MainState {
     password: Option<PasswordPrompt>,
     /// The tab to open once the password is accepted.
     pending_tab: Tab,
-    /// "Set for my mic" listening in progress, and the result line of the last run.
-    calibration: Option<crate::ui_logic::Calibration>,
-    calibration_note: Option<String>,
-    /// Raw mic peaks (one per Tick) of the current look-back window, and the last verdict on them.
-    quiet_peaks: Vec<f32>,
-    mic_too_quiet: bool,
     /// How many Ticks in a row the accent has been paused (the banner waits for a lasting pause, not a blip).
     accent_paused_ticks: u32,
 }
@@ -198,10 +192,6 @@ impl MainState {
             unlocked: false,
             password: None,
             pending_tab: Tab::Home,
-            calibration: None,
-            calibration_note: None,
-            quiet_peaks: Vec::new(),
-            mic_too_quiet: false,
             accent_paused_ticks: 0,
         }
     }
@@ -286,14 +276,6 @@ pub enum Message {
     ToggleEchoCancel(bool),
     ToggleMicStudio(bool),
     SelectMicStudioPreset(&'static str),
-    /// Quick choice next to the sensitivity slider (label from `ui_logic::DISTANCE_NAMES`).
-    SelectMicDistance(&'static str),
-    /// Mic sensitivity slider: gain in dB (0..=30).
-    SetMicGain(u8),
-    /// Auto sensitivity on/off.
-    ToggleMicGainAuto(bool),
-    /// "Set for my mic": listen for a few seconds and pick the distance step from how loud the voice is.
-    CalibrateMic,
     /// Accent conversion on/off - its own switch, independent of BVC.
     ToggleAccent(bool),
     /// Accent voice picker (label from `accent_onnx::VOICE_CHOICES`).
@@ -795,42 +777,6 @@ fn update_main(state: &mut MainState, message: Message) {
             state.status = classify_status(&percentiles, DEADLINE_NS, all_off);
             state.level = state.handles.level.load();
             state.input_level = state.handles.input_level.load();
-            // Mic too quiet for the accent: judged over a 10 s window so a pause does not flip it.
-            state.quiet_peaks.push(state.input_level);
-            if state.quiet_peaks.len() as u32 >= crate::ui_logic::QUIET_WINDOW_TICKS {
-                // Auto sensitivity: follow the voice level in small steps (only when someone was speaking).
-                if state.settings.mic_gain_auto {
-                    if let Some(next) = crate::ui_logic::speech_level(&state.quiet_peaks)
-                        .and_then(|v| crate::ui_logic::auto_gain_next(state.settings.mic_gain_db, v))
-                    {
-                        state.handles.mic_gain_db.store(next);
-                        state.settings.mic_gain_db = next;
-                        persist(&state.settings);
-                    }
-                }
-                state.mic_too_quiet =
-                    crate::ui_logic::mic_too_quiet_for_accent(&state.quiet_peaks, state.settings.accent_on, state.settings.mic_gain_db);
-                state.quiet_peaks.clear();
-            }
-            // "Set for my mic": the raw peak is read before any gain, so the result does not depend on the current setting.
-            if let Some(cal) = state.calibration.as_mut() {
-                if let Some(level) = cal.tick(state.input_level) {
-                    state.calibration = None;
-                    state.calibration_note = Some(match crate::ui_logic::gain_db_for_speech_peak(level) {
-                        None => "Could not hear you. Speak normally and try again.".to_string(),
-                        Some(db) => {
-                            state.handles.mic_gain_db.store(db);
-                            state.settings.mic_gain_db = db;
-                            persist(&state.settings);
-                            if db == 0 {
-                                "Your voice is strong: no extra gain needed.".to_string()
-                            } else {
-                                format!("Your voice is quiet: sensitivity set to +{db} dB.")
-                            }
-                        }
-                    });
-                }
-            }
             state.io_counters_snapshot = IoCountersSnapshot::read(&state.handles.counters);
 
             let speaker_all_off = !state.handles.speaker_noise.is_on()
@@ -985,30 +931,6 @@ fn update_main(state: &mut MainState, message: Message) {
                 state.settings.mic_studio_preset = index;
                 persist(&state.settings);
             }
-        }
-        Message::SelectMicDistance(name) => {
-            if let Some(db) = crate::ui_logic::distance_from_name(name) {
-                update_main(state, Message::SetMicGain(db));
-            }
-        }
-        Message::ToggleMicGainAuto(on) => {
-            state.settings.mic_gain_auto = on;
-            persist(&state.settings);
-        }
-        Message::SetMicGain(db) => {
-            // Moving the slider by hand means "I choose": Auto goes off.
-            state.settings.mic_gain_auto = false;
-            let db = db.min(dsp_core::MAX_GAIN_DB);
-            state.handles.mic_gain_db.store(db);
-            state.settings.mic_gain_db = db;
-            state.calibration_note = None;
-            state.quiet_peaks.clear();
-            state.mic_too_quiet = false;
-            persist(&state.settings);
-        }
-        Message::CalibrateMic => {
-            state.calibration = Some(crate::ui_logic::Calibration::start());
-            state.calibration_note = None;
         }
         Message::ToggleAccent(on) => {
             state.settings.accent_on = on;
