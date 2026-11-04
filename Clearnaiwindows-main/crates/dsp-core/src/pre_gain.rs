@@ -20,7 +20,7 @@ pub const MAX_GAIN_DB: u8 = 30;
 const KNEE: f32 = 0.8;
 
 #[inline]
-fn soft_limit(x: f32) -> f32 {
+pub(crate) fn soft_limit(x: f32) -> f32 {
     let a = x.abs();
     if a <= KNEE {
         x
@@ -35,14 +35,11 @@ pub fn distance_gain_db(step: u8) -> f32 {
     DISTANCE_GAIN_DB.get(step as usize).copied().unwrap_or(0.0)
 }
 
-/// Ceiling for `AutoGainStage::set_max_gain` for a slider value: the adaptive stage after the noise stages is allowed
-/// more boost once the mic gain has been raised (a far mic leaves the cleaned voice quiet too).
-pub fn agc_max_gain_for_db(db: u8) -> f32 {
-    match db {
-        0..=5 => 8.0,
-        6..=13 => 16.0,
-        _ => 32.0,
-    }
+/// Ceiling for `AutoGainStage::set_max_gain` for a slider value. The pre-gain already provides the boost for a far
+/// mic, so the adaptive stage after the noise stages keeps its normal ceiling: a higher one lifted the leftover hiss
+/// in pauses (audible as rising noise) and clipped loud word starts.
+pub fn agc_max_gain_for_db(_db: u8) -> f32 {
+    8.0
 }
 
 pub struct PreGainStage {
@@ -156,7 +153,7 @@ mod tests {
     fn unknown_steps_mean_no_gain() {
         assert_eq!(distance_gain_db(9), 0.0);
         assert_eq!(agc_max_gain_for_db(0), 8.0);
-        assert_eq!(agc_max_gain_for_db(9), 16.0);
-        assert_eq!(agc_max_gain_for_db(30), 32.0);
+        assert_eq!(agc_max_gain_for_db(9), 8.0, "no extra post-noise boost");
+        assert_eq!(agc_max_gain_for_db(30), 8.0);
     }
 }

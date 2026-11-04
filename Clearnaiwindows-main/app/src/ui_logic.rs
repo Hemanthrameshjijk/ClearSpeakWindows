@@ -278,10 +278,13 @@ pub fn mic_too_quiet_for_accent(peaks: &[f32], accent_on: bool, gain_db: u8) -> 
             .is_some_and(|needed| needed > gain_db.saturating_add(6))
 }
 
+/// Auto never goes above this; more than +18 dB mostly raises the noise (the slider still allows 30 for manual use).
+pub const AUTO_MAX_DB: u8 = 18;
+
 /// Auto sensitivity: the next gain for a voice measured at `voice_peak`. Moves toward the gain that gives a healthy
 /// level, at most 3 dB at a time, and not at all when already within 2 dB (so it never hunts back and forth).
 pub fn auto_gain_next(current_db: u8, voice_peak: f32) -> Option<u8> {
-    let needed = gain_db_for_speech_peak(voice_peak)? as i16;
+    let needed = (gain_db_for_speech_peak(voice_peak)? as i16).min(AUTO_MAX_DB as i16);
     let diff = needed - current_db as i16;
     if diff.abs() <= 2 {
         return None;
@@ -353,7 +356,8 @@ mod tests {
         // A voice at 0.025 needs 20 dB.
         assert_eq!(auto_gain_next(0, 0.025), Some(3));
         assert_eq!(auto_gain_next(18, 0.025), None, "within 2 dB: leave it alone");
-        assert_eq!(auto_gain_next(21, 0.025), None);
+        assert_eq!(auto_gain_next(21, 0.025), Some(18), "Auto stops at 18 dB");
+        assert_eq!(auto_gain_next(18, 0.01), None, "needs 28 dB but Auto is capped at 18");
         assert_eq!(auto_gain_next(29, 0.25), Some(26), "a louder voice lowers the gain, 3 dB at a time");
         assert_eq!(auto_gain_next(0, 0.5), None, "never below zero");
         assert_eq!(auto_gain_next(10, 0.0), None, "no voice measured: unchanged");
