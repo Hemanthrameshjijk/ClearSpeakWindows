@@ -341,7 +341,7 @@ pub fn split_warning(w: &str) -> (Option<&str>, String) {
 
 /// The password that opens the full window from the quick panel. It keeps casual clicks out of the advanced
 /// settings; it is not a security boundary (it sits in the binary).
-const SETTINGS_PASSWORD: &str = "12345";
+const SETTINGS_PASSWORD: &str = "AdminLemonpeak";
 
 pub fn settings_password_ok(input: &str) -> bool {
     input == SETTINGS_PASSWORD
@@ -431,8 +431,8 @@ mod tests {
 
     #[test]
     fn only_the_exact_password_opens_settings() {
-        assert!(settings_password_ok("12345"));
-        for bad in ["", "1234", "123456", " 12345", "12345 ", "abcde"] {
+        assert!(settings_password_ok("AdminLemonpeak"));
+        for bad in ["", "12345", "adminlemonpeak", " AdminLemonpeak", "AdminLemonpeak ", "AdminLemon"] {
             assert!(!settings_password_ok(bad), "{bad:?} must not unlock");
         }
     }
