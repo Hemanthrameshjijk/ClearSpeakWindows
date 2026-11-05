@@ -1082,6 +1082,8 @@ fn spawn_mic_pipeline(
             // this removes the dependency on the user having set Windows'
             // mic gain correctly).
             let mut auto_gain = dsp_core::AutoGainStage::new();
+            // Last stage: soft-limits loud bursts instead of letting them hard-clip. Untouched below 0.9.
+            let mut output_limiter = dsp_core::OutputLimiter::new();
             let mut echo_canceller = aec::NlmsAec::new_default();
             let mut echo_reference = vec![0.0f32; FRAME_SAMPLES];
             loop {
@@ -1168,6 +1170,7 @@ fn spawn_mic_pipeline(
                     run_if_enabled(bvc_stage.as_mut(), &handles.mic_bvc, &mut frame);
                 }
                 run_if_enabled(studio_stage.as_mut(), &handles.mic_studio, &mut frame);
+                output_limiter.process(&mut frame);
 
                 let peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
                 handles.level.store(peak);
