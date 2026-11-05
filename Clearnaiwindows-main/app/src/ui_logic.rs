@@ -149,6 +149,18 @@ pub fn active_profile(saved: &str, cur: &MicSnapshot) -> Option<&'static str> {
     profile_by_name(saved).filter(|p| p.matches(cur)).map(|p| p.name)
 }
 
+/// Noise reduction strengths of the mic path, in the order of `bvc_hush::STRENGTH_ATTEN_LIM_DB`.
+pub const NR_STRENGTH_NAMES: [&str; 3] = ["Maximum", "Balanced", "Gentle"];
+
+/// The label of a strength index (unknown indexes read as Maximum, which is what the engine uses for them).
+pub fn nr_strength_name(strength: u8) -> &'static str {
+    NR_STRENGTH_NAMES.get(strength as usize).copied().unwrap_or(NR_STRENGTH_NAMES[0])
+}
+
+pub fn nr_strength_from_name(name: &str) -> Option<u8> {
+    NR_STRENGTH_NAMES.iter().position(|n| *n == name).map(|i| i as u8)
+}
+
 /// Quick choices next to the sensitivity slider: label and the gain in dB it sets.
 pub const DISTANCE_NAMES: [&str; 3] = ["Close", "Normal", "Far"];
 
@@ -368,6 +380,16 @@ mod tests {
             }
         }
         assert_eq!(db, 18, "settles within 2 dB of the needed 20");
+    }
+
+    #[test]
+    fn noise_reduction_strengths_round_trip_and_unknown_means_maximum() {
+        for (i, name) in NR_STRENGTH_NAMES.iter().enumerate() {
+            assert_eq!(nr_strength_from_name(name), Some(i as u8));
+            assert_eq!(nr_strength_name(i as u8), *name);
+        }
+        assert_eq!(nr_strength_from_name("Nope"), None);
+        assert_eq!(nr_strength_name(9), "Maximum");
     }
 
     #[test]

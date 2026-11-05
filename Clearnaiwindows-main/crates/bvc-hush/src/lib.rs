@@ -148,6 +148,17 @@ pub const BPO_V1_MODEL_BUNDLE_FILE_NAME: &str = "bpo_v1_onnx.tar.gz";
 /// this project's reference deliberately does not use.
 pub const DEFAULT_ATTEN_LIM_DB: f32 = 30.0;
 
+/// Attenuation limits for the user-facing "Noise reduction" strengths: 0 Maximum (the default 30 dB), 1 Balanced,
+/// 2 Gentle. Measured offline on a noisy-room take (`examples/bvc_file.rs`): at 30 dB nearly every soft piece of
+/// speech was cut to silence, 18 dB halved that, 12 dB kept almost all of it, and pauses stayed 12-28 dB below the
+/// raw mic in every case.
+pub const STRENGTH_ATTEN_LIM_DB: [f32; 3] = [30.0, 18.0, 12.0];
+
+/// The attenuation limit for a strength index (out-of-range falls back to Maximum).
+pub fn atten_lim_db_for_strength(strength: u8) -> f32 {
+    STRENGTH_ATTEN_LIM_DB.get(strength as usize).copied().unwrap_or(DEFAULT_ATTEN_LIM_DB)
+}
+
 /// Everything that can go wrong loading and initializing the DLL, surfaced
 /// as a typed error rather than a panic so the rest of the app can report
 /// "BVC unavailable on this machine" honestly instead of silently no-op'ing.
@@ -217,6 +228,11 @@ pub struct HushBvcStage {
     fn_session_free: ffi::FnSessionFree,
     fn_model_free: ffi::FnModelFree,
     fn_reset: ffi::FnReset,
+    fn_session_create: ffi::FnSessionCreate,
+    /// The attenuation limit the current session was created with.
+    atten_lim_db: f32,
+    /// Optional live control: a strength index (see `STRENGTH_ATTEN_LIM_DB`) read once per frame.
+    strength_source: Option<dsp_core::SharedPreset>,
     adapter: FrameAdapter,
     frame_len: usize,
     model_sample_rate: usize,
@@ -298,6 +314,17 @@ impl HushBvcStage {
         dll_file_name: &str,
         model_bundle_file_name: &str,
     ) -> Result<Self, HushLoadError> {
+        Self::try_load_with_model_atten(dll_dir, dll_file_name, model_bundle_file_name, DEFAULT_ATTEN_LIM_DB)
+    }
+
+    /// Same as `try_load_with_model`, with an explicit `atten_lim_db`: the most the DLL may attenuate (a lower limit
+    /// turns a wrongly-cut soft word into a dip, at the cost of less noise removal in pauses).
+    pub fn try_load_with_model_atten(
+        dll_dir: &Path,
+        dll_file_name: &str,
+        model_bundle_file_name: &str,
+        atten_lim_db: f32,
+    ) -> Result<Self, HushLoadError> {
         let dll_path = dll_dir.join(dll_file_name);
         if !dll_path.is_file() {
             return Err(HushLoadError::DllNotFound(dll_path));
@@ -366,7 +393,7 @@ impl HushBvcStage {
         // SAFETY: `model` just verified non-null and freshly created by
         // this call; `input_sr`/`atten_lim_db` are plain value args.
         let session =
-            unsafe { fn_session_create(model, SAMPLE_RATE_HZ as usize, DEFAULT_ATTEN_LIM_DB) };
+            unsafe { fn_session_create(model, SAMPLE_RATE_HZ as usize, atten_lim_db) };
         if session.is_null() {
             // SAFETY: `model` is non-null and owned by us; freeing it here
             // (session creation failed, so nothing else references it) is
@@ -393,6 +420,9 @@ impl HushBvcStage {
             fn_session_free,
             fn_model_free,
             fn_reset,
+            fn_session_create,
+            atten_lim_db,
+            strength_source: None,
             adapter: FrameAdapter::new(FRAME_SAMPLES, frame_len),
             frame_len,
             model_sample_rate,
@@ -423,6 +453,38 @@ impl HushBvcStage {
         self.last_snr_db
     }
 
+    /// Changes the attenuation limit by creating a fresh session on the same model (the DLL fixes the limit at
+    /// session creation). Call it between frames, only when the value actually changes: the new session restarts
+    /// its streaming state, so the first few frames adapt again. Returns false (keeping the old session) if the
+    /// DLL could not create the new one.
+    pub fn set_atten_lim_db(&mut self, db: f32) -> bool {
+        let db = db.clamp(0.0, 100.0);
+        if (db - self.atten_lim_db).abs() < 0.01 {
+            return true;
+        }
+        // SAFETY: `self.model` is non-null for the lifetime of `self`; the pointer types match the real header.
+        let new_session = unsafe { (self.fn_session_create)(self.model, SAMPLE_RATE_HZ as usize, db) };
+        if new_session.is_null() {
+            return false;
+        }
+        // SAFETY: the old session is owned by us and nothing else references it.
+        unsafe { (self.fn_session_free)(self.session) };
+        self.session = new_session;
+        self.atten_lim_db = db;
+        true
+    }
+
+    /// Follow a shared strength index (0 Maximum, 1 Balanced, 2 Gentle): checked once per frame, and the session is
+    /// recreated only when the chosen limit really changes.
+    pub fn set_strength_source(&mut self, source: dsp_core::SharedPreset) {
+        self.strength_source = Some(source);
+    }
+
+    /// The attenuation limit in use.
+    pub fn atten_lim_db(&self) -> f32 {
+        self.atten_lim_db
+    }
+
     /// Resets the session's streaming (GRU/filter) state, e.g. when
     /// starting a new independent audio stream.
     pub fn reset_stream_state(&mut self) {
@@ -447,6 +509,12 @@ impl Stage for HushBvcStage {
     }
 
     fn process(&mut self, frame: &mut [f32]) {
+        if let Some(source) = &self.strength_source {
+            let wanted = atten_lim_db_for_strength(source.load());
+            if (wanted - self.atten_lim_db).abs() >= 0.01 {
+                let _ = self.set_atten_lim_db(wanted);
+            }
+        }
         let session = self.session;
         let process_frame = self.fn_process_frame;
         let mut snr_db = self.last_snr_db;
@@ -490,6 +558,14 @@ fn path_to_cstring(path: &Path) -> Result<CString, HushLoadError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn strengths_map_to_decreasing_attenuation_limits_and_unknown_means_default() {
+        assert_eq!(atten_lim_db_for_strength(0), DEFAULT_ATTEN_LIM_DB);
+        assert!(atten_lim_db_for_strength(1) < atten_lim_db_for_strength(0));
+        assert!(atten_lim_db_for_strength(2) < atten_lim_db_for_strength(1));
+        assert_eq!(atten_lim_db_for_strength(200), DEFAULT_ATTEN_LIM_DB);
+    }
+
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 

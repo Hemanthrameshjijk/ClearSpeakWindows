@@ -998,6 +998,17 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                         Message::SelectPhysicalMic,
                     ),
                     switch_row("Cancel noise", "Background noise and voices".to_string(), t.muted, cancel_on, Message::ToggleCancelNoise),
+                    row![
+                        text("Noise reduction").size(13).color(t.muted),
+                        container(text("")).width(Length::Fill),
+                        pick_list(&ui_logic::NR_STRENGTH_NAMES[..], Some(ui_logic::nr_strength_name(h.mic_nr_strength.load())), Message::SelectNrStrength)
+                            .width(Length::Fixed(120.0))
+                            .padding([6, 10])
+                            .text_size(13)
+                            .style(style::select),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),
                     switch_row("Convert my accent", accent_desc, accent_color, state.settings.accent_on, Message::ToggleAccent),
                     row![
                         text("Accent voice").size(13).color(t.muted),
@@ -1389,6 +1400,15 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
     if let Some(note) = bvc_note(state, false) {
         col = col.push(note);
     }
+    col = col.push(select_row(
+        state,
+        "Noise reduction",
+        pick_list(&ui_logic::NR_STRENGTH_NAMES[..], Some(ui_logic::nr_strength_name(h.mic_nr_strength.load())), Message::SelectNrStrength)
+            .padding([9, 12])
+            .text_size(13)
+            .style(style::select)
+            .into(),
+    ));
     col = col
         .push(setting_row(state, "Quiet nearby voices", Some("Fast. Lowers voices quieter than yours."), h.mic_voice_gate.is_on(), Message::ToggleMicVoiceGate))
         .push(setting_row(

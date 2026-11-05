@@ -16,9 +16,11 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var("LOCALAPPDATA").unwrap()).join("ClearNAI"));
 
+    // Experiment knob: BVC_ATTEN_LIM_DB (default 30, what the app uses today).
+    let atten: f32 = std::env::var("BVC_ATTEN_LIM_DB").ok().and_then(|v| v.parse().ok()).unwrap_or(bvc_hush::DEFAULT_ATTEN_LIM_DB);
     let mut stage = match which {
-        "bpo_v1" => bvc_hush::HushBvcStage::try_load_with_model(&dir, bvc_hush::DLL_FILE_NAME, bvc_hush::BPO_V1_MODEL_BUNDLE_FILE_NAME),
-        _ => bvc_hush::HushBvcStage::try_load(&dir),
+        "bpo_v1" => bvc_hush::HushBvcStage::try_load_with_model_atten(&dir, bvc_hush::DLL_FILE_NAME, bvc_hush::BPO_V1_MODEL_BUNDLE_FILE_NAME, atten),
+        _ => bvc_hush::HushBvcStage::try_load_with_model_atten(&dir, bvc_hush::DLL_FILE_NAME, bvc_hush::MODEL_BUNDLE_FILE_NAME, atten),
     }
     .expect("load Hush");
 

@@ -276,6 +276,8 @@ pub enum Message {
     ToggleEchoCancel(bool),
     ToggleMicStudio(bool),
     SelectMicStudioPreset(&'static str),
+    /// Noise reduction strength of the mic path (label from `ui_logic::NR_STRENGTH_NAMES`).
+    SelectNrStrength(&'static str),
     /// Accent conversion on/off - its own switch, independent of BVC.
     ToggleAccent(bool),
     /// Accent voice picker (label from `accent_onnx::VOICE_CHOICES`).
@@ -929,6 +931,13 @@ fn update_main(state: &mut MainState, message: Message) {
                 let index = studio_preset_to_index(preset);
                 state.handles.mic_studio_preset.store(index);
                 state.settings.mic_studio_preset = index;
+                persist(&state.settings);
+            }
+        }
+        Message::SelectNrStrength(name) => {
+            if let Some(strength) = crate::ui_logic::nr_strength_from_name(name) {
+                state.handles.mic_nr_strength.store(strength);
+                state.settings.mic_nr_strength = strength;
                 persist(&state.settings);
             }
         }

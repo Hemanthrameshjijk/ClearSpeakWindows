@@ -37,14 +37,10 @@ pub struct Settings {
     /// (`Natural`), matching the previous hardcoded default.
     #[serde(default = "default_studio_preset")]
     pub mic_studio_preset: u8,
-    /// Mic sensitivity: a fixed gain in dB (0..=30) applied before the noise stages, for mics that are far from the
-    /// mouth (earbuds). See `dsp_core::PreGainStage`. Missing in older settings files, which means 0 (no extra gain).
-    #[serde(default)]
-    pub mic_gain_db: u8,
-    /// Auto: while on, the sensitivity follows how loud the voice is (small steps, only while speaking). Touching the
-    /// slider turns it off.
-    #[serde(default = "default_true")]
-    pub mic_gain_auto: bool,
+    /// Noise reduction strength of the mic path: 0 Maximum, 1 Balanced, 2 Gentle (see `bvc_hush::STRENGTH_ATTEN_LIM_DB`).
+    /// Maximum can cut soft speech; Gentle keeps it but leaves a little more noise in pauses. Default Balanced.
+    #[serde(default = "default_nr_strength")]
+    pub mic_nr_strength: u8,
     /// Layout version of this file (1 = current). Lets a later release migrate old files instead of guessing.
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -209,6 +205,10 @@ fn default_schema_version() -> u32 {
     1
 }
 
+fn default_nr_strength() -> u8 {
+    1
+}
+
 fn default_studio_preset() -> u8 {
     1 // Natural
 }
@@ -229,8 +229,7 @@ impl Default for Settings {
             mic_bvc_on: true,
             mic_studio_on: true,
             mic_studio_preset: default_studio_preset(),
-            mic_gain_db: 0,
-            mic_gain_auto: true,
+            mic_nr_strength: default_nr_strength(),
             schema_version: default_schema_version(),
             aec_on: false,
             echo_cancel_on: true,

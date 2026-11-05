@@ -397,6 +397,9 @@ pub fn start(
     // ones behind a toggle that starts off" rule, and its own honest
     // fallback if loading fails a second time (e.g. DLL present but a
     // transient session-creation failure) is a plain no-op, not a crash.
+    // Noise reduction strength of the mic path: shared with the window (the pick list), read by both mic Hush
+    // stages once per frame. Wired into `handles` below.
+    let mic_nr_strength = dsp_core::SharedPreset::new(settings.mic_nr_strength);
     let mic_bvc_load = bvc_hush::HushBvcStage::try_load(bvc_assets_dir);
     let (mic_bvc_available, mic_bvc_unavailable_reason) = match &mic_bvc_load {
         Ok(_) => (true, None),
@@ -448,7 +451,8 @@ pub fn start(
     // when a real `HushBvcStage` is actually running behind the watchdog.
     let mut mic_hush_status: Option<dsp_core::WatchdogStatus> = None;
     let mic_hush_stage: Box<dyn Stage> = match mic_bvc_load {
-        Ok(stage) => {
+        Ok(mut stage) => {
+            stage.set_strength_source(mic_nr_strength.clone());
             let watchdog = dsp_core::WatchdogStage::new(
                 "mic BVC",
                 Box::new(stage),
@@ -515,7 +519,8 @@ pub fn start(
     // for the same closed-source-DLL reason.
     let mut mic_bpo_v1_status: Option<dsp_core::WatchdogStatus> = None;
     let mic_bpo_v1_stage: Box<dyn Stage> = match mic_hush_bpo_v1_load {
-        Ok(stage) => {
+        Ok(mut stage) => {
+            stage.set_strength_source(mic_nr_strength.clone());
             let watchdog = dsp_core::WatchdogStage::new(
                 "mic Hush (bpo_v1)",
                 Box::new(stage),
@@ -643,6 +648,7 @@ pub fn start(
         mic_bpo_v1_available,
         mic_bpo_v1_unavailable_reason,
     );
+    handles.mic_nr_strength = mic_nr_strength.clone();
     // See `bvc_backend_selector`'s docs above - overwrite the freshly
     // constructed (otherwise-unread) `SharedPreset` `new_from_settings`
     // builds internally with the one actually shared with the router, the
