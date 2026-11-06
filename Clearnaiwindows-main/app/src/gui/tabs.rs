@@ -308,6 +308,7 @@ fn tab_body(state: &MainState, wide: bool, win_w: f32) -> Element<'_, Message> {
         Tab::Transcript => transcript_tab(state),
         Tab::Devices => devices_tab(state, wide),
         Tab::Advanced => advanced_tab(state, wide),
+        Tab::Profile => profile_tab(state),
     }
 }
 
@@ -320,6 +321,7 @@ fn page_text(tab: Tab) -> (&'static str, &'static str, &'static str) {
         Tab::Transcript => ("TRANSCRIPT", "Keep the conversation in view.", "Search and save a live transcript from your calls."),
         Tab::Devices => ("DEVICES", "Route your audio clearly.", "Choose which devices ClearNAI should listen to and play through."),
         Tab::Advanced => ("ADVANCED", "Fine-tune your workspace.", "Choose the models, shortcuts, and system behavior that fit your setup."),
+        Tab::Profile => ("PROFILE", "Who is using ClearNAI.", "Your name and license. They stay on this PC."),
     }
 }
 
@@ -332,6 +334,7 @@ fn nav_hint(tab: Tab) -> &'static str {
         Tab::Transcript => "Live captions",
         Tab::Devices => "Audio routing",
         Tab::Advanced => "Fine-tune ClearNAI",
+        Tab::Profile => "Your account",
     }
 }
 
@@ -344,6 +347,7 @@ fn nav_icon(tab: Tab) -> &'static [u8] {
         Tab::Transcript => icons::DOC,
         Tab::Devices => icons::DEVICES,
         Tab::Advanced => icons::SLIDERS,
+        Tab::Profile => icons::USER,
     }
 }
 
@@ -377,7 +381,83 @@ fn page_action(state: &MainState) -> Element<'_, Message> {
         }
         Tab::Devices => icon_button(super::icons::REFRESH, "Refresh devices", Message::RefreshDevices, style::outline, t.muted_strong),
         Tab::Advanced => chip(if state.settings.profile.is_empty() { "Custom profile" } else { state.settings.profile.as_str() }, ChipKind::Off, dark),
+        Tab::Profile => match license_status(state) {
+            license::Status::Licensed(_) => chip("Licensed", ChipKind::Ok, dark),
+            license::Status::Trial { .. } => chip("Free trial", ChipKind::Warn, dark),
+            license::Status::TrialOver => chip("Not licensed", ChipKind::Bad, dark),
+        },
     }
+}
+
+/// Where this copy stands: licensed, in the free trial, or neither.
+pub(super) fn license_status(state: &MainState) -> license::Status {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    license::status(&state.settings.license_key, &crate::license_key::PUBLIC_KEY, state.settings.first_run_at, now)
+}
+
+/// The Profile page: who you are (name, email, avatar) and the license.
+fn profile_tab(state: &MainState) -> Element<'_, Message> {
+    use super::icons;
+    let dark = state.settings.theme_dark;
+    let t = style::tokens_for(dark);
+    let status = license_status(state);
+    let (status_color, _) = match &status {
+        license::Status::Licensed(_) => (t.success, ()),
+        license::Status::Trial { .. } => (t.warning, ()),
+        license::Status::TrialOver => (t.danger, ()),
+    };
+
+    let avatar = container(text(ui_logic::initials(&state.settings.user_name)).size(26).font(bold()).color(Color::WHITE))
+        .width(72)
+        .height(72)
+        .center_x(Length::Fixed(72.0))
+        .center_y(Length::Fixed(72.0))
+        .style(move |_| container::Style {
+            background: Some(t.primary.into()),
+            border: iced::Border { radius: 36.0.into(), ..Default::default() },
+            ..Default::default()
+        });
+    let shown_name = if state.settings.user_name.trim().is_empty() { "Your name".to_string() } else { state.settings.user_name.clone() };
+    let shown_email = if state.settings.user_email.trim().is_empty() { "Add your email below".to_string() } else { state.settings.user_email.clone() };
+    let identity = row![
+        avatar,
+        column![text(shown_name).size(22).font(bold()), text(shown_email).size(13).color(t.muted), text(ui_logic::license_line(&status)).size(13).color(status_color)]
+            .spacing(4)
+            .width(Length::Fill),
+    ]
+    .spacing(18)
+    .align_y(iced::Alignment::Center);
+
+    let mut details = column![
+        card_head(state, icons::USER, style::Accent::Blue, "Your details", None, "Shown in the sidebar and printed on your license.", None),
+        column![
+            text("Name").size(13).color(t.muted),
+            text_input("Your name", &state.settings.user_name).on_input(Message::ProfileName).padding([10, 12]).size(14),
+        ]
+        .spacing(6),
+        column![
+            text("Email").size(13).color(t.muted),
+            text_input("you@example.com", &state.settings.user_email).on_input(Message::ProfileEmail).padding([10, 12]).size(14),
+        ]
+        .spacing(6),
+    ]
+    .spacing(18);
+    if !state.settings.user_email.trim().is_empty() && !ui_logic::email_looks_valid(&state.settings.user_email) {
+        details = details.push(text("That email address does not look right.").size(12).color(t.warning));
+    }
+
+    let mut licence = column![
+        card_head(state, icons::SHIELD, style::Accent::Blue, "License", None, "Paste the key you were given. It is checked on this PC.", None),
+        text(ui_logic::license_line(&status)).size(14).color(status_color),
+        text_input("CLNAI-...", &state.license_input).on_input(Message::LicenseInput).on_submit(Message::ApplyLicense).padding([10, 12]).size(14),
+        row![btn(text("Apply key").size(13).font(bold())).padding([9, 18]).on_press(Message::ApplyLicense).style(style::primary)].spacing(10),
+    ]
+    .spacing(16);
+    if let Some(note) = &state.license_note {
+        licence = licence.push(text(note.clone()).size(13).color(t.muted));
+    }
+
+    column![card(identity), card(details), card(licence)].spacing(18).into()
 }
 
 /// A green (or amber) dot followed by a label.
@@ -541,7 +621,7 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
     );
     let profile_row = btn(
         row![
-            container(glyph_icon(icons::USER, 17.0, t.primary))
+            container(text(ui_logic::initials(&state.settings.user_name)).size(14).font(bold()).color(t.primary))
                 .width(36)
                 .height(36)
                 .center_x(Length::Fixed(36.0))
@@ -551,7 +631,11 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
                     border: iced::Border { radius: 18.0.into(), ..Default::default() },
                     ..Default::default()
                 }),
-            column![text("Profile").size(16).font(bold()), text("Personal settings").size(11).color(t.muted)].spacing(1),
+            column![
+                text(if state.settings.user_name.trim().is_empty() { "Add your name".to_string() } else { state.settings.user_name.clone() }).size(16).font(bold()),
+                text(ui_logic::license_line(&license_status(state))).size(11).color(t.muted),
+            ]
+            .spacing(1),
             container(text("")).width(Length::Fill),
             glyph_icon(icons::CHEVRON_RIGHT, 15.0, t.muted),
         ]
@@ -560,7 +644,7 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
     )
     .width(Length::Fill)
     .padding([8, 10])
-    .on_press(Message::SelectTab(Tab::Advanced))
+    .on_press(Message::SelectTab(Tab::Profile))
     .style(style::nav_item(false));
 
     let top = column![

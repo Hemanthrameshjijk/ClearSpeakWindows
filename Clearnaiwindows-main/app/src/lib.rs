@@ -18,6 +18,7 @@ pub mod crash;
 pub mod device_rules;
 pub mod gui;
 pub mod ipc;
+pub mod license_key;
 pub mod logging;
 pub mod settings;
 pub mod setup;

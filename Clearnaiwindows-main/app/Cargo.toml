@@ -24,6 +24,7 @@ path = "src/bin/clearnai-engine.rs"
 # and its unit tests run on every platform.
 dsp-core = { path = "../crates/dsp-core" }
 aec = { path = "../crates/aec" }
+license = { path = "../crates/license" }
 
 # DSP stages. All of these are portable Rust (no OS calls) except bvc-hush,
 # which dynamically loads a Windows DLL at runtime via `libloading` - the

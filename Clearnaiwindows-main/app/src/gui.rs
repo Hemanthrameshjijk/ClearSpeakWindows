@@ -141,6 +141,9 @@ struct MainState {
     password: Option<PasswordPrompt>,
     /// The tab to open once the password is accepted.
     pending_tab: Tab,
+    /// The license key being typed on the Profile page, and the result of the last Apply.
+    license_input: String,
+    license_note: Option<String>,
     /// How many Ticks in a row the accent has been paused (the banner waits for a lasting pause, not a blip).
     accent_paused_ticks: u32,
 }
@@ -193,6 +196,8 @@ impl MainState {
             password: None,
             pending_tab: Tab::Home,
             accent_paused_ticks: 0,
+            license_input: String::new(),
+            license_note: None,
         }
     }
 }
@@ -278,6 +283,11 @@ pub enum Message {
     SelectMicStudioPreset(&'static str),
     /// Noise reduction strength of the mic path (label from `ui_logic::NR_STRENGTH_NAMES`).
     SelectNrStrength(&'static str),
+    /// Profile page: name / email edited, license key typed, Apply pressed.
+    ProfileName(String),
+    ProfileEmail(String),
+    LicenseInput(String),
+    ApplyLicense,
     /// Accent conversion on/off - its own switch, independent of BVC.
     ToggleAccent(bool),
     /// Accent voice picker (label from `accent_onnx::VOICE_CHOICES`).
@@ -736,7 +746,7 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
-    // No "microphone is quiet" banner: the Mic sensitivity slider and Auto handle it silently.
+    input.license_needed = matches!(crate::gui::tabs::license_status(state), license::Status::TrialOver);
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
     for a in &alerts {
@@ -779,6 +789,12 @@ fn update_main(state: &mut MainState, message: Message) {
             state.status = classify_status(&percentiles, DEADLINE_NS, all_off);
             state.level = state.handles.level.load();
             state.input_level = state.handles.input_level.load();
+            // The free trial counts from the first launch.
+            if state.settings.first_run_at == 0 {
+                state.settings.first_run_at =
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                persist(&state.settings);
+            }
             state.io_counters_snapshot = IoCountersSnapshot::read(&state.handles.counters);
 
             let speaker_all_off = !state.handles.speaker_noise.is_on()
@@ -932,6 +948,37 @@ fn update_main(state: &mut MainState, message: Message) {
                 state.handles.mic_studio_preset.store(index);
                 state.settings.mic_studio_preset = index;
                 persist(&state.settings);
+            }
+        }
+        Message::ProfileName(name) => {
+            state.settings.user_name = name;
+            persist(&state.settings);
+        }
+        Message::ProfileEmail(email) => {
+            state.settings.user_email = email;
+            persist(&state.settings);
+        }
+        Message::LicenseInput(key) => {
+            state.license_input = key;
+            state.license_note = None;
+        }
+        Message::ApplyLicense => {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let key = state.license_input.trim().to_string();
+            match license::verify(&key, &crate::license_key::PUBLIC_KEY, now) {
+                Ok(l) => {
+                    state.settings.license_key = key;
+                    if state.settings.user_name.trim().is_empty() {
+                        state.settings.user_name = l.name.clone();
+                    }
+                    if state.settings.user_email.trim().is_empty() {
+                        state.settings.user_email = l.email.clone();
+                    }
+                    state.license_note = Some(format!("License accepted. Licensed to {}.", l.name));
+                    state.license_input.clear();
+                    persist(&state.settings);
+                }
+                Err(e) => state.license_note = Some(e.to_string()),
             }
         }
         Message::SelectNrStrength(name) => {

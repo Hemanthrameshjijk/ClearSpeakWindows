@@ -1,0 +1,17 @@
+[package]
+name = "license"
+version.workspace = true
+edition.workspace = true
+
+# Offline license keys: a signed {name, email, expiry} the app checks with a public key built into it. The private
+# key stays with the owner and is only used by the `licensegen` tool.
+[dependencies]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+
+[[bin]]
+name = "licensegen"
+path = "src/bin/licensegen.rs"

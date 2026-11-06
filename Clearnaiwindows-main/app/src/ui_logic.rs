@@ -9,6 +9,8 @@ pub enum Tab {
     Transcript,
     Devices,
     Advanced,
+    /// Reached from the sidebar's profile entry; not in the navigation list.
+    Profile,
 }
 
 impl Tab {
@@ -22,6 +24,7 @@ impl Tab {
             Tab::Transcript => "Transcript",
             Tab::Devices => "Devices",
             Tab::Advanced => "Advanced",
+            Tab::Profile => "Profile",
         }
     }
 }
@@ -262,6 +265,8 @@ pub struct AlertInput {
     pub engine_disconnected: bool,
     /// Accent is on, the mic distance is still Close, and the last seconds of mic input were audible but quiet.
     pub mic_too_quiet: bool,
+    /// The free trial is over and no valid license key is entered.
+    pub license_needed: bool,
 }
 
 /// Ticks (250 ms each) of mic input looked at before deciding the mic is too quiet for the accent.
@@ -304,6 +309,41 @@ pub fn auto_gain_next(current_db: u8, voice_peak: f32) -> Option<u8> {
     Some((current_db as i16 + diff.clamp(-3, 3)).clamp(0, dsp_core::MAX_GAIN_DB as i16) as u8)
 }
 
+/// Up to two capital letters for the avatar: first letters of the first and last word of the name ("?" when empty).
+pub fn initials(name: &str) -> String {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let letters: Vec<char> = match words.as_slice() {
+        [] => vec![],
+        [one] => one.chars().take(1).collect(),
+        [first, .., last] => first.chars().take(1).chain(last.chars().take(1)).collect(),
+    };
+    if letters.is_empty() {
+        "?".to_string()
+    } else {
+        letters.iter().flat_map(|c| c.to_uppercase()).collect()
+    }
+}
+
+/// A rough shape check only (something@something.something); the license key is what really identifies the owner.
+pub fn email_looks_valid(email: &str) -> bool {
+    let e = email.trim();
+    match e.split_once('@') {
+        Some((user, host)) => !user.is_empty() && host.contains('.') && !host.starts_with('.') && !host.ends_with('.') && !e.contains(' '),
+        None => false,
+    }
+}
+
+/// The one line shown under the name in the sidebar and on the Profile page.
+pub fn license_line(status: &license::Status) -> String {
+    match status {
+        license::Status::Licensed(l) if l.exp == 0 => format!("Licensed to {}", l.name),
+        license::Status::Licensed(l) => format!("Licensed to {} (valid until day {})", l.name, l.exp / 86_400),
+        license::Status::Trial { days_left: 1 } => "Free trial: 1 day left".to_string(),
+        license::Status::Trial { days_left } => format!("Free trial: {days_left} days left"),
+        license::Status::TrialOver => "Trial ended: enter a license key".to_string(),
+    }
+}
+
 pub fn alerts(i: &AlertInput) -> Vec<Alert> {
     let mut out = Vec::new();
     if i.mic_too_quiet {
@@ -311,6 +351,9 @@ pub fn alerts(i: &AlertInput) -> Vec<Alert> {
             key: "mic-quiet",
             text: "Your microphone is quiet, so the accent will sound worse. Raise Mic sensitivity, or tap Set for my mic and speak for 5 seconds.".into(),
         });
+    }
+    if i.license_needed {
+        out.push(Alert { key: "license", text: "Your free trial has ended. Open Profile and enter your license key to keep using ClearNAI.".into() });
     }
     if i.engine_disconnected {
         out.push(Alert { key: "engine-disconnected", text: "Lost contact with the ClearNAI background engine. Reconnecting; audio keeps running if the engine is still alive.".into() });
@@ -380,6 +423,30 @@ mod tests {
             }
         }
         assert_eq!(db, 18, "settles within 2 dB of the needed 20");
+    }
+
+    #[test]
+    fn avatar_initials_and_email_shape() {
+        assert_eq!(initials("Asha Rao"), "AR");
+        assert_eq!(initials("  asha  mary  rao "), "AR", "first and last word");
+        assert_eq!(initials("Asha"), "A");
+        assert_eq!(initials(""), "?");
+        assert_eq!(initials("   "), "?");
+        assert!(email_looks_valid("asha@example.com"));
+        for bad in ["", "asha", "asha@", "@example.com", "asha@example", "a b@example.com", "asha@.com"] {
+            assert!(!email_looks_valid(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn license_line_says_who_and_how_long() {
+        let l = license::Licensee { name: "Asha".into(), email: "a@b.co".into(), exp: 0 };
+        assert_eq!(license_line(&license::Status::Licensed(l)), "Licensed to Asha");
+        assert_eq!(license_line(&license::Status::Trial { days_left: 1 }), "Free trial: 1 day left");
+        assert_eq!(license_line(&license::Status::Trial { days_left: 9 }), "Free trial: 9 days left");
+        assert!(license_line(&license::Status::TrialOver).contains("license key"));
+        let needed = AlertInput { license_needed: true, ..Default::default() };
+        assert!(alerts(&needed).iter().any(|a| a.key == "license"));
     }
 
     #[test]

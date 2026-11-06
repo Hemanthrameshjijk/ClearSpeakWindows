@@ -41,6 +41,17 @@ pub struct Settings {
     /// Maximum can cut soft speech; Gentle keeps it but leaves a little more noise in pauses. Default Balanced.
     #[serde(default = "default_nr_strength")]
     pub mic_nr_strength: u8,
+    /// Who uses this copy: shown in the sidebar and on the Profile page.
+    #[serde(default)]
+    pub user_name: String,
+    #[serde(default)]
+    pub user_email: String,
+    /// The pasted license key (empty = none). Checked on every start with the public key built into the app.
+    #[serde(default)]
+    pub license_key: String,
+    /// Unix seconds of the first launch; the free trial counts from it. 0 = not started yet.
+    #[serde(default)]
+    pub first_run_at: u64,
     /// Layout version of this file (1 = current). Lets a later release migrate old files instead of guessing.
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -230,6 +241,10 @@ impl Default for Settings {
             mic_studio_on: true,
             mic_studio_preset: default_studio_preset(),
             mic_nr_strength: default_nr_strength(),
+            user_name: String::new(),
+            user_email: String::new(),
+            license_key: String::new(),
+            first_run_at: 0,
             schema_version: default_schema_version(),
             aec_on: false,
             echo_cancel_on: true,

@@ -1,0 +1,4 @@
+
+# License signing secret keys (never commit)
+*license-secret*
+*.key
