@@ -464,7 +464,11 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
         ]
         .spacing(6),
         text_input("Paste your license here (CLNAI1.…)", &state.license_input).on_input(Message::LicenseInput).on_submit(Message::ApplyLicense).padding([10, 12]).size(14),
-        row![btn(text("Apply key").size(13).font(bold())).padding([9, 18]).on_press(Message::ApplyLicense).style(style::primary)].spacing(10),
+        row![
+            btn(text("Apply").size(13).font(bold())).padding([9, 18]).on_press(Message::ApplyLicense).style(style::primary),
+            btn(text("Import .lic file").size(13)).padding([9, 18]).on_press(Message::ImportLicenseFile).style(style::outline),
+        ]
+        .spacing(10),
     ]
     .spacing(16);
     if let Some(note) = &state.license_note {

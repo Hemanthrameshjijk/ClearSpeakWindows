@@ -147,6 +147,8 @@ struct MainState {
     /// The decrypted stored token and what it (and the trial) currently mean; refreshed on Tick.
     license_token: String,
     license_status: license::Status,
+    /// The PC's clock is far behind the latest time seen (see `clock_guard`): the license is not honoured meanwhile.
+    clock_wrong: bool,
     /// How many Ticks in a row the accent has been paused (the banner waits for a lasting pause, not a blip).
     accent_paused_ticks: u32,
 }
@@ -204,6 +206,7 @@ impl MainState {
             license_note: None,
             license_token,
             license_status: license::Status::Trial { days_left: license::TRIAL_DAYS as u32 },
+            clock_wrong: false,
         }
     }
 }
@@ -296,6 +299,9 @@ pub enum Message {
     ApplyLicense,
     /// Copy this PC's Device Code to the clipboard.
     CopyDeviceCode,
+    /// Choose a `.lic` file; its text is read and applied like a pasted license.
+    ImportLicenseFile,
+    LicenseFileRead(Option<String>),
     /// Accent conversion on/off - its own switch, independent of BVC.
     ToggleAccent(bool),
     /// Accent voice picker (label from `accent_onnx::VOICE_CHOICES`).
@@ -653,6 +659,32 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
         }
         return iced::Task::none();
     }
+    if matches!(message, Message::ImportLicenseFile) {
+        return iced::Task::perform(
+            async {
+                let file = rfd::AsyncFileDialog::new().set_title("Choose your ClearNAI license file").add_filter("ClearNAI license", &["lic", "txt"]).pick_file().await?;
+                let bytes = file.read().await;
+                // A license is a few hundred characters; anything big is not one.
+                if bytes.len() > 4096 {
+                    return None;
+                }
+                String::from_utf8(bytes).ok()
+            },
+            Message::LicenseFileRead,
+        );
+    }
+    if let Message::LicenseFileRead(text) = message {
+        if let Screen::Main(state) = screen {
+            match text {
+                Some(t) => {
+                    state.license_input = t.trim().to_string();
+                    update_main(state, Message::ApplyLicense);
+                }
+                None => state.license_note = Some("That file could not be read as a license.".to_string()),
+            }
+        }
+        return iced::Task::none();
+    }
     if matches!(message, Message::CopyDeviceCode) {
         if let Screen::Main(state) = screen {
             return match crate::device_id::code() {
@@ -778,7 +810,8 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
-    input.license_needed = matches!(state.license_status, license::Status::TrialOver);
+    input.license_needed = matches!(state.license_status, license::Status::TrialOver) && !state.clock_wrong;
+    input.clock_wrong = state.clock_wrong;
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
     for a in &alerts {
@@ -821,7 +854,21 @@ fn update_main(state: &mut MainState, message: Message) {
             state.status = classify_status(&percentiles, DEADLINE_NS, all_off);
             state.level = state.handles.level.load();
             state.input_level = state.handles.input_level.load();
-            state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
+            // A clock turned back is caught against the latest time seen (settings file + registry).
+            {
+                let now = now_secs();
+                let seen = state.settings.last_seen_at.max(crate::clock_guard::registry_mark());
+                state.clock_wrong = crate::clock_guard::rolled_back(seen, now);
+                let (mark, write) = crate::clock_guard::next_mark(seen, now);
+                if write {
+                    crate::clock_guard::write_registry_mark(mark);
+                    if mark > state.settings.last_seen_at {
+                        state.settings.last_seen_at = mark;
+                        persist(&state.settings);
+                    }
+                }
+            }
+            state.license_status = if state.clock_wrong { license::Status::TrialOver } else { compute_license(&state.license_token, state.settings.first_run_at) };
             // The free trial counts from the first launch.
             if state.settings.first_run_at == 0 {
                 state.settings.first_run_at =
@@ -1248,6 +1295,8 @@ fn update_main(state: &mut MainState, message: Message) {
         | Message::ToggleCompact
         | Message::CopyTranscript
         | Message::CopyDeviceCode
+        | Message::ImportLicenseFile
+        | Message::LicenseFileRead(_)
         | Message::DragWindow
         | Message::PasswordInput(_)
         | Message::SubmitPassword

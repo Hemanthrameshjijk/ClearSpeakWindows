@@ -59,6 +59,8 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+# Native "open file" dialog for importing a .lic license file.
+rfd = "0.15"
 
 # GUI. Current major version confirmed against docs.rs/crates.io on
 # 2026-09-11 (see docs/VIRTUAL_DEVICES.md / the report for citations): 0.14.0,
@@ -81,7 +83,7 @@ iced = { version = "0.14", features = ["tokio", "svg", "image"] }
 # `wasapi::initialize_mta()` COM-init probe, matching the exact `windows`/
 # `wasapi` versions already pulled in transitively by `audio-io` (see
 # `crates/audio-io/Cargo.toml`) to avoid duplicate incompatible versions.
-windows = { version = "0.62", features = ["Wdk_System_SystemServices", "Wdk_Foundation", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_IO"] }
+windows = { version = "0.62", features = ["Wdk_System_SystemServices", "Wdk_Foundation", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Ioctl"] }
 wasapi = "0.24"
 # System-tray icon for the "Minimize to tray" setting (see `src/tray.rs`). Exact pin: published 2026-10-07.
 tray-icon = { version = "=0.26.1", default-features = false }

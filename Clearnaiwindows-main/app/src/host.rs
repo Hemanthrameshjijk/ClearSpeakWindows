@@ -415,6 +415,23 @@ pub fn run_engine() {
         cpu_tenths: AtomicU32::new(u32::MAX),
     });
 
+    // License gate: every few seconds, switch off the features this PC's license does not allow (the trial allows all).
+    {
+        let host = host.clone();
+        crate::device_id::start_reading();
+        let _ = thread::Builder::new().name("clearnai-license-gate".into()).spawn(move || loop {
+            thread::sleep(Duration::from_secs(5));
+            let devices = crate::device_id::texts();
+            if devices.is_empty() {
+                continue; // still reading this PC's identity
+            }
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let settings = host.settings.lock().unwrap().clone();
+            let status = crate::license_gate::status_for(&settings, &devices, now, crate::clock_guard::registry_mark());
+            crate::license_gate::enforce(&host.handles, crate::license_gate::allowed(&status));
+        });
+    }
+
     // Tray menu, tray icon clicks and the Ctrl+Shift+M hotkey. They only touch the engine's own switches, so they work
     // with no window open.
     {

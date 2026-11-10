@@ -52,6 +52,9 @@ pub struct Settings {
     /// Unix seconds of the first launch; the free trial counts from it. 0 = not started yet.
     #[serde(default)]
     pub first_run_at: u64,
+    /// The latest time this app has seen (unix seconds); a clock set far behind it is treated as wrong. See `clock_guard`.
+    #[serde(default)]
+    pub last_seen_at: u64,
     /// Layout version of this file (1 = current). Lets a later release migrate old files instead of guessing.
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -245,6 +248,7 @@ impl Default for Settings {
             user_email: String::new(),
             license_key: String::new(),
             first_run_at: 0,
+            last_seen_at: 0,
             schema_version: default_schema_version(),
             aec_on: false,
             echo_cancel_on: true,

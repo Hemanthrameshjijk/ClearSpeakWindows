@@ -267,6 +267,8 @@ pub struct AlertInput {
     pub mic_too_quiet: bool,
     /// The free trial is over and no valid license key is entered.
     pub license_needed: bool,
+    /// The PC's clock is far behind the latest time ClearNAI has seen.
+    pub clock_wrong: bool,
 }
 
 /// Ticks (250 ms each) of mic input looked at before deciding the mic is too quiet for the accent.
@@ -357,6 +359,9 @@ pub fn alerts(i: &AlertInput) -> Vec<Alert> {
             key: "mic-quiet",
             text: "Your microphone is quiet, so the accent will sound worse. Raise Mic sensitivity, or tap Set for my mic and speak for 5 seconds.".into(),
         });
+    }
+    if i.clock_wrong {
+        out.push(Alert { key: "clock", text: "The date and time on this PC look wrong, so the license cannot be checked. Set the correct date and time.".into() });
     }
     if i.license_needed {
         out.push(Alert { key: "license", text: "Your free trial has ended. Open Profile and enter your license key to keep using ClearNAI.".into() });
