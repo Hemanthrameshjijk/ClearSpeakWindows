@@ -1,0 +1,150 @@
+{
+  "note": "TEST ONLY key. Signed with seed bytes 0..31.",
+  "public_key_hex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+  "now": 1800000000,
+  "device_codes": {
+    "pc_a": "FRRK-JHUS-RVKC-OD2L-PDBR-23JB-RUVC-E46A",
+    "pc_b": "JNB6-ZE3U-NGQC-OHVQ-PDBR-23JB-VWT4-FUAB",
+    "junk": "FGLW-CNQZ-DRA5-F7Y5-PDBR-23JB"
+  },
+  "components": {
+    "pc_a": {
+      "guid": "11111111-aaaa-bbbb-cccc-000000000001",
+      "bios": "SN-A-0001",
+      "cpu": "BFEBFBFF000906EA",
+      "disk": "DISK-A-0001"
+    },
+    "pc_b": {
+      "guid": "22222222-aaaa-bbbb-cccc-000000000002",
+      "bios": "SN-B-0002",
+      "cpu": "BFEBFBFF000906EA",
+      "disk": "DISK-B-0002"
+    },
+    "junk": {
+      "guid": "33333333-aaaa-bbbb-cccc-000000000003",
+      "bios": "To Be Filled By O.E.M.",
+      "cpu": "BFEBFBFF000906EA",
+      "disk": null
+    }
+  },
+  "cases": [
+    {
+      "name": "valid on the same PC",
+      "token": "CLNAI1.eyJkZXYiOlsiRlJSS0pIVVMiLCJSVktDT0QyTCIsIlBEQlIyM0pCIiwiUlVWQ0U0NkEiXSwiZXhwIjoxODAyNTkyMDAwLCJmZWF0IjpbImFjY2VudCIsImJ2YyIsIm5jIl0sImlhdCI6MTc5OTkxMzYwMCwibGlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwibWluIjoyLCJuYW1lIjoiQXNoYSBSYW8iLCJvcmciOiJvcmctMSIsInVpZCI6InVzZXItMSIsInYiOjF9.OdyUeYfRVjqtho_z7HyRE-RTXttyMbpPl9FRBXXBGe2N5HU_vf-GUiOrN74uqs9Mzz_ObMF2HGM_jg-FDsCUCg",
+      "current": [
+        "FRRKJHUS",
+        "RVKCOD2L",
+        "PDBR23JB",
+        "RUVCE46A"
+      ],
+      "now": 1800000000,
+      "expect": "ok"
+    },
+    {
+      "name": "one component changed still matches",
+      "token": "CLNAI1.eyJkZXYiOlsiRlJSS0pIVVMiLCJSVktDT0QyTCIsIlBEQlIyM0pCIiwiUlVWQ0U0NkEiXSwiZXhwIjoxODAyNTkyMDAwLCJmZWF0IjpbImFjY2VudCIsImJ2YyIsIm5jIl0sImlhdCI6MTc5OTkxMzYwMCwibGlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwibWluIjoyLCJuYW1lIjoiQXNoYSBSYW8iLCJvcmciOiJvcmctMSIsInVpZCI6InVzZXItMSIsInYiOjF9.OdyUeYfRVjqtho_z7HyRE-RTXttyMbpPl9FRBXXBGe2N5HU_vf-GUiOrN74uqs9Mzz_ObMF2HGM_jg-FDsCUCg",
+      "current": [
+        "FRRKJHUS",
+        "RVKCOD2L",
+        "YSVXQAOX",
+        "RUVCE46A"
+      ],
+      "now": 1800000000,
+      "expect": "ok"
+    },
+    {
+      "name": "two components changed is refused",
+      "token": "CLNAI1.eyJkZXYiOlsiRlJSS0pIVVMiLCJSVktDT0QyTCIsIlBEQlIyM0pCIiwiUlVWQ0U0NkEiXSwiZXhwIjoxODAyNTkyMDAwLCJmZWF0IjpbImFjY2VudCIsImJ2YyIsIm5jIl0sImlhdCI6MTc5OTkxMzYwMCwibGlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwibWluIjoyLCJuYW1lIjoiQXNoYSBSYW8iLCJvcmciOiJvcmctMSIsInVpZCI6InVzZXItMSIsInYiOjF9.OdyUeYfRVjqtho_z7HyRE-RTXttyMbpPl9FRBXXBGe2N5HU_vf-GUiOrN74uqs9Mzz_ObMF2HGM_jg-FDsCUCg",
+      "current": [
+        "FRRKJHUS",
+        "IKRGKELA",
+        "YSVXQAOX"
+      ],
+      "now": 1800000000,
+      "expect": "wrong device"
+    },
+    {
+      "name": "another PC with the same CPU model",
+      "token": "CLNAI1.eyJkZXYiOlsiRlJSS0pIVVMiLCJSVktDT0QyTCIsIlBEQlIyM0pCIiwiUlVWQ0U0NkEiXSwiZXhwIjoxODAyNTkyMDAwLCJmZWF0IjpbImFjY2VudCIsImJ2YyIsIm5jIl0sImlhdCI6MTc5OTkxMzYwMCwibGlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwibWluIjoyLCJuYW1lIjoiQXNoYSBSYW8iLCJvcmciOiJvcmctMSIsInVpZCI6InVzZXItMSIsInYiOjF9.OdyUeYfRVjqtho_z7HyRE-RTXttyMbpPl9FRBXXBGe2N5HU_vf-GUiOrN74uqs9Mzz_ObMF2HGM_jg-FDsCUCg",
+      "current": [
+        "JNB6ZE3U",
+        "NGQCOHVQ",
+        "PDBR23JB",
+        "VWT4FUAB"
+      ],
+      "now": 1800000000,
+      "expect": "wrong device"
+    },
+    {
+      "name": "expired",
+      "token": "CLNAI1.eyJkZXYiOlsiRlJSS0pIVVMiLCJSVktDT0QyTCIsIlBEQlIyM0pCIiwiUlVWQ0U0NkEiXSwiZXhwIjoxNzk5OTk5OTk5LCJmZWF0IjpbImFjY2VudCIsImJ2YyIsIm5jIl0sImlhdCI6MTc5OTkxMzYwMCwibGlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwibWluIjoyLCJuYW1lIjoiQXNoYSBSYW8iLCJvcmciOiJvcmctMSIsInVpZCI6InVzZXItMSIsInYiOjF9.Q_TI0qCFozoz60mpowSSf7MWcYaHanU0t_7DowmtedHvDq-T7jdX2_0v7ADVQ6B2isih33QHr3OdVnEapzNcBQ",
+      "current": [
+        "FRRKJHUS",
+        "RVKCOD2L",
+        "PDBR23JB",
+        "RUVCE46A"
+      ],
+      "now": 1800000000,
+      "expect": "expired"
+    },
+    {
+      "name": "not yet valid (clock set far back)",
+      "token": "CLNAI1.eyJkZXYiOlsiRlJSS0pIVVMiLCJSVktDT0QyTCIsIlBEQlIyM0pCIiwiUlVWQ0U0NkEiXSwiZXhwIjoxODAzNDU2MDAwLCJmZWF0IjpbImFjY2VudCIsImJ2YyIsIm5jIl0sImlhdCI6MTgwMDg2NDAwMCwibGlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwibWluIjoyLCJuYW1lIjoiQXNoYSBSYW8iLCJvcmciOiJvcmctMSIsInVpZCI6InVzZXItMSIsInYiOjF9.qkyPYSgFh6_akbGmnk1Hj_kImxdh246DiH7cYkBVwp94TvvZVhARC-bUdQ8J8yVX0zaNSTk-mmn3KXKOkK_CDg",
+      "current": [
+        "FRRKJHUS",
+        "RVKCOD2L",
+        "PDBR23JB",
+        "RUVCE46A"
+      ],
+      "now": 1800000000,
+      "expect": "not yet valid"
+    },
+    {
+      "name": "edited name keeps the old signature",
+      "token": "CLNAI1.eyJkZXYiOlsiRlJSS0pIVVMiLCJSVktDT0QyTCIsIlBEQlIyM0pCIiwiUlVWQ0U0NkEiXSwiZXhwIjoxODAyNTkyMDAwLCJmZWF0IjpbImFjY2VudCIsImJ2YyIsIm5jIl0sImlhdCI6MTc5OTkxMzYwMCwibGlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwibWluIjoyLCJuYW1lIjoiRXZlIFJhbyEiLCJvcmciOiJvcmctMSIsInVpZCI6InVzZXItMSIsInYiOjF9.OdyUeYfRVjqtho_z7HyRE-RTXttyMbpPl9FRBXXBGe2N5HU_vf-GUiOrN74uqs9Mzz_ObMF2HGM_jg-FDsCUCg",
+      "current": [
+        "FRRKJHUS",
+        "RVKCOD2L",
+        "PDBR23JB",
+        "RUVCE46A"
+      ],
+      "now": 1800000000,
+      "expect": "bad signature"
+    },
+    {
+      "name": "not a token",
+      "token": "hello",
+      "current": [
+        "FRRKJHUS",
+        "RVKCOD2L",
+        "PDBR23JB",
+        "RUVCE46A"
+      ],
+      "now": 1800000000,
+      "expect": "malformed"
+    },
+    {
+      "name": "placeholder BIOS never matches another placeholder PC",
+      "token": "CLNAI1.eyJkZXYiOlsiRkdMV0NOUVoiLCJEUkE1RjdZNSIsIlBEQlIyM0pCIl0sImV4cCI6MTgwMjU5MjAwMCwiZmVhdCI6WyJhY2NlbnQiLCJidmMiLCJuYyJdLCJpYXQiOjE3OTk5MTM2MDAsImxpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsIm1pbiI6MiwibmFtZSI6IkFzaGEgUmFvIiwib3JnIjoib3JnLTEiLCJ1aWQiOiJ1c2VyLTEiLCJ2IjoxfQ.Sze6Og0d1v-3lQ3j3nWg5_oUndDRcrPgqOXzxs4eeaYvpe6fBO7UeiEjv41-9Fh3DP7lMWpMgHGDV6uz5UCyBQ",
+      "current": [
+        "VWUS5JFB",
+        "DRA5F7Y5",
+        "PDBR23JB",
+        "VWT4FUAB"
+      ],
+      "now": 1800000000,
+      "expect": "wrong device"
+    },
+    {
+      "name": "placeholder BIOS PC still matches itself via guid + cpu",
+      "token": "CLNAI1.eyJkZXYiOlsiRkdMV0NOUVoiLCJEUkE1RjdZNSIsIlBEQlIyM0pCIl0sImV4cCI6MTgwMjU5MjAwMCwiZmVhdCI6WyJhY2NlbnQiLCJidmMiLCJuYyJdLCJpYXQiOjE3OTk5MTM2MDAsImxpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsIm1pbiI6MiwibmFtZSI6IkFzaGEgUmFvIiwib3JnIjoib3JnLTEiLCJ1aWQiOiJ1c2VyLTEiLCJ2IjoxfQ.Sze6Og0d1v-3lQ3j3nWg5_oUndDRcrPgqOXzxs4eeaYvpe6fBO7UeiEjv41-9Fh3DP7lMWpMgHGDV6uz5UCyBQ",
+      "current": [
+        "FGLWCNQZ",
+        "DRA5F7Y5",
+        "PDBR23JB"
+      ],
+      "now": 1800000000,
+      "expect": "ok"
+    }
+  ]
+}

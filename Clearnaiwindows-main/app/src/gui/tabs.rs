@@ -389,10 +389,13 @@ fn page_action(state: &MainState) -> Element<'_, Message> {
     }
 }
 
-/// Where this copy stands: licensed, in the free trial, or neither.
+/// Where this copy stands: licensed, in the free trial, or neither (refreshed on every Tick).
 pub(super) fn license_status(state: &MainState) -> license::Status {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    license::status(&state.settings.license_key, &crate::license_key::PUBLIC_KEY, state.settings.first_run_at, now)
+    state.license_status.clone()
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// The Profile page: who you are (name, email, avatar) and the license.
@@ -421,7 +424,7 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
     let shown_email = if state.settings.user_email.trim().is_empty() { "Add your email below".to_string() } else { state.settings.user_email.clone() };
     let identity = row![
         avatar,
-        column![text(shown_name).size(22).font(bold()), text(shown_email).size(13).color(t.muted), text(ui_logic::license_line(&status)).size(13).color(status_color)]
+        column![text(shown_name).size(22).font(bold()), text(shown_email).size(13).color(t.muted), text(ui_logic::license_line(&status, now_secs())).size(13).color(status_color)]
             .spacing(4)
             .width(Length::Fill),
     ]
@@ -447,9 +450,20 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
     }
 
     let mut licence = column![
-        card_head(state, icons::SHIELD, style::Accent::Blue, "License", None, "Paste the key you were given. It is checked on this PC.", None),
-        text(ui_logic::license_line(&status)).size(14).color(status_color),
-        text_input("CLNAI-...", &state.license_input).on_input(Message::LicenseInput).on_submit(Message::ApplyLicense).padding([10, 12]).size(14),
+        card_head(state, icons::SHIELD, style::Accent::Blue, "License", None, "Your admin issues a license for this PC. It works offline until it expires.", None),
+        text(ui_logic::license_line(&status, now_secs())).size(14).color(status_color),
+        column![
+            text("This PC's Device Code").size(13).color(t.muted),
+            row![
+                text(crate::device_id::code().unwrap_or_else(|| "Reading this PC...".to_string())).size(15).font(iced::Font::MONOSPACE).width(Length::Fill),
+                btn(text("Copy").size(13)).padding([7, 14]).on_press(Message::CopyDeviceCode).style(style::outline),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+            text("Send this code to your admin. The license they send back works only on this PC.").size(12).color(t.muted),
+        ]
+        .spacing(6),
+        text_input("Paste your license here (CLNAI1.…)", &state.license_input).on_input(Message::LicenseInput).on_submit(Message::ApplyLicense).padding([10, 12]).size(14),
         row![btn(text("Apply key").size(13).font(bold())).padding([9, 18]).on_press(Message::ApplyLicense).style(style::primary)].spacing(10),
     ]
     .spacing(16);
@@ -633,7 +647,7 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
                 }),
             column![
                 text(if state.settings.user_name.trim().is_empty() { "Add your name".to_string() } else { state.settings.user_name.clone() }).size(16).font(bold()),
-                text(ui_logic::license_line(&license_status(state))).size(11).color(t.muted),
+                text(ui_logic::license_line(&license_status(state), now_secs())).size(11).color(t.muted),
             ]
             .spacing(1),
             container(text("")).width(Length::Fill),

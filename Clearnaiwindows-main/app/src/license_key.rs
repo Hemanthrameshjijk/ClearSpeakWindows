@@ -6,15 +6,25 @@ pub const PUBLIC_KEY: [u8; 32] = [
     0x91, 0xb0, 0x66, 0x3c, 0x86, 0x9d, 0x27, 0xd6, 0xa3, 0x54, 0xe8,
 ];
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 
-    /// Optional end-to-end check: `CLEARNAI_TEST_LICENSE=<key made by licensegen> cargo test -p clearnai-app --lib license_key`.
+    /// End-to-end on this PC: `CLEARNAI_TEST_TOKEN=<token made by licensegen for this PC's Device Code>
+    /// cargo test -p clearnai-app --lib license_key -- --ignored`. Needs PowerShell (reads the real hardware).
     #[test]
-    fn a_key_made_with_the_owners_secret_verifies_with_the_built_in_public_key() {
-        let Ok(key) = std::env::var("CLEARNAI_TEST_LICENSE") else { return };
-        let l = license::verify(&key, &PUBLIC_KEY, 0).expect("the key must verify with the built-in public key");
-        assert!(!l.name.is_empty());
+    #[ignore]
+    fn a_token_made_for_this_pc_verifies_with_the_built_in_public_key() {
+        let token = std::env::var("CLEARNAI_TEST_TOKEN").expect("set CLEARNAI_TEST_TOKEN");
+        crate::device_id::start_reading();
+        for _ in 0..100 {
+            if crate::device_id::components().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let p = license::token::verify(&token, &PUBLIC_KEY, &crate::device_id::texts(), now).expect("must verify on this PC");
+        println!("verified: {} features {:?}", p.name, p.feat);
     }
 }

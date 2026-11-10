@@ -15,6 +15,8 @@
 //! and test anywhere. `engine`, `host` and the pipe halves of `ipc`/`remote` only exist on Windows.
 
 pub mod crash;
+pub mod device_id;
+pub mod dpapi;
 pub mod device_rules;
 pub mod gui;
 pub mod ipc;

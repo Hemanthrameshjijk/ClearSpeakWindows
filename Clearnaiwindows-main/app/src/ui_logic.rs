@@ -334,13 +334,19 @@ pub fn email_looks_valid(email: &str) -> bool {
 }
 
 /// The one line shown under the name in the sidebar and on the Profile page.
-pub fn license_line(status: &license::Status) -> String {
+pub fn license_line(status: &license::Status, now: u64) -> String {
     match status {
-        license::Status::Licensed(l) if l.exp == 0 => format!("Licensed to {}", l.name),
-        license::Status::Licensed(l) => format!("Licensed to {} (valid until day {})", l.name, l.exp / 86_400),
+        license::Status::Licensed(p) => {
+            let days = p.exp.saturating_sub(now).div_ceil(86_400);
+            match days {
+                1 => format!("Licensed to {}: expires tomorrow", p.name),
+                d if d <= 14 => format!("Licensed to {}: {d} days left", p.name),
+                _ => format!("Licensed to {}", p.name),
+            }
+        }
         license::Status::Trial { days_left: 1 } => "Free trial: 1 day left".to_string(),
         license::Status::Trial { days_left } => format!("Free trial: {days_left} days left"),
-        license::Status::TrialOver => "Trial ended: enter a license key".to_string(),
+        license::Status::TrialOver => "Trial ended: enter a license".to_string(),
     }
 }
 
@@ -440,11 +446,14 @@ mod tests {
 
     #[test]
     fn license_line_says_who_and_how_long() {
-        let l = license::Licensee { name: "Asha".into(), email: "a@b.co".into(), exp: 0 };
-        assert_eq!(license_line(&license::Status::Licensed(l)), "Licensed to Asha");
-        assert_eq!(license_line(&license::Status::Trial { days_left: 1 }), "Free trial: 1 day left");
-        assert_eq!(license_line(&license::Status::Trial { days_left: 9 }), "Free trial: 9 days left");
-        assert!(license_line(&license::Status::TrialOver).contains("license key"));
+        let p = |exp| license::Payload { v: 1, lid: "l".into(), org: "o".into(), uid: "u".into(), name: "Asha".into(), dev: vec![], min: 2, feat: vec![], iat: 0, exp };
+        let day = 86_400;
+        assert_eq!(license_line(&license::Status::Licensed(p(100 * day)), 0), "Licensed to Asha");
+        assert_eq!(license_line(&license::Status::Licensed(p(5 * day)), 0), "Licensed to Asha: 5 days left");
+        assert_eq!(license_line(&license::Status::Licensed(p(day)), 0), "Licensed to Asha: expires tomorrow");
+        assert_eq!(license_line(&license::Status::Trial { days_left: 1 }, 0), "Free trial: 1 day left");
+        assert_eq!(license_line(&license::Status::Trial { days_left: 9 }, 0), "Free trial: 9 days left");
+        assert!(license_line(&license::Status::TrialOver, 0).contains("license"));
         let needed = AlertInput { license_needed: true, ..Default::default() };
         assert!(alerts(&needed).iter().any(|a| a.key == "license"));
     }

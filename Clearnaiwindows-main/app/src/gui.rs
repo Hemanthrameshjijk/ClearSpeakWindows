@@ -144,6 +144,9 @@ struct MainState {
     /// The license key being typed on the Profile page, and the result of the last Apply.
     license_input: String,
     license_note: Option<String>,
+    /// The decrypted stored token and what it (and the trial) currently mean; refreshed on Tick.
+    license_token: String,
+    license_status: license::Status,
     /// How many Ticks in a row the accent has been paused (the banner waits for a lasting pause, not a blip).
     accent_paused_ticks: u32,
 }
@@ -165,6 +168,7 @@ impl MainState {
         warnings: Vec<String>,
         keepalive: Option<Box<dyn std::any::Any + Send>>,
     ) -> Self {
+        let license_token = crate::dpapi::unprotect(&settings.license_key);
         Self {
             settings,
             handles,
@@ -198,6 +202,8 @@ impl MainState {
             accent_paused_ticks: 0,
             license_input: String::new(),
             license_note: None,
+            license_token,
+            license_status: license::Status::Trial { days_left: license::TRIAL_DAYS as u32 },
         }
     }
 }
@@ -288,6 +294,8 @@ pub enum Message {
     ProfileEmail(String),
     LicenseInput(String),
     ApplyLicense,
+    /// Copy this PC's Device Code to the clipboard.
+    CopyDeviceCode,
     /// Accent conversion on/off - its own switch, independent of BVC.
     ToggleAccent(bool),
     /// Accent voice picker (label from `accent_onnx::VOICE_CHOICES`).
@@ -482,6 +490,15 @@ fn open_full(state: &mut MainState, tab: Tab) -> iced::Task<Message> {
 }
 
 /// The engine is the only writer of `settings.json`: send it the window's settings and it saves them.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// What the stored token (if any) and the trial mean for this PC right now.
+fn compute_license(token: &str, first_run_at: u64) -> license::Status {
+    license::status(token, &crate::license_key::PUBLIC_KEY, &crate::device_id::texts(), first_run_at, now_secs())
+}
+
 fn persist(settings: &Settings) {
     crate::remote::save_settings(settings);
 }
@@ -636,6 +653,21 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
         }
         return iced::Task::none();
     }
+    if matches!(message, Message::CopyDeviceCode) {
+        if let Screen::Main(state) = screen {
+            return match crate::device_id::code() {
+                Some(code) => {
+                    state.license_note = Some("Device Code copied. Send it to your admin.".to_string());
+                    iced::clipboard::write(code)
+                }
+                None => {
+                    state.license_note = Some("Still reading this PC's details. Try again in a few seconds.".to_string());
+                    iced::Task::none()
+                }
+            };
+        }
+        return iced::Task::none();
+    }
     if matches!(message, Message::CopyTranscript) {
         if let Screen::Main(state) = screen {
             let (lines, _) = state.handles.transcript.snapshot(10_000);
@@ -746,7 +778,7 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
-    input.license_needed = matches!(crate::gui::tabs::license_status(state), license::Status::TrialOver);
+    input.license_needed = matches!(state.license_status, license::Status::TrialOver);
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
     for a in &alerts {
@@ -789,6 +821,7 @@ fn update_main(state: &mut MainState, message: Message) {
             state.status = classify_status(&percentiles, DEADLINE_NS, all_off);
             state.level = state.handles.level.load();
             state.input_level = state.handles.input_level.load();
+            state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
             // The free trial counts from the first launch.
             if state.settings.first_run_at == 0 {
                 state.settings.first_run_at =
@@ -963,22 +996,25 @@ fn update_main(state: &mut MainState, message: Message) {
             state.license_note = None;
         }
         Message::ApplyLicense => {
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             let key = state.license_input.trim().to_string();
-            match license::verify(&key, &crate::license_key::PUBLIC_KEY, now) {
-                Ok(l) => {
-                    state.settings.license_key = key;
-                    if state.settings.user_name.trim().is_empty() {
-                        state.settings.user_name = l.name.clone();
+            let devices = crate::device_id::texts();
+            if devices.is_empty() {
+                state.license_note = Some("Still reading this PC's details. Try again in a few seconds.".to_string());
+            } else {
+                match license::token::verify(&key, &crate::license_key::PUBLIC_KEY, &devices, now_secs()) {
+                    Ok(p) => {
+                        state.settings.license_key = crate::dpapi::protect(&key);
+                        state.license_token = key;
+                        if state.settings.user_name.trim().is_empty() {
+                            state.settings.user_name = p.name.clone();
+                        }
+                        state.license_note = Some(format!("License accepted. Licensed to {}.", p.name));
+                        state.license_input.clear();
+                        state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
+                        persist(&state.settings);
                     }
-                    if state.settings.user_email.trim().is_empty() {
-                        state.settings.user_email = l.email.clone();
-                    }
-                    state.license_note = Some(format!("License accepted. Licensed to {}.", l.name));
-                    state.license_input.clear();
-                    persist(&state.settings);
+                    Err(e) => state.license_note = Some(e.to_string()),
                 }
-                Err(e) => state.license_note = Some(e.to_string()),
             }
         }
         Message::SelectNrStrength(name) => {
@@ -1211,6 +1247,7 @@ fn update_main(state: &mut MainState, message: Message) {
         | Message::WindowClosed
         | Message::ToggleCompact
         | Message::CopyTranscript
+        | Message::CopyDeviceCode
         | Message::DragWindow
         | Message::PasswordInput(_)
         | Message::SubmitPassword
@@ -1405,6 +1442,8 @@ fn subscription(screen: &Screen) -> Subscription<Message> {
 
 /// Runs the window. Blocks until it is closed; the engine (a separate process) keeps running.
 pub fn run(initial: Initial) -> iced::Result {
+    // This PC's identity for the license check is read in the background (takes a second or two).
+    crate::device_id::start_reading();
     let (start_size, start_level) = window_size_and_level(initial.settings.compact_mode, initial.start_card);
     let start_compact = initial.settings.compact_mode;
     let start_card = initial.start_card;
