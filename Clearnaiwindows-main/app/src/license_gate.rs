@@ -23,7 +23,7 @@ pub fn allowed(status: &Status) -> Allowed {
     match status {
         Status::Trial { .. } => Allowed::ALL,
         Status::Licensed(p) => Allowed { nc: p.has_feature("nc"), bvc: p.has_feature("bvc"), accent: p.has_feature("accent") },
-        Status::TrialOver => Allowed::NONE,
+        Status::TrialOver | Status::SignIn => Allowed::NONE,
     }
 }
 
@@ -75,6 +75,7 @@ mod tests {
     fn the_trial_allows_everything_and_a_lapsed_copy_allows_nothing() {
         assert_eq!(allowed(&Status::Trial { days_left: 3 }), Allowed::ALL);
         assert_eq!(allowed(&Status::TrialOver), Allowed::NONE);
+        assert_eq!(allowed(&Status::SignIn), Allowed::NONE, "until someone signs in, the mic passes through untouched");
     }
 
     #[test]

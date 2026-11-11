@@ -205,7 +205,7 @@ impl MainState {
             license_input: String::new(),
             license_note: None,
             license_token,
-            license_status: license::Status::Trial { days_left: license::TRIAL_DAYS as u32 },
+            license_status: license::Status::SignIn,
             clock_wrong: false,
         }
     }
@@ -297,6 +297,10 @@ pub enum Message {
     ProfileEmail(String),
     LicenseInput(String),
     ApplyLicense,
+    /// Forget the license on this PC and go back to the sign-in page (the Device Code stays the same).
+    SignOut,
+    /// Start the 14-day free trial from the sign-in page (once per PC).
+    StartTrial,
     /// Copy this PC's Device Code to the clipboard.
     CopyDeviceCode,
     /// Choose a `.lic` file; its text is read and applied like a pasted license.
@@ -810,7 +814,7 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
-    input.license_needed = matches!(state.license_status, license::Status::TrialOver) && !state.clock_wrong;
+    input.license_needed = matches!(state.license_status, license::Status::TrialOver | license::Status::SignIn) && !state.clock_wrong;
     input.clock_wrong = state.clock_wrong;
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
@@ -869,12 +873,6 @@ fn update_main(state: &mut MainState, message: Message) {
                 }
             }
             state.license_status = if state.clock_wrong { license::Status::TrialOver } else { compute_license(&state.license_token, state.settings.first_run_at) };
-            // The free trial counts from the first launch.
-            if state.settings.first_run_at == 0 {
-                state.settings.first_run_at =
-                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                persist(&state.settings);
-            }
             state.io_counters_snapshot = IoCountersSnapshot::read(&state.handles.counters);
 
             let speaker_all_off = !state.handles.speaker_noise.is_on()
@@ -1062,6 +1060,26 @@ fn update_main(state: &mut MainState, message: Message) {
                     }
                     Err(e) => state.license_note = Some(e.to_string()),
                 }
+            }
+        }
+        Message::SignOut => {
+            state.settings.license_key.clear();
+            state.license_token.clear();
+            // Signing out must not hand out a fresh free trial: the trial counts as used.
+            if state.settings.first_run_at == 0 || state.settings.first_run_at > 1 {
+                state.settings.first_run_at = 1;
+            }
+            state.license_input.clear();
+            state.license_note = Some("Signed out. Paste a license to sign in again.".to_string());
+            state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
+            persist(&state.settings);
+        }
+        Message::StartTrial => {
+            if state.settings.first_run_at == 0 {
+                state.settings.first_run_at = now_secs();
+                state.license_note = None;
+                state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
+                persist(&state.settings);
             }
         }
         Message::SelectNrStrength(name) => {
@@ -1452,6 +1470,7 @@ fn view_setup(setup: &SetupState) -> Element<'_, Message> {
 fn view(screen: &Screen) -> Element<'_, Message> {
     match screen {
         Screen::Setup(setup) => view_setup(setup),
+        Screen::Main(state) if !state.settings.compact_mode && tabs::needs_sign_in(state) => tabs::view_sign_in(state),
         Screen::Main(state) if state.settings.compact_mode && state.card => tabs::view_card(state),
         Screen::Main(state) if state.settings.compact_mode => tabs::view_bar(state),
         Screen::Main(state) => tabs::view_full(state),

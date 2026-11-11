@@ -15,19 +15,21 @@ pub enum Status {
     Licensed(Payload),
     Trial { days_left: u32 },
     TrialOver,
+    /// No license and the free trial was never started: the app asks the user to sign in first.
+    SignIn,
 }
 
 pub const TRIAL_DAYS: u64 = 14;
 const DAY: u64 = 86_400;
 
 /// A valid token for this PC means licensed. Otherwise (no token, expired, other PC, ...) the 14-day trial counts from
-/// `first_run` (unix seconds, 0 = not started yet).
+/// `first_run` (unix seconds); 0 = the trial was never started, so the user must sign in (or start the trial) first.
 pub fn status(token: &str, public_key: &[u8; 32], current: &[String], first_run: u64, now: u64) -> Status {
     if let Ok(p) = token::verify(token, public_key, current, now) {
         return Status::Licensed(p);
     }
     if first_run == 0 {
-        return Status::Trial { days_left: TRIAL_DAYS as u32 };
+        return Status::SignIn;
     }
     let end = first_run + TRIAL_DAYS * DAY;
     if now < end {
@@ -51,7 +53,7 @@ mod tests {
         let secret = [5u8; 32];
         let pk = token::public_key_of(&secret);
         let me = pc();
-        assert_eq!(status("", &pk, &me, 0, 99), Status::Trial { days_left: 14 });
+        assert_eq!(status("", &pk, &me, 0, 99), Status::SignIn, "a new install asks for sign-in first");
         let start = 1_000_000;
         assert_eq!(status("", &pk, &me, start, start + 13 * DAY + 1), Status::Trial { days_left: 1 });
         assert_eq!(status("", &pk, &me, start, start + 14 * DAY), Status::TrialOver);

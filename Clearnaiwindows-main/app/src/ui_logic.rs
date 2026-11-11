@@ -349,6 +349,7 @@ pub fn license_line(status: &license::Status, now: u64) -> String {
         license::Status::Trial { days_left: 1 } => "Free trial: 1 day left".to_string(),
         license::Status::Trial { days_left } => format!("Free trial: {days_left} days left"),
         license::Status::TrialOver => "Trial ended: enter a license".to_string(),
+        license::Status::SignIn => "Not signed in".to_string(),
     }
 }
 

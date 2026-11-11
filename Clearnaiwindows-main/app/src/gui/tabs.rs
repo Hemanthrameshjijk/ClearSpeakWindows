@@ -384,7 +384,7 @@ fn page_action(state: &MainState) -> Element<'_, Message> {
         Tab::Profile => match license_status(state) {
             license::Status::Licensed(_) => chip("Licensed", ChipKind::Ok, dark),
             license::Status::Trial { .. } => chip("Free trial", ChipKind::Warn, dark),
-            license::Status::TrialOver => chip("Not licensed", ChipKind::Bad, dark),
+            license::Status::TrialOver | license::Status::SignIn => chip("Not licensed", ChipKind::Bad, dark),
         },
     }
 }
@@ -398,6 +398,64 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// The full window shows the sign-in page instead of the app until this PC has a license (or its free trial).
+pub fn needs_sign_in(state: &MainState) -> bool {
+    matches!(state.license_status, license::Status::SignIn | license::Status::TrialOver)
+}
+
+/// The sign-in page: this PC's Device Code (different on every PC, kept after sign-out) and a box for the license the
+/// admin made for it.
+pub fn view_sign_in(state: &MainState) -> Element<'_, Message> {
+    let dark = state.settings.theme_dark;
+    let t = style::tokens_for(dark);
+    let status = license_status(state);
+    let (title, lead) = if state.clock_wrong {
+        ("Check this PC's clock", "The date on this PC is earlier than when ClearNAI last ran. Correct the date and time, then try again.")
+    } else if matches!(status, license::Status::SignIn) {
+        (
+            "Sign in to ClearNAI",
+            "1. Send the Device Code below to your admin.   2. They add you and choose your features.   3. Paste the license they send you here.",
+        )
+    } else {
+        ("Sign in to continue", "Your free trial or license has ended. Paste a current license from your admin to continue.")
+    };
+    let code = crate::device_id::code().unwrap_or_else(|| "Reading this PC...".to_string());
+    let mut form = column![
+        text("This PC's Device Code").size(13).color(t.muted),
+        row![
+            text(code).size(17).font(iced::Font::MONOSPACE).width(Length::Fill),
+            btn(text("Copy").size(13)).padding([8, 16]).on_press(Message::CopyDeviceCode).style(style::outline),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
+        text("It is different on every PC and stays the same if you sign out.").size(12).color(t.muted),
+        text("License").size(13).color(t.muted),
+        text_input("Paste your license here (CLNAI1...)", &state.license_input)
+            .on_input(Message::LicenseInput)
+            .on_submit(Message::ApplyLicense)
+            .padding([10, 12])
+            .size(14),
+        row![
+            btn(text("Sign in").size(14).font(bold())).padding([10, 22]).on_press(Message::ApplyLicense).style(style::primary),
+            btn(text("Import .lic file").size(13)).padding([10, 18]).on_press(Message::ImportLicenseFile).style(style::outline),
+        ]
+        .spacing(10),
+    ]
+    .spacing(12);
+    if let Some(note) = &state.license_note {
+        form = form.push(text(note.clone()).size(13).color(t.warning));
+    }
+    if matches!(status, license::Status::SignIn) {
+        form = form.push(
+            btn(text("Try free for 14 days instead").size(13)).padding([9, 16]).on_press(Message::StartTrial).style(style::outline),
+        );
+    }
+    let page = column![logo_with_wordmark(dark, 34.0), text(title).size(26).font(bold()), text(lead).size(14).color(t.muted), card(form)]
+        .spacing(18)
+        .max_width(600);
+    scrollable(container(page).padding(32).width(Length::Fill).center_x(Length::Fill)).into()
+}
+
 /// The Profile page: who you are (name, email, avatar) and the license.
 fn profile_tab(state: &MainState) -> Element<'_, Message> {
     use super::icons;
@@ -407,7 +465,7 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
     let (status_color, _) = match &status {
         license::Status::Licensed(_) => (t.success, ()),
         license::Status::Trial { .. } => (t.warning, ()),
-        license::Status::TrialOver => (t.danger, ()),
+        license::Status::TrialOver | license::Status::SignIn => (t.danger, ()),
     };
 
     let avatar = container(text(ui_logic::initials(&state.settings.user_name)).size(26).font(bold()).color(Color::WHITE))
@@ -471,6 +529,16 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
         .spacing(10),
     ]
     .spacing(16);
+    if matches!(status, license::Status::Licensed(_)) {
+        licence = licence.push(
+            row![
+                text("Signing out removes the license from this PC. Your admin can send it again.").size(12).color(t.muted).width(Length::Fill),
+                btn(text("Sign out").size(13)).padding([9, 18]).on_press(Message::SignOut).style(style::outline),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        );
+    }
     if let Some(note) = &state.license_note {
         licence = licence.push(text(note.clone()).size(13).color(t.muted));
     }
