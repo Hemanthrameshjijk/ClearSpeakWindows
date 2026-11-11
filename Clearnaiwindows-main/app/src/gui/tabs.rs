@@ -214,6 +214,49 @@ fn setting_row<'a>(
     row![left, toggler(on).on_toggle(msg).size(24).style(style::toggle)].spacing(16).align_y(iced::Alignment::Center).into()
 }
 
+/// What the license allows on this PC now: everything in the free trial, nothing before sign-in.
+fn allowed(state: &MainState) -> crate::license_gate::Allowed {
+    crate::license_gate::allowed(&state.license_status)
+}
+
+/// Why a feature is locked, in a few words.
+fn locked_reason(state: &MainState) -> &'static str {
+    if matches!(state.license_status, license::Status::Licensed(_)) {
+        "Not included in your license"
+    } else {
+        "Sign in to use this"
+    }
+}
+
+/// A setting the license does not include: shown off and dimmed, the switch does nothing.
+fn locked_row<'a>(state: &MainState, title: &'a str) -> Element<'a, Message> {
+    let t = style::tokens_for(state.settings.theme_dark);
+    let why = locked_reason(state);
+    let row_el = row![
+        column![text(title).size(15).color(t.muted), text(why).size(13).color(t.muted)].spacing(4).width(Length::Fill),
+        toggler(false).size(24).style(style::toggle),
+    ]
+    .spacing(16)
+    .align_y(iced::Alignment::Center);
+    tip(row_el.into(), why, state.settings.theme_dark)
+}
+
+/// `setting_row` when the license allows it, `locked_row` otherwise.
+fn gated_row<'a>(
+    state: &MainState,
+    ok: bool,
+    title: &'a str,
+    desc: Option<&'a str>,
+    on: bool,
+    msg: impl Fn(bool) -> Message + 'a,
+) -> Element<'a, Message> {
+    if ok {
+        setting_row(state, title, desc, on, msg)
+    } else {
+        locked_row(state, title)
+    }
+}
+
 /// A setting the engine does not have yet: same look, dimmed, no handler.
 fn disabled_setting_row<'a>(state: &MainState, title: &'a str, desc: &'a str, on: bool) -> Element<'a, Message> {
     let t = style::tokens_for(state.settings.theme_dark);
@@ -1002,9 +1045,21 @@ pub fn view_bar(state: &MainState) -> Element<'_, Message> {
             dark,
         ),
         divider(),
-        tip(switch(icons::WAVE, h.mic_noise.is_on(), Message::ToggleMicNoise(!h.mic_noise.is_on())), "Noise removal", dark),
-        tip(switch(icons::PEOPLE, h.mic_bvc.is_on(), Message::ToggleMicBvc(!h.mic_bvc.is_on())), "Background voices", dark),
-        tip(switch(icons::TRANSLATE, state.settings.accent_on, Message::ToggleAccent(!state.settings.accent_on)), "Accent conversion", dark),
+        if allowed(state).nc {
+            tip(switch(icons::WAVE, h.mic_noise.is_on(), Message::ToggleMicNoise(!h.mic_noise.is_on())), "Noise removal", dark)
+        } else {
+            tip(switch(icons::WAVE, false, Message::OpenFullAt(Tab::Profile)), format!("Noise removal: {}", locked_reason(state)), dark)
+        },
+        if allowed(state).bvc {
+            tip(switch(icons::PEOPLE, h.mic_bvc.is_on(), Message::ToggleMicBvc(!h.mic_bvc.is_on())), "Background voices", dark)
+        } else {
+            tip(switch(icons::PEOPLE, false, Message::OpenFullAt(Tab::Profile)), format!("Background voices: {}", locked_reason(state)), dark)
+        },
+        if allowed(state).accent {
+            tip(switch(icons::TRANSLATE, state.settings.accent_on, Message::ToggleAccent(!state.settings.accent_on)), "Accent conversion", dark)
+        } else {
+            tip(switch(icons::TRANSLATE, false, Message::OpenFullAt(Tab::Profile)), format!("Accent conversion: {}", locked_reason(state)), dark)
+        },
         tip(switch(icons::CAPTIONS, state.settings.transcript_on, Message::ToggleTranscript(!state.settings.transcript_on)), "Live transcript", dark),
         tip(mute.into(), "Mute or unmute the microphone (Ctrl+Shift+M)", dark),
         tip(plain(icons::EXPAND, Message::ToggleCompact), "Open the full window", dark),
@@ -1159,7 +1214,11 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                         "Default microphone",
                         Message::SelectPhysicalMic,
                     ),
-                    switch_row("Cancel noise", "Background noise and voices".to_string(), t.muted, cancel_on, Message::ToggleCancelNoise),
+                    if allowed(state).nc || allowed(state).bvc {
+                        switch_row("Cancel noise", "Background noise and voices".to_string(), t.muted, cancel_on, Message::ToggleCancelNoise)
+                    } else {
+                        locked_row(state, "Cancel noise")
+                    },
                     row![
                         text("Noise reduction").size(13).color(t.muted),
                         container(text("")).width(Length::Fill),
@@ -1171,7 +1230,11 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
-                    switch_row("Convert my accent", accent_desc, accent_color, state.settings.accent_on, Message::ToggleAccent),
+                    if allowed(state).accent {
+                        switch_row("Convert my accent", accent_desc, accent_color, state.settings.accent_on, Message::ToggleAccent)
+                    } else {
+                        locked_row(state, "Convert my accent")
+                    },
                     row![
                         text("Accent voice").size(13).color(t.muted),
                         container(text("")).width(Length::Fill),
@@ -1328,9 +1391,11 @@ fn home_tab(state: &MainState, wide: bool, win_w: f32) -> Element<'_, Message> {
         }
         btn(container(r).width(Length::Fill).center_y(Length::Fill)).width(Length::FillPortion(1)).height(46).padding([0, 12]).on_press(msg).style(style::tile(on)).into()
     };
-    let t_noise = tile(icons::WAVES, "Noise", noise, Message::ToggleMicNoise(!noise));
-    let t_voices = tile(icons::HEADPHONES, "Background voices", voices, Message::ToggleMicBvc(!voices));
-    let t_accent = tile(icons::SPARKLES, "Accent", accent, Message::ToggleAccent(!accent));
+    let lic = allowed(state);
+    let to_profile = Message::SelectTab(Tab::Profile);
+    let t_noise = if lic.nc { tile(icons::WAVES, "Noise", noise, Message::ToggleMicNoise(!noise)) } else { tip(tile(icons::WAVES, "Noise", false, to_profile.clone()), locked_reason(state), dark) };
+    let t_voices = if lic.bvc { tile(icons::HEADPHONES, "Background voices", voices, Message::ToggleMicBvc(!voices)) } else { tip(tile(icons::HEADPHONES, "Background voices", false, to_profile.clone()), locked_reason(state), dark) };
+    let t_accent = if lic.accent { tile(icons::SPARKLES, "Accent", accent, Message::ToggleAccent(!accent)) } else { tip(tile(icons::SPARKLES, "Accent", false, to_profile), locked_reason(state), dark) };
     let t_studio = tile(icons::SLIDERS, "Studio", studio, Message::ToggleMicStudio(!studio));
     // Side by side only when the card is wide enough; otherwise a 2 x 2 grid so no label is squeezed.
     // Width left inside the card: the sidebar layout loses the sidebar and the page padding, the tab layout less.
@@ -1551,9 +1616,11 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
     let dark = state.settings.theme_dark;
     let t = style::tokens_for(dark);
 
-    let mut col = column![setting_row(state, "Noise removal", Some("Fans, typing, traffic"), h.mic_noise.is_on(), Message::ToggleMicNoise)].spacing(26);
-    col = col.push(setting_row(
+    let lic = allowed(state);
+    let mut col = column![gated_row(state, lic.nc, "Noise removal", Some("Fans, typing, traffic"), h.mic_noise.is_on(), Message::ToggleMicNoise)].spacing(26);
+    col = col.push(gated_row(
         state,
+        lic.bvc,
         "Background voice removal",
         Some("Removes other people talking near you. Choose the model in Advanced."),
         h.mic_bvc.is_on(),
@@ -1580,7 +1647,7 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
             h.echo_cancel.is_on(),
             Message::ToggleEchoCancel,
         ))
-        .push(setting_row(state, "Accent conversion", Some("Indian \u{2192} American English \u{00B7} adds about 0.5 s delay"), state.settings.accent_on, Message::ToggleAccent));
+        .push(gated_row(state, lic.accent, "Accent conversion", Some("Indian \u{2192} American English \u{00B7} adds about 0.5 s delay"), state.settings.accent_on, Message::ToggleAccent));
 
     // What the accent stage is REALLY doing (the switch only records the click): green = converting, amber = starting,
     // red = on but not converting, grey = off.
@@ -1649,7 +1716,7 @@ fn call_audio_tab(state: &MainState) -> Element<'_, Message> {
     col = col
         .push(row![text("\u{25CF}").size(10).color(t.success), text(status_text).size(15)].spacing(8).align_y(iced::Alignment::Center))
         .push(setting_row(state, "Call audio path enabled", None, h.speaker_master_enabled.is_on(), Message::ToggleSpeakerMasterEnabled))
-        .push(setting_row(state, "Noise removal", None, h.speaker_noise.is_on(), Message::ToggleSpeakerNoise))
+        .push(gated_row(state, allowed(state).nc, "Noise removal", None, h.speaker_noise.is_on(), Message::ToggleSpeakerNoise))
         .push(select_row(
             state,
             "Background voice model",

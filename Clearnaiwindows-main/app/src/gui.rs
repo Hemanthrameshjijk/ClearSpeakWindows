@@ -833,10 +833,34 @@ fn refresh_alerts(state: &mut MainState) {
     state.alerts = alerts;
 }
 
+/// True when `message` would switch on something the license does not allow (nothing before sign-in, only the licensed
+/// features after). Such clicks are ignored; the switches are drawn off and greyed out anyway.
+fn blocked_by_license(state: &MainState, message: &Message) -> bool {
+    let a = crate::license_gate::allowed(&state.license_status);
+    match message {
+        Message::ToggleMicNoise(true) | Message::ToggleSpeakerNoise(true) => !a.nc,
+        Message::ToggleMicBvc(true) => !a.bvc,
+        Message::ToggleCancelNoise(true) => !a.nc && !a.bvc,
+        Message::ToggleAccent(true) => !a.accent,
+        _ => false,
+    }
+}
+
 fn update_main(state: &mut MainState, message: Message) {
+    if blocked_by_license(state, &message) {
+        state.license_note = Some("Sign in with a license that includes this feature to use it.".to_string());
+        return;
+    }
     match message {
         Message::Tick => {
             refresh_alerts(state);
+            // What the license does not allow is shown off (the engine switches it off too, see `license_gate`).
+            {
+                let a = crate::license_gate::allowed(&state.license_status);
+                if !a.accent && state.settings.accent_on {
+                    update_main(state, Message::ToggleAccent(false));
+                }
+            }
             // The window mirrors the engine: latency percentiles are computed there and sent over.
             let (percentiles, speaker_percentiles) = match &state.handles.remote {
                 Some(live) => (*live.mic_pct.lock().unwrap(), *live.speaker_pct.lock().unwrap()),
