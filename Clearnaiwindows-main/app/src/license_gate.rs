@@ -1,7 +1,7 @@
 //! Turns the license state into what the engine may run. Lives in the engine (the always-on process), so closing the
 //! window or editing the window's toggles does not get around it.
 //!
-//! Free trial: everything on. Licensed: the features in the token. Trial over, no valid license, or a clock turned back:
+//! Licensed: the features in the token. Not signed in, a license that no longer works here, or a clock turned back:
 //! the three processing features are off and the microphone passes through untouched (calls keep working).
 
 use crate::settings::Settings;
@@ -21,9 +21,8 @@ impl Allowed {
 
 pub fn allowed(status: &Status) -> Allowed {
     match status {
-        Status::Trial { .. } => Allowed::ALL,
         Status::Licensed(p) => Allowed { nc: p.has_feature("nc"), bvc: p.has_feature("bvc"), accent: p.has_feature("accent") },
-        Status::TrialOver | Status::SignIn => Allowed::NONE,
+        Status::Ended | Status::SignIn => Allowed::NONE,
     }
 }
 
@@ -31,10 +30,10 @@ pub fn allowed(status: &Status) -> Allowed {
 pub fn status_for(settings: &Settings, devices: &[String], now: u64, registry_mark: u64) -> Status {
     let seen = settings.last_seen_at.max(registry_mark);
     if crate::clock_guard::rolled_back(seen, now) {
-        return Status::TrialOver;
+        return Status::Ended;
     }
     let token = crate::dpapi::unprotect(&settings.license_key);
-    license::status(&token, &crate::license_key::PUBLIC_KEY, devices, settings.first_run_at, now)
+    license::status(&token, &crate::license_key::PUBLIC_KEY, devices, now)
 }
 
 /// Switches off whatever the license does not allow. Only ever turns things off.
@@ -73,9 +72,8 @@ mod tests {
     }
 
     #[test]
-    fn the_trial_allows_everything_and_a_lapsed_copy_allows_nothing() {
-        assert_eq!(allowed(&Status::Trial { days_left: 3 }), Allowed::ALL);
-        assert_eq!(allowed(&Status::TrialOver), Allowed::NONE);
+    fn without_a_working_license_nothing_is_allowed() {
+        assert_eq!(allowed(&Status::Ended), Allowed::NONE);
         assert_eq!(allowed(&Status::SignIn), Allowed::NONE, "until someone signs in, the mic passes through untouched");
     }
 
@@ -90,11 +88,9 @@ mod tests {
     fn a_turned_back_clock_means_no_license() {
         let mut s = Settings::default();
         s.last_seen_at = 10_000_000;
-        s.first_run_at = 9_000_000;
-        assert_eq!(status_for(&s, &[], 10_000_000 - 2 * 86_400, 0), Status::TrialOver);
-        assert!(matches!(status_for(&s, &[], 10_000_000 + 60, 0), Status::Trial { .. }));
-        let mut reg_only = Settings::default();
-        reg_only.first_run_at = 9_000_000;
-        assert_eq!(status_for(&reg_only, &[], 10_000_000 - 2 * 86_400, 10_000_000), Status::TrialOver, "the registry mark counts too");
+        assert_eq!(status_for(&s, &[], 10_000_000 - 2 * 86_400, 0), Status::Ended);
+        assert_eq!(status_for(&s, &[], 10_000_000 + 60, 0), Status::SignIn, "a right clock and no license: sign in");
+        let reg_only = Settings::default();
+        assert_eq!(status_for(&reg_only, &[], 10_000_000 - 2 * 86_400, 10_000_000), Status::Ended, "the registry mark counts too");
     }
 }

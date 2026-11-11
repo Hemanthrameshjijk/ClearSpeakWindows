@@ -1,4 +1,4 @@
-//! Deters turning the PC's clock back to stretch a license or the trial. The latest time the app has seen is kept in two
+//! Deters turning the PC's clock back to stretch a license. The latest time the app has seen is kept in two
 //! places (the settings file and the registry); a clock that is more than a day behind it is "wrong" and the license is
 //! not honoured until the date is fixed. A deterrent only: someone who edits both places defeats it.
 

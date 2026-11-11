@@ -346,9 +346,7 @@ pub fn license_line(status: &license::Status, now: u64) -> String {
                 _ => format!("Licensed to {}", p.name),
             }
         }
-        license::Status::Trial { days_left: 1 } => "Free trial: 1 day left".to_string(),
-        license::Status::Trial { days_left } => format!("Free trial: {days_left} days left"),
-        license::Status::TrialOver => "Trial ended: enter a license".to_string(),
+        license::Status::Ended => "License ended: sign in again".to_string(),
         license::Status::SignIn => "Not signed in".to_string(),
     }
 }
@@ -365,7 +363,7 @@ pub fn alerts(i: &AlertInput) -> Vec<Alert> {
         out.push(Alert { key: "clock", text: "The date and time on this PC look wrong, so the license cannot be checked. Set the correct date and time.".into() });
     }
     if i.license_needed {
-        out.push(Alert { key: "license", text: "Your free trial has ended. Open Profile and enter your license key to keep using ClearNAI.".into() });
+        out.push(Alert { key: "license", text: "You are not signed in, or your license has ended. Open ClearNAI and sign in with the license from your admin.".into() });
     }
     if i.engine_disconnected {
         out.push(Alert { key: "engine-disconnected", text: "Lost contact with the ClearNAI background engine. Reconnecting; audio keeps running if the engine is still alive.".into() });
@@ -457,9 +455,8 @@ mod tests {
         assert_eq!(license_line(&license::Status::Licensed(p(100 * day)), 0), "Licensed to Asha");
         assert_eq!(license_line(&license::Status::Licensed(p(5 * day)), 0), "Licensed to Asha: 5 days left");
         assert_eq!(license_line(&license::Status::Licensed(p(day)), 0), "Licensed to Asha: expires tomorrow");
-        assert_eq!(license_line(&license::Status::Trial { days_left: 1 }, 0), "Free trial: 1 day left");
-        assert_eq!(license_line(&license::Status::Trial { days_left: 9 }, 0), "Free trial: 9 days left");
-        assert!(license_line(&license::Status::TrialOver, 0).contains("license"));
+        assert!(license_line(&license::Status::Ended, 0).contains("sign in"));
+        assert_eq!(license_line(&license::Status::SignIn, 0), "Not signed in");
         let needed = AlertInput { license_needed: true, ..Default::default() };
         assert!(alerts(&needed).iter().any(|a| a.key == "license"));
     }

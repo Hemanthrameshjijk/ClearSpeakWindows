@@ -415,7 +415,7 @@ pub fn run_engine() {
         cpu_tenths: AtomicU32::new(u32::MAX),
     });
 
-    // License gate: every few seconds, switch off the features this PC's license does not allow (the trial allows all).
+    // License gate: every few seconds, switch off the features this PC's license does not allow (nothing without a working license).
     {
         let host = host.clone();
         crate::device_id::start_reading();

@@ -144,7 +144,7 @@ struct MainState {
     /// The license key being typed on the Profile page, and the result of the last Apply.
     license_input: String,
     license_note: Option<String>,
-    /// The decrypted stored token and what it (and the trial) currently mean; refreshed on Tick.
+    /// The decrypted stored token and what it currently means; refreshed on Tick.
     license_token: String,
     license_status: license::Status,
     /// The PC's clock is far behind the latest time seen (see `clock_guard`): the license is not honoured meanwhile.
@@ -297,8 +297,6 @@ pub enum Message {
     ApplyLicense,
     /// Forget the license on this PC and go back to the sign-in page (the Device Code stays the same).
     SignOut,
-    /// Start the 14-day free trial from the sign-in page (once per PC).
-    StartTrial,
     /// Copy this PC's Device Code to the clipboard.
     CopyDeviceCode,
     /// Choose a `.lic` file; its text is read and applied like a pasted license.
@@ -502,9 +500,9 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// What the stored token (if any) and the trial mean for this PC right now.
-fn compute_license(token: &str, first_run_at: u64) -> license::Status {
-    license::status(token, &crate::license_key::PUBLIC_KEY, &crate::device_id::texts(), first_run_at, now_secs())
+/// What the stored token (if any) means for this PC right now.
+fn compute_license(token: &str) -> license::Status {
+    license::status(token, &crate::license_key::PUBLIC_KEY, &crate::device_id::texts(), now_secs())
 }
 
 fn persist(settings: &Settings) {
@@ -812,7 +810,7 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
-    input.license_needed = matches!(state.license_status, license::Status::TrialOver | license::Status::SignIn) && !state.clock_wrong;
+    input.license_needed = matches!(state.license_status, license::Status::Ended | license::Status::SignIn) && !state.clock_wrong;
     input.clock_wrong = state.clock_wrong;
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
@@ -894,7 +892,7 @@ fn update_main(state: &mut MainState, message: Message) {
                     }
                 }
             }
-            state.license_status = if state.clock_wrong { license::Status::TrialOver } else { compute_license(&state.license_token, state.settings.first_run_at) };
+            state.license_status = if state.clock_wrong { license::Status::Ended } else { compute_license(&state.license_token) };
             state.io_counters_snapshot = IoCountersSnapshot::read(&state.handles.counters);
 
             let speaker_all_off = !state.handles.speaker_noise.is_on()
@@ -1074,7 +1072,7 @@ fn update_main(state: &mut MainState, message: Message) {
                         state.settings.user_email = p.email.clone();
                         state.license_note = Some(if replacing { format!("License updated. Licensed to {}.", p.name) } else { format!("License accepted. Licensed to {}.", p.name) });
                         state.license_input.clear();
-                        state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
+                        state.license_status = compute_license(&state.license_token);
                         persist(&state.settings);
                     }
                     Err(e) => state.license_note = Some(e.to_string()),
@@ -1086,22 +1084,10 @@ fn update_main(state: &mut MainState, message: Message) {
             state.license_token.clear();
             state.settings.user_name.clear();
             state.settings.user_email.clear();
-            // Signing out must not hand out a fresh free trial: the trial counts as used.
-            if state.settings.first_run_at == 0 || state.settings.first_run_at > 1 {
-                state.settings.first_run_at = 1;
-            }
             state.license_input.clear();
             state.license_note = Some("Signed out. Paste a license to sign in again.".to_string());
-            state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
+            state.license_status = compute_license(&state.license_token);
             persist(&state.settings);
-        }
-        Message::StartTrial => {
-            if state.settings.first_run_at == 0 {
-                state.settings.first_run_at = now_secs();
-                state.license_note = None;
-                state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
-                persist(&state.settings);
-            }
         }
         Message::SelectNrStrength(name) => {
             if let Some(strength) = crate::ui_logic::nr_strength_from_name(name) {

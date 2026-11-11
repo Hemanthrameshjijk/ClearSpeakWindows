@@ -214,7 +214,7 @@ fn setting_row<'a>(
     row![left, toggler(on).on_toggle(msg).size(24).style(style::toggle)].spacing(16).align_y(iced::Alignment::Center).into()
 }
 
-/// What the license allows on this PC now: everything in the free trial, nothing before sign-in.
+/// What the license allows on this PC now: nothing before sign-in.
 fn allowed(state: &MainState) -> crate::license_gate::Allowed {
     crate::license_gate::allowed(&state.license_status)
 }
@@ -426,13 +426,12 @@ fn page_action(state: &MainState) -> Element<'_, Message> {
         Tab::Advanced => chip(if state.settings.profile.is_empty() { "Custom profile" } else { state.settings.profile.as_str() }, ChipKind::Off, dark),
         Tab::Profile => match license_status(state) {
             license::Status::Licensed(_) => chip("Licensed", ChipKind::Ok, dark),
-            license::Status::Trial { .. } => chip("Free trial", ChipKind::Warn, dark),
-            license::Status::TrialOver | license::Status::SignIn => chip("Not licensed", ChipKind::Bad, dark),
+            license::Status::Ended | license::Status::SignIn => chip("Not licensed", ChipKind::Bad, dark),
         },
     }
 }
 
-/// Where this copy stands: licensed, in the free trial, or neither (refreshed on every Tick).
+/// Where this copy stands: licensed, ended, or not signed in (refreshed on every Tick).
 pub(super) fn license_status(state: &MainState) -> license::Status {
     state.license_status.clone()
 }
@@ -441,9 +440,9 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// The full window shows the sign-in page instead of the app until this PC has a license (or its free trial).
+/// The full window shows the sign-in page instead of the app until this PC has a working license.
 pub fn needs_sign_in(state: &MainState) -> bool {
-    matches!(state.license_status, license::Status::SignIn | license::Status::TrialOver)
+    matches!(state.license_status, license::Status::SignIn | license::Status::Ended)
 }
 
 /// The sign-in page: this PC's Device Code (different on every PC, kept after sign-out) and a box for the license the
@@ -460,7 +459,7 @@ pub fn view_sign_in(state: &MainState) -> Element<'_, Message> {
             "1. Send the Device Code below to your admin.   2. They add you and choose your features.   3. Paste the license they send you here.",
         )
     } else {
-        ("Sign in to continue", "Your free trial or license has ended. Paste a current license from your admin to continue.")
+        ("Sign in to continue", "Your license has ended or does not belong to this PC. Paste a current license from your admin to continue.")
     };
     let code = crate::device_id::code().unwrap_or_else(|| "Reading this PC...".to_string());
     let mut form = column![
@@ -488,11 +487,6 @@ pub fn view_sign_in(state: &MainState) -> Element<'_, Message> {
     if let Some(note) = &state.license_note {
         form = form.push(text(note.clone()).size(13).color(t.warning));
     }
-    if matches!(status, license::Status::SignIn) {
-        form = form.push(
-            btn(text("Try free for 14 days instead").size(13)).padding([9, 16]).on_press(Message::StartTrial).style(style::outline),
-        );
-    }
     let page = column![logo_with_wordmark(dark, 34.0), text(title).size(26).font(bold()), text(lead).size(14).color(t.muted), card(form)]
         .spacing(18)
         .max_width(600);
@@ -507,8 +501,7 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
     let status = license_status(state);
     let (status_color, _) = match &status {
         license::Status::Licensed(_) => (t.success, ()),
-        license::Status::Trial { .. } => (t.warning, ()),
-        license::Status::TrialOver | license::Status::SignIn => (t.danger, ()),
+        license::Status::Ended | license::Status::SignIn => (t.danger, ()),
     };
 
     let avatar_name = if let license::Status::Licensed(p) = &status { p.name.clone() } else { String::new() };

@@ -49,7 +49,7 @@ pub struct Settings {
     /// The pasted license key (empty = none). Checked on every start with the public key built into the app.
     #[serde(default)]
     pub license_key: String,
-    /// Unix seconds of the first launch; the free trial counts from it. 0 = not started yet.
+    /// Unix seconds of the first launch. No longer used (there is no free trial in the app); kept so old settings files load.
     #[serde(default)]
     pub first_run_at: u64,
     /// The latest time this app has seen (unix seconds); a clock set far behind it is treated as wrong. See `clock_guard`.
