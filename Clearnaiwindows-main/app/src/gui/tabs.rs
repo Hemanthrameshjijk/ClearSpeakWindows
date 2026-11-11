@@ -1937,7 +1937,15 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
     // Not on the product page but needed by the app: where the cleaned voice goes, and the test monitor.
     let virtual_mic = card(
         column![
-            card_head(state, icons::MIC, style::Accent::Purple, "Virtual microphone", None, "Where ClearNAI sends your cleaned voice", None),
+            card_head(
+                state,
+                icons::MIC,
+                style::Accent::Purple,
+                "Virtual microphone",
+                None,
+                "Where ClearNAI sends your cleaned voice",
+                Some(toggler(state.handles.virtual_mic.is_on()).on_toggle(Message::ToggleVirtualMic).size(24).style(style::toggle).into()),
+            ),
             select_row(
                 state,
                 "Send cleaned audio to",

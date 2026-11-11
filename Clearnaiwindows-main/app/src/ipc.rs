@@ -21,7 +21,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Order of the on/off switches in [`Status::toggles`] and [`ClientMsg::Toggle::key`]
 /// (see `EngineHandles::toggles`).
-pub const TOGGLE_COUNT: usize = 11;
+pub const TOGGLE_COUNT: usize = 12;
 /// Order of the small-number selectors in [`Status::presets`] and [`ClientMsg::Preset::key`]
 /// (see `EngineHandles::presets`).
 pub const PRESET_COUNT: usize = 5;

@@ -1210,7 +1210,10 @@ fn spawn_mic_pipeline(
                 // ring buffer pair back in `engine::start`, and here we just
                 // push the same samples into whichever of the (up to two)
                 // producers exist.
-                push_frame(&mic_out, &frame);
+                // Virtual microphone switched off (Devices page): meeting apps get silence. The monitor below
+                // still plays the processed voice, so the user can test without being heard in a call.
+                let to_meeting: &[f32] = if handles.virtual_mic.is_on() { &frame } else { &silence };
+                push_frame(&mic_out, to_meeting);
                 // Real, tested write into the driver-transport shared
                 // section (see docs/DRIVER_PLAN.md) - a genuine second
                 // consumer of the same final processed frame, exactly like
@@ -1220,11 +1223,11 @@ fn spawn_mic_pipeline(
                 // startup) is a silent no-op, same graceful-degradation
                 // pattern as `mic_out`'s own `None` case.
                 if let Some(writer) = driver_writer.as_ref() {
-                    writer.push_frame(&frame);
+                    writer.push_frame(to_meeting);
                 }
                 // Same frame to the ClearNAI driver's microphone (queued; a sender thread does the system call).
                 if let Some(pipe) = driver_pipe.as_mut() {
-                    pipe.push_frame(&frame);
+                    pipe.push_frame(to_meeting);
                 }
                 // When the Monitor toggle is off, push real silence instead
                 // of skipping the push entirely, so the monitor render

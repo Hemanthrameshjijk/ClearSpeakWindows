@@ -217,6 +217,9 @@ pub struct EngineHandles {
     /// render thread itself is never torn down/rebuilt on a toggle flip,
     /// matching every other `StageToggle` in this struct).
     pub monitor: StageToggle,
+    /// Virtual microphone on/off (Devices page). Off: silence goes to the virtual mic target and the ClearNAI
+    /// Microphone driver instead of the cleaned voice.
+    pub virtual_mic: StageToggle,
 
     /// Whether the mic-path `bvc_hush::HushBvcStage::try_load` succeeded at
     /// startup. When `false`, `mic_bvc` has been forced to `false` and the
@@ -367,6 +370,7 @@ impl EngineHandles {
             mic_master_enabled: StageToggle::new(true),
             speaker_master_enabled: StageToggle::new(true),
             monitor: StageToggle::new(settings.monitor_enabled),
+            virtual_mic: StageToggle::new(settings.virtual_mic_on),
             mic_bvc_available,
             mic_bvc_unavailable_reason,
             speaker_bvc_available,
@@ -412,6 +416,7 @@ impl EngineHandles {
             &self.mic_master_enabled,
             &self.speaker_master_enabled,
             &self.monitor,
+            &self.virtual_mic,
         ]
     }
 

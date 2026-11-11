@@ -126,6 +126,11 @@ pub struct Settings {
     /// at all.
     #[serde(default)]
     pub monitor_enabled: bool,
+    /// Virtual microphone switched on: the cleaned voice goes to the virtual mic ("Send cleaned audio to" and the
+    /// ClearNAI Microphone driver). Off sends silence there, so meeting apps hear nothing. Default ON (older settings
+    /// files without this field keep working as before).
+    #[serde(default = "default_true")]
+    pub virtual_mic_on: bool,
     /// WASAPI render-device id the monitor path renders into (e.g. the
     /// user's headphones). `None` means the monitor path is not started at
     /// all, regardless of `monitor_enabled`.
@@ -262,6 +267,7 @@ impl Default for Settings {
             call_audio_on: false,
             physical_mic_device_id: None,
             monitor_enabled: false,
+            virtual_mic_on: true,
             monitor_device_id: None,
             real_speaker_output_device_id: None,
             speaker_bvc_backend: default_speaker_bvc_backend(),

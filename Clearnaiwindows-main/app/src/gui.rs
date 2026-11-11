@@ -313,6 +313,8 @@ pub enum Message {
     SelectMicTarget(DeviceOption),
     SelectPhysicalMic(DeviceOption),
     ToggleMonitor(bool),
+    /// Virtual microphone on/off (Devices page).
+    ToggleVirtualMic(bool),
     SelectMonitorDevice(DeviceOption),
     /// Re-enumerates devices (e.g. after starting VoiceMeter/VB-Cable
     /// *after* ClearNAI) without restarting the app. See
@@ -1152,6 +1154,11 @@ fn update_main(state: &mut MainState, message: Message) {
         Message::ToggleMonitor(on) => {
             state.handles.monitor.set(on);
             state.settings.monitor_enabled = on;
+            persist(&state.settings);
+        }
+        Message::ToggleVirtualMic(on) => {
+            state.handles.virtual_mic.set(on);
+            state.settings.virtual_mic_on = on;
             persist(&state.settings);
         }
         Message::SelectMonitorDevice(device) => {
