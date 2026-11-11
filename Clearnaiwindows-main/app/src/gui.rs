@@ -1047,13 +1047,18 @@ fn update_main(state: &mut MainState, message: Message) {
                 state.license_note = Some("Still reading this PC's details. Try again in a few seconds.".to_string());
             } else {
                 match license::token::verify(&key, &crate::license_key::PUBLIC_KEY, &devices, now_secs()) {
+                    // An older license (a copy kept from before a change) must not replace a newer one.
+                    Ok(p) if license::token::verify(&state.license_token, &crate::license_key::PUBLIC_KEY, &devices, now_secs()).is_ok_and(|cur| p.iat < cur.iat) => {
+                        state.license_note = Some("That license is older than the one already on this PC. Use the newest one your admin sent.".to_string());
+                    }
                     Ok(p) => {
+                        let replacing = license::token::verify(&state.license_token, &crate::license_key::PUBLIC_KEY, &devices, now_secs()).is_ok();
                         state.settings.license_key = crate::dpapi::protect(&key);
                         state.license_token = key;
                         if state.settings.user_name.trim().is_empty() {
                             state.settings.user_name = p.name.clone();
                         }
-                        state.license_note = Some(format!("License accepted. Licensed to {}.", p.name));
+                        state.license_note = Some(if replacing { format!("License updated. Licensed to {}.", p.name) } else { format!("License accepted. Licensed to {}.", p.name) });
                         state.license_input.clear();
                         state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
                         persist(&state.settings);
