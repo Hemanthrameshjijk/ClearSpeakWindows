@@ -1949,7 +1949,14 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
                     Message::SelectMicTarget,
                 ),
             ),
-            container(text("In Zoom, Teams or your dialer, set the microphone to CABLE Output.").size(13).color(t.muted_strong))
+            container(
+                text(match crate::device_rules::meeting_mic_label(&state.devices, state.settings.virtual_mic_target_id.as_deref().unwrap_or("")) {
+                    Some(mic) => format!("In Meet, Zoom, Teams or your dialer, set the microphone to {mic}."),
+                    None => "In Meet, Zoom, Teams or your dialer, set the microphone to the microphone end of the device above.".to_string(),
+                })
+                .size(13)
+                .color(t.muted_strong),
+            )
                 .padding([13, 16])
                 .width(Length::Fill)
                 .style(style::soft_box),

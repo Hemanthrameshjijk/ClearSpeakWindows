@@ -35,6 +35,18 @@ pub fn cable_input_target(devices: &DeviceList) -> Option<DeviceOption> {
     found.next().is_none().then(|| only.clone())
 }
 
+/// The microphone a meeting app must pick to hear ClearNAI's cleaned voice: the capture end of the same virtual
+/// device the cleaned audio is sent to ("Speakers (ClearNAI Virtual Audio Device)" pairs with
+/// "ClearNAI Microphone (ClearNAI Virtual Audio Device)"; "CABLE Input (VB-Audio Virtual Cable)" with "CABLE Output (...)").
+pub fn meeting_mic_label(devices: &DeviceList, mic_target_id: &str) -> Option<String> {
+    let target = find(&devices.render, mic_target_id)?;
+    let start = target.label.rfind(" (")?;
+    let suffix = &target.label[start..];
+    let mut found = devices.capture.iter().filter(|d| d.label.ends_with(suffix));
+    let only = found.next()?;
+    found.next().is_none().then(|| only.label.clone())
+}
+
 /// Call-audio source choices: virtual capture ends, minus the end paired with the mic target's cable.
 pub fn call_source_choices(devices: &DeviceList, mic_target_id: Option<&str>) -> Vec<DeviceOption> {
     let paired = mic_target_id
@@ -163,6 +175,16 @@ mod tests {
             ],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_meeting_mic_is_the_other_end_of_the_chosen_virtual_device() {
+        let mut l = list();
+        l.render.push(dev("clearnai-out", "Speakers (ClearNAI Virtual Audio Device)"));
+        l.capture.push(dev("clearnai-mic", "ClearNAI Microphone (ClearNAI Virtual Audio Device)"));
+        assert_eq!(meeting_mic_label(&l, "clearnai-out").as_deref(), Some("ClearNAI Microphone (ClearNAI Virtual Audio Device)"));
+        assert_eq!(meeting_mic_label(&l, "cable-in").as_deref(), Some("CABLE Output (VB-Audio Virtual Cable)"));
+        assert_eq!(meeting_mic_label(&l, "missing"), None);
     }
 
     #[test]
