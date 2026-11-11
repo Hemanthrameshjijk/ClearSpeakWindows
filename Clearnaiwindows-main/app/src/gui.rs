@@ -292,9 +292,7 @@ pub enum Message {
     SelectMicStudioPreset(&'static str),
     /// Noise reduction strength of the mic path (label from `ui_logic::NR_STRENGTH_NAMES`).
     SelectNrStrength(&'static str),
-    /// Profile page: name / email edited, license key typed, Apply pressed.
-    ProfileName(String),
-    ProfileEmail(String),
+    /// Profile / sign-in page: license typed, Apply pressed.
     LicenseInput(String),
     ApplyLicense,
     /// Forget the license on this PC and go back to the sign-in page (the Device Code stays the same).
@@ -1028,14 +1026,6 @@ fn update_main(state: &mut MainState, message: Message) {
                 persist(&state.settings);
             }
         }
-        Message::ProfileName(name) => {
-            state.settings.user_name = name;
-            persist(&state.settings);
-        }
-        Message::ProfileEmail(email) => {
-            state.settings.user_email = email;
-            persist(&state.settings);
-        }
         Message::LicenseInput(key) => {
             state.license_input = key;
             state.license_note = None;
@@ -1055,9 +1045,9 @@ fn update_main(state: &mut MainState, message: Message) {
                         let replacing = license::token::verify(&state.license_token, &crate::license_key::PUBLIC_KEY, &devices, now_secs()).is_ok();
                         state.settings.license_key = crate::dpapi::protect(&key);
                         state.license_token = key;
-                        if state.settings.user_name.trim().is_empty() {
-                            state.settings.user_name = p.name.clone();
-                        }
+                        // Who this is comes from the license the admin made, not from typing.
+                        state.settings.user_name = p.name.clone();
+                        state.settings.user_email = p.email.clone();
                         state.license_note = Some(if replacing { format!("License updated. Licensed to {}.", p.name) } else { format!("License accepted. Licensed to {}.", p.name) });
                         state.license_input.clear();
                         state.license_status = compute_license(&state.license_token, state.settings.first_run_at);
@@ -1070,6 +1060,8 @@ fn update_main(state: &mut MainState, message: Message) {
         Message::SignOut => {
             state.settings.license_key.clear();
             state.license_token.clear();
+            state.settings.user_name.clear();
+            state.settings.user_email.clear();
             // Signing out must not hand out a fresh free trial: the trial counts as used.
             if state.settings.first_run_at == 0 || state.settings.first_run_at > 1 {
                 state.settings.first_run_at = 1;

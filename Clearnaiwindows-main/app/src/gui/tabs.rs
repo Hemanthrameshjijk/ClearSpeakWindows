@@ -468,7 +468,8 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
         license::Status::TrialOver | license::Status::SignIn => (t.danger, ()),
     };
 
-    let avatar = container(text(ui_logic::initials(&state.settings.user_name)).size(26).font(bold()).color(Color::WHITE))
+    let avatar_name = if let license::Status::Licensed(p) = &status { p.name.clone() } else { String::new() };
+    let avatar = container(text(ui_logic::initials(&avatar_name)).size(26).font(bold()).color(Color::WHITE))
         .width(72)
         .height(72)
         .center_x(Length::Fixed(72.0))
@@ -478,8 +479,17 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
             border: iced::Border { radius: 36.0.into(), ..Default::default() },
             ..Default::default()
         });
-    let shown_name = if state.settings.user_name.trim().is_empty() { "Your name".to_string() } else { state.settings.user_name.clone() };
-    let shown_email = if state.settings.user_email.trim().is_empty() { "Add your email below".to_string() } else { state.settings.user_email.clone() };
+    // Name, email and organisation come from the license the admin issued; nothing here is typed by the user.
+    let (shown_name, shown_email) = match &status {
+        license::Status::Licensed(p) => {
+            let mut second = p.email.clone();
+            if !p.orgname.is_empty() {
+                second = if second.is_empty() { p.orgname.clone() } else { format!("{second}  \u{00B7}  {}", p.orgname) };
+            }
+            (p.name.clone(), second)
+        }
+        _ => ("Not signed in".to_string(), "Your name and email appear here after you sign in.".to_string()),
+    };
     let identity = row![
         avatar,
         column![text(shown_name).size(22).font(bold()), text(shown_email).size(13).color(t.muted), text(ui_logic::license_line(&status, now_secs())).size(13).color(status_color)]
@@ -488,24 +498,6 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
     ]
     .spacing(18)
     .align_y(iced::Alignment::Center);
-
-    let mut details = column![
-        card_head(state, icons::USER, style::Accent::Blue, "Your details", None, "Shown in the sidebar and printed on your license.", None),
-        column![
-            text("Name").size(13).color(t.muted),
-            text_input("Your name", &state.settings.user_name).on_input(Message::ProfileName).padding([10, 12]).size(14),
-        ]
-        .spacing(6),
-        column![
-            text("Email").size(13).color(t.muted),
-            text_input("you@example.com", &state.settings.user_email).on_input(Message::ProfileEmail).padding([10, 12]).size(14),
-        ]
-        .spacing(6),
-    ]
-    .spacing(18);
-    if !state.settings.user_email.trim().is_empty() && !ui_logic::email_looks_valid(&state.settings.user_email) {
-        details = details.push(text("That email address does not look right.").size(12).color(t.warning));
-    }
 
     let mut licence = column![
         card_head(state, icons::SHIELD, style::Accent::Blue, "License", None, "Your admin issues a license for this PC. It works offline until it expires.", None),
@@ -543,7 +535,7 @@ fn profile_tab(state: &MainState) -> Element<'_, Message> {
         licence = licence.push(text(note.clone()).size(13).color(t.muted));
     }
 
-    column![card(identity), card(details), card(licence)].spacing(18).into()
+    column![card(identity), card(licence)].spacing(18).into()
 }
 
 /// A green (or amber) dot followed by a label.
@@ -718,7 +710,7 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
                     ..Default::default()
                 }),
             column![
-                text(if state.settings.user_name.trim().is_empty() { "Add your name".to_string() } else { state.settings.user_name.clone() }).size(16).font(bold()),
+                text(if state.settings.user_name.trim().is_empty() { "Not signed in".to_string() } else { state.settings.user_name.clone() }).size(16).font(bold()),
                 text(ui_logic::license_line(&license_status(state), now_secs())).size(11).color(t.muted),
             ]
             .spacing(1),

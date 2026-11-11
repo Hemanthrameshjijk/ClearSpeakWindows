@@ -57,7 +57,7 @@ mod tests {
         let start = 1_000_000;
         assert_eq!(status("", &pk, &me, start, start + 13 * DAY + 1), Status::Trial { days_left: 1 });
         assert_eq!(status("", &pk, &me, start, start + 14 * DAY), Status::TrialOver);
-        let p = Payload { v: 1, lid: "l".into(), org: "o".into(), uid: "u".into(), name: "A".into(), dev: me.clone(), min: 2, feat: vec!["nc".into()], iat: start, exp: start + 90 * DAY };
+        let p = Payload { v: 1, lid: "l".into(), org: "o".into(), uid: "u".into(), email: String::new(), orgname: String::new(), name: "A".into(), dev: me.clone(), min: 2, feat: vec!["nc".into()], iat: start, exp: start + 90 * DAY };
         let t = token::sign(&p, &secret);
         assert!(matches!(status(&t, &pk, &me, start, start + 30 * DAY), Status::Licensed(_)));
         assert_eq!(status(&t, &pk, &me, start, start + 91 * DAY), Status::TrialOver, "an expired token does not keep the app licensed");

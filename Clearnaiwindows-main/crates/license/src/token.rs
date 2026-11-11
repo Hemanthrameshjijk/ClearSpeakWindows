@@ -21,6 +21,12 @@ pub struct Payload {
     pub org: String,
     pub uid: String,
     pub name: String,
+    /// The person's email and organisation name, as entered on the server. Optional: tokens made before they existed
+    /// still verify (the signature covers whatever bytes were issued).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub email: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub orgname: String,
     pub dev: Vec<String>,
     pub min: u32,
     pub feat: Vec<String>,
@@ -125,7 +131,7 @@ mod tests {
     }
 
     fn payload(dev: Vec<String>, iat: u64, exp: u64) -> Payload {
-        Payload { v: 1, lid: "l".into(), org: "o".into(), uid: "u".into(), name: "Asha".into(), dev, min: 2, feat: vec!["accent".into(), "nc".into()], iat, exp }
+        Payload { v: 1, lid: "l".into(), org: "o".into(), uid: "u".into(), email: String::new(), orgname: String::new(), name: "Asha".into(), dev, min: 2, feat: vec!["accent".into(), "nc".into()], iat, exp }
     }
 
     #[test]

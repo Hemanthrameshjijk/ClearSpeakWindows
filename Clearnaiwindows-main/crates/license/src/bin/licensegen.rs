@@ -49,6 +49,7 @@ fn main() {
                 lid: format!("dev-{now}"),
                 org: "dev".into(),
                 uid: "dev".into(),
+                email: String::new(), orgname: String::new(),
                 name: a[3].clone(),
                 dev,
                 min: 2,

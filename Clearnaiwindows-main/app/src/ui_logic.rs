@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn license_line_says_who_and_how_long() {
-        let p = |exp| license::Payload { v: 1, lid: "l".into(), org: "o".into(), uid: "u".into(), name: "Asha".into(), dev: vec![], min: 2, feat: vec![], iat: 0, exp };
+        let p = |exp| license::Payload { v: 1, lid: "l".into(), org: "o".into(), uid: "u".into(), email: String::new(), orgname: String::new(), name: "Asha".into(), dev: vec![], min: 2, feat: vec![], iat: 0, exp };
         let day = 86_400;
         assert_eq!(license_line(&license::Status::Licensed(p(100 * day)), 0), "Licensed to Asha");
         assert_eq!(license_line(&license::Status::Licensed(p(5 * day)), 0), "Licensed to Asha: 5 days left");

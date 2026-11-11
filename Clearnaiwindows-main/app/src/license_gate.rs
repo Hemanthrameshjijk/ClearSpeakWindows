@@ -62,6 +62,7 @@ mod tests {
             lid: "l".into(),
             org: "o".into(),
             uid: "u".into(),
+            email: String::new(), orgname: String::new(),
             name: "A".into(),
             dev: vec![],
             min: 2,
