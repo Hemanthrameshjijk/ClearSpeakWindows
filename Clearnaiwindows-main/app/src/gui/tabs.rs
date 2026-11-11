@@ -1950,7 +1950,7 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
                 state,
                 "Send cleaned audio to",
                 device_select(
-                    crate::device_rules::only_virtual(&state.devices.render, true),
+                    crate::device_rules::virtual_target_choices(&state.devices.render),
                     &state.settings.virtual_mic_target_id,
                     None,
                     "Not selected",

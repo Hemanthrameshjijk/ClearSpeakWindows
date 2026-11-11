@@ -35,6 +35,21 @@ pub fn cable_input_target(devices: &DeviceList) -> Option<DeviceOption> {
     found.next().is_none().then(|| only.clone())
 }
 
+/// "Send cleaned audio to" choices with friendlier names: the ClearNAI driver's render end ("Speakers (ClearNAI
+/// Virtual Audio Device)") is shown as "ClearNAI Microphone input", since sending there is what feeds the ClearNAI
+/// Microphone. Only the label changes; the id (what is saved and used) stays the same.
+pub fn virtual_target_choices(render: &[DeviceOption]) -> Vec<DeviceOption> {
+    only_virtual(render, true)
+        .into_iter()
+        .map(|mut d| {
+            if d.label.to_ascii_lowercase().contains("clearnai virtual audio device") {
+                d.label = "ClearNAI Microphone input".to_string();
+            }
+            d
+        })
+        .collect()
+}
+
 /// The microphone a meeting app must pick to hear ClearNAI's cleaned voice: the capture end of the same virtual
 /// device the cleaned audio is sent to ("Speakers (ClearNAI Virtual Audio Device)" pairs with
 /// "ClearNAI Microphone (ClearNAI Virtual Audio Device)"; "CABLE Input (VB-Audio Virtual Cable)" with "CABLE Output (...)").
@@ -185,6 +200,10 @@ mod tests {
         assert_eq!(meeting_mic_label(&l, "clearnai-out").as_deref(), Some("ClearNAI Microphone (ClearNAI Virtual Audio Device)"));
         assert_eq!(meeting_mic_label(&l, "cable-in").as_deref(), Some("CABLE Output (VB-Audio Virtual Cable)"));
         assert_eq!(meeting_mic_label(&l, "missing"), None);
+        let choices = virtual_target_choices(&l.render);
+        let ours = choices.iter().find(|d| d.id == "clearnai-out").unwrap();
+        assert_eq!(ours.label, "ClearNAI Microphone input", "renamed for the picker, same id");
+        assert!(choices.iter().any(|d| d.label == "CABLE Input (VB-Audio Virtual Cable)"));
     }
 
     #[test]
