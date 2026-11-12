@@ -257,9 +257,10 @@ impl Default for Settings {
             schema_version: default_schema_version(),
             aec_on: false,
             echo_cancel_on: true,
-            speaker_noise_on: true,
-            speaker_bvc_on: true,
-            speaker_studio_on: true,
+            // A new install starts on the Default profile: the call path is off, switch by switch.
+            speaker_noise_on: false,
+            speaker_bvc_on: false,
+            speaker_studio_on: false,
             speaker_studio_preset: default_studio_preset(),
             speaker_tap_on: true,
             virtual_mic_target_id: None,
@@ -280,7 +281,7 @@ impl Default for Settings {
             theme_dark: false,
             start_with_windows: false,
             minimize_to_tray: false,
-            profile: String::new(),
+            profile: "Default".to_string(),
         }
     }
 }
@@ -357,9 +358,8 @@ mod tests {
         assert!(s.mic_noise_on, "RNNoise defaults ON");
         assert!(s.mic_bvc_on, "BVC preference defaults ON (actual availability is gated separately)");
         assert!(s.mic_studio_on, "Studio defaults ON");
-        assert!(s.speaker_noise_on, "Speaker RNNoise defaults ON");
-        assert!(s.speaker_bvc_on, "Speaker BVC defaults ON");
-        assert!(s.speaker_studio_on, "Speaker Studio defaults ON");
+        assert!(!s.speaker_noise_on && !s.speaker_bvc_on && !s.speaker_studio_on, "a new install starts with the call path off");
+        assert_eq!(s.profile, "Default");
         assert_eq!(s.mic_studio_preset, 1, "mic Studio preset defaults to Natural");
         assert_eq!(s.speaker_studio_preset, 1, "speaker Studio preset defaults to Natural");
         assert!(s.virtual_mic_target_id.is_none());

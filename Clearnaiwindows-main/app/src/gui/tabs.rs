@@ -130,6 +130,7 @@ fn mic_snapshot(state: &MainState) -> MicSnapshot {
         echo: h.echo_cancel.is_on(),
         transcript: state.settings.transcript_on,
         call_audio: state.settings.call_audio_on,
+        call_cleaning: h.speaker_noise.is_on() || h.speaker_bvc.is_on() || h.speaker_studio.is_on(),
         monitor: h.monitor.is_on(),
         nc_allowed: allowed(state).nc,
         bvc_allowed: allowed(state).bvc,

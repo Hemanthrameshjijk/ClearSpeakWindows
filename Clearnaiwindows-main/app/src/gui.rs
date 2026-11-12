@@ -976,6 +976,12 @@ fn update_main(state: &mut MainState, message: Message) {
                 if let Some(on) = p.call_audio {
                     update_main(state, Message::ToggleCallAudio(on));
                 }
+                if p.call_cleaning == Some(false) {
+                    update_main(state, Message::ToggleSpeakerNoise(false));
+                    update_main(state, Message::ToggleSpeakerStudio(false));
+                    state.handles.speaker_bvc.set(false);
+                    state.settings.speaker_bvc_on = false;
+                }
                 if let Some(on) = p.monitor {
                     update_main(state, Message::ToggleMonitor(on));
                 }

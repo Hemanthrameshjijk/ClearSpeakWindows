@@ -78,6 +78,8 @@ pub struct Profile {
     pub transcript: Option<bool>,
     /// The whole speaker side (call audio).
     pub call_audio: Option<bool>,
+    /// Every cleaning switch on the call path (caller noise, caller voices, caller studio).
+    pub call_cleaning: Option<bool>,
     /// "Hear my processed mic" on the speakers.
     pub monitor: Option<bool>,
     /// Point the virtual microphone at "CABLE Input" when exactly one is installed (a one-time routing step, not
@@ -85,7 +87,8 @@ pub struct Profile {
     pub cable_mic: bool,
 }
 
-/// - Default: everything that cleans the microphone on, the transcript off, call audio and the monitor off, and the
+/// - Default: everything that cleans the microphone on, the transcript off, call audio (and every call-path switch)
+///   and the monitor off, and the
 ///   virtual microphone on the ClearNAI driver (or CABLE Input when only that is there). Accent stays as it is.
 /// - Office: quiet room, light touch - noise removal + Hush + Natural studio.
 /// - Busy floor: many people talking nearby - adds the quiet-voice gate, studio off to save CPU.
@@ -101,12 +104,13 @@ pub const PROFILES: [Profile; 4] = [
         echo: Some(true),
         transcript: Some(false),
         call_audio: Some(false),
+        call_cleaning: Some(false),
         monitor: Some(false),
         cable_mic: true,
     },
-    Profile { name: "Office", noise: true, voice_gate: false, studio: true, studio_preset: "Natural", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, monitor: None, cable_mic: false },
-    Profile { name: "Busy floor", noise: true, voice_gate: true, studio: false, studio_preset: "Natural", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, monitor: None, cable_mic: false },
-    Profile { name: "Presenting", noise: true, voice_gate: false, studio: true, studio_preset: "Balanced", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, monitor: None, cable_mic: false },
+    Profile { name: "Office", noise: true, voice_gate: false, studio: true, studio_preset: "Natural", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, call_cleaning: None, monitor: None, cable_mic: false },
+    Profile { name: "Busy floor", noise: true, voice_gate: true, studio: false, studio_preset: "Natural", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, call_cleaning: None, monitor: None, cable_mic: false },
+    Profile { name: "Presenting", noise: true, voice_gate: false, studio: true, studio_preset: "Balanced", bvc_backend: "Hush", echo: None, transcript: None, call_audio: None, call_cleaning: None, monitor: None, cable_mic: false },
 ];
 
 pub const PROFILE_NAMES: [&str; 4] = [PROFILES[0].name, PROFILES[1].name, PROFILES[2].name, PROFILES[3].name];
@@ -127,6 +131,8 @@ pub struct MicSnapshot {
     pub echo: bool,
     pub transcript: bool,
     pub call_audio: bool,
+    /// Any cleaning switch on the call path is on.
+    pub call_cleaning: bool,
     pub monitor: bool,
     /// What the license allows. A profile cannot switch on what the license leaves out, so those switches are
     /// not compared (otherwise picking a profile on a limited license would fall straight back to "Custom").
@@ -145,6 +151,7 @@ impl Profile {
             && same(self.echo, cur.echo)
             && same(self.transcript, cur.transcript)
             && same(self.call_audio, cur.call_audio)
+            && same(self.call_cleaning, cur.call_cleaning)
             && same(self.monitor, cur.monitor)
     }
 }
@@ -589,6 +596,7 @@ mod tests {
             echo: p.echo.unwrap_or(true),
             transcript: p.transcript.unwrap_or(false),
             call_audio: p.call_audio.unwrap_or(false),
+            call_cleaning: p.call_cleaning.unwrap_or(false),
             monitor: p.monitor.unwrap_or(false),
             nc_allowed: true,
             bvc_allowed: true,
@@ -599,12 +607,15 @@ mod tests {
     fn default_profile_turns_cleaning_on_and_everything_else_off() {
         let d = profile_by_name("Default").unwrap();
         assert!(d.noise && d.studio && d.echo == Some(true) && d.cable_mic);
-        assert_eq!((d.transcript, d.call_audio, d.monitor), (Some(false), Some(false), Some(false)));
+        assert_eq!((d.transcript, d.call_audio, d.call_cleaning, d.monitor), (Some(false), Some(false), Some(false), Some(false)));
         let mut cur = snapshot_of(d);
         assert_eq!(active_profile("Default", &cur), Some("Default"));
         cur.call_audio = true; // call audio switched on by hand: no longer the Default profile
         assert_eq!(active_profile("Default", &cur), None);
         cur.call_audio = false;
+        cur.call_cleaning = true; // a caller-cleaning switch turned on by hand
+        assert_eq!(active_profile("Default", &cur), None);
+        cur.call_cleaning = false;
         cur.transcript = true;
         assert_eq!(active_profile("Default", &cur), None);
     }
