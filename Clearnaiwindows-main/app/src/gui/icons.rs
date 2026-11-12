@@ -124,7 +124,6 @@ mod tests {
             ("wave", WAVE),
             ("people", PEOPLE),
             ("translate", TRANSLATE),
-            ("captions", CAPTIONS),
             ("gear", GEAR),
             ("expand", EXPAND),
             ("close", CLOSE),

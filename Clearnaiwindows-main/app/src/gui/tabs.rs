@@ -451,6 +451,13 @@ pub fn needs_sign_in(state: &MainState) -> bool {
 /// admin made for it.
 pub fn view_sign_in(state: &MainState) -> Element<'_, Message> {
     let dark = state.settings.theme_dark;
+    let page = column![logo_with_wordmark(dark, 34.0), sign_in_form(state, false)].spacing(18).max_width(600);
+    scrollable(container(page).padding(32).width(Length::Fill).center_x(Length::Fill)).into()
+}
+
+/// Title, steps, Device Code with Copy, license box, Sign in and Import: the full sign-in page and, `small`, the card.
+fn sign_in_form(state: &MainState, small: bool) -> Element<'_, Message> {
+    let dark = state.settings.theme_dark;
     let t = style::tokens_for(dark);
     let status = license_status(state);
     let (title, lead) = if state.clock_wrong {
@@ -458,7 +465,11 @@ pub fn view_sign_in(state: &MainState) -> Element<'_, Message> {
     } else if matches!(status, license::Status::SignIn) {
         (
             "Sign in to ClearNAI",
-            "1. Send the Device Code below to your admin.   2. They add you and choose your features.   3. Paste the license they send you here.",
+            if small {
+                "Send the Device Code to your admin, then paste the license they send you."
+            } else {
+                "1. Send the Device Code below to your admin.   2. They add you and choose your features.   3. Paste the license they send you here."
+            },
         )
     } else {
         ("Sign in to continue", "Your license has ended or does not belong to this PC. Paste a current license from your admin to continue.")
@@ -467,7 +478,7 @@ pub fn view_sign_in(state: &MainState) -> Element<'_, Message> {
     let mut form = column![
         text("This PC's Device Code").size(13).color(t.muted),
         row![
-            text(code).size(17).font(iced::Font::MONOSPACE).width(Length::Fill),
+            text(code).size(if small { 13 } else { 17 }).font(iced::Font::MONOSPACE).width(Length::Fill),
             btn(text("Copy").size(13)).padding([8, 16]).on_press(Message::CopyDeviceCode).style(style::outline),
         ]
         .spacing(10)
@@ -489,10 +500,30 @@ pub fn view_sign_in(state: &MainState) -> Element<'_, Message> {
     if let Some(note) = &state.license_note {
         form = form.push(text(note.clone()).size(13).color(t.warning));
     }
-    let page = column![logo_with_wordmark(dark, 34.0), text(title).size(26).font(bold()), text(lead).size(14).color(t.muted), card(form)]
-        .spacing(18)
-        .max_width(600);
-    scrollable(container(page).padding(32).width(Length::Fill).center_x(Length::Fill)).into()
+    let form: Element<'_, Message> =
+        if small { container(form).padding(14).width(Length::Fill).style(style::card).into() } else { card(form) };
+    column![text(title).size(if small { 18 } else { 26 }).font(bold()), text(lead).size(if small { 12 } else { 14 }).color(t.muted), form]
+        .spacing(if small { 10 } else { 18 })
+        .into()
+}
+
+/// The bar before sign-in: no switches yet, just a way to the sign-in card.
+pub fn view_bar_sign_in(state: &MainState) -> Element<'_, Message> {
+    let dark = state.settings.theme_dark;
+    let t = style::tokens_for(dark);
+    let bar = row![
+        logo_with_wordmark(dark, 20.0),
+        text("Not signed in").size(13).color(t.muted).width(Length::Fill),
+        btn(text("Sign in").size(13).font(bold())).padding([7, 16]).on_press(Message::ShowSignInCard).style(style::primary),
+    ]
+    .spacing(12)
+    .padding([8, 14])
+    .align_y(iced::Alignment::Center);
+    container(bar).width(Length::Fill).height(Length::Fill).center_y(Length::Fill).style(move |_| container::Style {
+        background: Some(t.surface.into()),
+        ..Default::default()
+    })
+    .into()
 }
 
 /// The Profile page: who you are (name, email, avatar) and the license.
@@ -1144,6 +1175,8 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
 
     let body: Element<'_, Message> = match &state.password {
         Some(p) => password_box(state, p),
+        // Before a license, the card is the sign-in screen (Device Code, paste, Sign in).
+        None if needs_sign_in(state) => sign_in_form(state, true),
         None => {
             // "Cancel noise" is one switch for everything that cleans the mic: noise, background voices and echo.
             let cancel_on = h.mic_noise.is_on() || h.mic_bvc.is_on() || h.echo_cancel.is_on();

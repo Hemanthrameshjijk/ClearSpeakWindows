@@ -315,6 +315,8 @@ pub enum Message {
     ToggleMonitor(bool),
     /// Virtual microphone on/off (Devices page).
     ToggleVirtualMic(bool),
+    /// From the bar before sign-in: turn the window into the card, which shows the sign-in screen.
+    ShowSignInCard,
     SelectMonitorDevice(DeviceOption),
     /// Re-enumerates devices (e.g. after starting VoiceMeter/VB-Cable
     /// *after* ClearNAI) without restarting the app. See
@@ -582,7 +584,8 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
                 if mode == ShowMode::Full {
                     tasks.push(open_full(state, Tab::Home));
                 } else {
-                    let card = mode == ShowMode::Card;
+                    // Not signed in: the bar has nothing to switch yet, so open the card with the sign-in screen.
+                    let card = mode == ShowMode::Card || tabs::needs_sign_in(state);
                     if !state.settings.compact_mode {
                         state.unlocked = false; // leaving the full window locks it again
                     }
@@ -687,6 +690,16 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
                 }
                 None => state.license_note = Some("That file could not be read as a license.".to_string()),
             }
+        }
+        return iced::Task::none();
+    }
+    if matches!(message, Message::ShowSignInCard) {
+        if let Screen::Main(state) = screen {
+            state.password = None;
+            state.settings.compact_mode = true;
+            state.card = true;
+            persist(&state.settings);
+            return iced::Task::batch(mode_tasks(state, true));
         }
         return iced::Task::none();
     }
@@ -1344,6 +1357,7 @@ fn update_main(state: &mut MainState, message: Message) {
         | Message::ToggleCompact
         | Message::CopyTranscript
         | Message::CopyDeviceCode
+        | Message::ShowSignInCard
         | Message::ImportLicenseFile
         | Message::LicenseFileRead(_)
         | Message::DragWindow
@@ -1503,6 +1517,7 @@ fn view(screen: &Screen) -> Element<'_, Message> {
         Screen::Setup(setup) => view_setup(setup),
         Screen::Main(state) if !state.settings.compact_mode && tabs::needs_sign_in(state) => tabs::view_sign_in(state),
         Screen::Main(state) if state.settings.compact_mode && state.card => tabs::view_card(state),
+        Screen::Main(state) if state.settings.compact_mode && tabs::needs_sign_in(state) => tabs::view_bar_sign_in(state),
         Screen::Main(state) if state.settings.compact_mode => tabs::view_bar(state),
         Screen::Main(state) => tabs::view_full(state),
     }
