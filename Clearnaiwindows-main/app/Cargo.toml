@@ -19,6 +19,11 @@ path = "src/bin/clearnai.rs"
 name = "clearnai-engine"
 path = "src/bin/clearnai-engine.rs"
 
+# `dev-code`: test builds only. Typing 1111111111 on the sign-in page unlocks everything for 365 days (src/dev_code.rs).
+# Never enable it for customer installers.
+[features]
+dev-code = []
+
 [dependencies]
 # Portable foundation crate (bypass toggles, ring buffers, metrics). Builds
 # and its unit tests run on every platform.

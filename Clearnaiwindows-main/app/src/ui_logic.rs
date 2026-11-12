@@ -86,7 +86,7 @@ pub struct Profile {
 }
 
 /// - Default: everything that cleans the microphone on, the transcript off, call audio and the monitor off, and the
-///   virtual microphone on CABLE Input when it is there. Accent stays as it is.
+///   virtual microphone on the ClearNAI driver (or CABLE Input when only that is there). Accent stays as it is.
 /// - Office: quiet room, light touch - noise removal + Hush + Natural studio.
 /// - Busy floor: many people talking nearby - adds the quiet-voice gate, studio off to save CPU.
 /// - Presenting: you are the only voice that matters - noise removal + Hush + a fuller Balanced studio tone.
@@ -128,17 +128,20 @@ pub struct MicSnapshot {
     pub transcript: bool,
     pub call_audio: bool,
     pub monitor: bool,
+    /// What the license allows. A profile cannot switch on what the license leaves out, so those switches are
+    /// not compared (otherwise picking a profile on a limited license would fall straight back to "Custom").
+    pub nc_allowed: bool,
+    pub bvc_allowed: bool,
 }
 
 impl Profile {
     pub fn matches(&self, cur: &MicSnapshot) -> bool {
         let same = |want: Option<bool>, now: bool| want.map_or(true, |w| w == now);
-        self.noise == cur.noise
+        (!cur.nc_allowed || self.noise == cur.noise)
             && self.voice_gate == cur.voice_gate
             && self.studio == cur.studio
             && self.studio_preset == cur.studio_preset
-            && cur.bvc_on
-            && self.bvc_backend == cur.bvc_backend
+            && (!cur.bvc_allowed || (cur.bvc_on && self.bvc_backend == cur.bvc_backend))
             && same(self.echo, cur.echo)
             && same(self.transcript, cur.transcript)
             && same(self.call_audio, cur.call_audio)
@@ -587,6 +590,8 @@ mod tests {
             transcript: p.transcript.unwrap_or(false),
             call_audio: p.call_audio.unwrap_or(false),
             monitor: p.monitor.unwrap_or(false),
+            nc_allowed: true,
+            bvc_allowed: true,
         }
     }
 
@@ -626,6 +631,16 @@ mod tests {
         let mut bvc_off = snapshot_of(office);
         bvc_off.bvc_on = false;
         assert_eq!(active_profile("Office", &bvc_off), None);
+    }
+
+    #[test]
+    fn a_profile_still_shows_when_the_license_leaves_noise_and_voices_out() {
+        let d = profile_by_name("Default").unwrap();
+        let mut cur = snapshot_of(d);
+        (cur.noise, cur.bvc_on, cur.nc_allowed, cur.bvc_allowed) = (false, false, false, false);
+        assert_eq!(active_profile("Default", &cur), Some("Default"));
+        cur.call_audio = true;
+        assert_eq!(active_profile("Default", &cur), None, "switches the license allows still count");
     }
 
     #[test]

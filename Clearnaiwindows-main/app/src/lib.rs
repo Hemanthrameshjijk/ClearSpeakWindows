@@ -16,6 +16,7 @@
 
 pub mod clock_guard;
 pub mod crash;
+pub mod dev_code;
 pub mod device_id;
 pub mod dpapi;
 pub mod device_rules;

@@ -504,6 +504,9 @@ fn now_secs() -> u64 {
 
 /// What the stored token (if any) means for this PC right now.
 fn compute_license(token: &str) -> license::Status {
+    if let Some(s) = crate::dev_code::status(token, now_secs()) {
+        return s;
+    }
     license::status(token, &crate::license_key::PUBLIC_KEY, &crate::device_id::texts(), now_secs())
 }
 
@@ -964,7 +967,7 @@ fn update_main(state: &mut MainState, message: Message) {
                     update_main(state, Message::ToggleMonitor(on));
                 }
                 if p.cable_mic {
-                    if let Some(device) = crate::device_rules::cable_input_target(&state.devices) {
+                    if let Some(device) = crate::device_rules::preferred_mic_target(&state.devices) {
                         update_main(state, Message::SelectMicTarget(device));
                     }
                 }
@@ -1057,7 +1060,21 @@ fn update_main(state: &mut MainState, message: Message) {
         Message::ApplyLicense => {
             let key = state.license_input.trim().to_string();
             let devices = crate::device_id::texts();
-            if devices.is_empty() {
+            if crate::dev_code::ENABLED && key == crate::dev_code::CODE {
+                // Test builds only: everything on for 365 days from the first time the code was entered here.
+                let token = crate::dev_code::token(&state.license_token, now_secs());
+                state.settings.license_key = crate::dpapi::protect(&token);
+                state.license_token = token;
+                state.settings.user_name = "Developer (test build)".to_string();
+                state.settings.user_email.clear();
+                state.license_input.clear();
+                state.license_status = compute_license(&state.license_token);
+                state.license_note = Some(match &state.license_status {
+                    license::Status::Licensed(p) => format!("Test access on: all features for {} more days.", p.exp.saturating_sub(now_secs()).div_ceil(86_400)),
+                    _ => "This test code has already been used for 365 days on this PC.".to_string(),
+                });
+                persist(&state.settings);
+            } else if devices.is_empty() {
                 state.license_note = Some("Still reading this PC's details. Try again in a few seconds.".to_string());
             } else {
                 match license::token::verify(&key, &crate::license_key::PUBLIC_KEY, &devices, now_secs()) {

@@ -62,6 +62,17 @@ pub fn meeting_mic_label(devices: &DeviceList, mic_target_id: &str) -> Option<St
     found.next().is_none().then(|| only.label.clone())
 }
 
+/// Where the Default profile sends the cleaned voice: the ClearNAI driver ("ClearNAI Microphone input") when it is
+/// installed, otherwise the single VB-CABLE input.
+pub fn preferred_mic_target(devices: &DeviceList) -> Option<DeviceOption> {
+    devices
+        .render
+        .iter()
+        .find(|d| d.label.to_ascii_lowercase().contains("clearnai virtual audio device"))
+        .cloned()
+        .or_else(|| cable_input_target(devices))
+}
+
 /// Call-audio source choices: virtual capture ends, minus the end paired with the mic target's cable.
 pub fn call_source_choices(devices: &DeviceList, mic_target_id: Option<&str>) -> Vec<DeviceOption> {
     let paired = mic_target_id
@@ -204,6 +215,8 @@ mod tests {
         let ours = choices.iter().find(|d| d.id == "clearnai-out").unwrap();
         assert_eq!(ours.label, "ClearNAI Microphone input", "renamed for the picker, same id");
         assert!(choices.iter().any(|d| d.label == "CABLE Input (VB-Audio Virtual Cable)"));
+        assert_eq!(preferred_mic_target(&l).map(|d| d.id).as_deref(), Some("clearnai-out"), "ClearNAI driver first");
+        assert_eq!(preferred_mic_target(&list()).map(|d| d.id).as_deref(), Some("cable-in"), "else VB-CABLE");
     }
 
     #[test]

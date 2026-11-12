@@ -30,7 +30,6 @@ pub const TRANSLATE: &[u8] =
     icon!(r#"<path d="M3 6h9M7.5 4v2M5 6c0 4 3 7 7 8M11 6c0 3-2 6-6 8"/><path d="M12.5 20l4-9 4 9M14 17h5"/>"#);
 
 /// Transcript: closed captions.
-pub const CAPTIONS: &[u8] = icon!(r#"<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 11h4M13 11h4M7 15h2M11 15h6"/>"#);
 
 pub const GEAR: &[u8] = icon!(
     r#"<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>"#

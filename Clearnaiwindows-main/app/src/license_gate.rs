@@ -33,6 +33,9 @@ pub fn status_for(settings: &Settings, devices: &[String], now: u64, registry_ma
         return Status::Ended;
     }
     let token = crate::dpapi::unprotect(&settings.license_key);
+    if let Some(s) = crate::dev_code::status(&token, now) {
+        return s;
+    }
     license::status(&token, &crate::license_key::PUBLIC_KEY, devices, now)
 }
 

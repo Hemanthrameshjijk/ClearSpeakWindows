@@ -131,6 +131,8 @@ fn mic_snapshot(state: &MainState) -> MicSnapshot {
         transcript: state.settings.transcript_on,
         call_audio: state.settings.call_audio_on,
         monitor: h.monitor.is_on(),
+        nc_allowed: allowed(state).nc,
+        bvc_allowed: allowed(state).bvc,
     }
 }
 
@@ -1053,7 +1055,6 @@ pub fn view_bar(state: &MainState) -> Element<'_, Message> {
         } else {
             tip(switch(icons::TRANSLATE, false, Message::OpenFullAt(Tab::Profile)), format!("Accent conversion: {}", locked_reason(state)), dark)
         },
-        tip(switch(icons::CAPTIONS, state.settings.transcript_on, Message::ToggleTranscript(!state.settings.transcript_on)), "Live transcript", dark),
         tip(mute.into(), "Mute or unmute the microphone (Ctrl+Shift+M)", dark),
         tip(plain(icons::EXPAND, Message::ToggleCompact), "Open the full window", dark),
         tip(plain(icons::CLOSE, Message::WindowClosed), "Close (ClearNAI keeps running in the tray)", dark),
@@ -1177,19 +1178,6 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
             .spacing(8)
             .align_y(iced::Alignment::Center);
 
-            let transcript = h.transcript.status();
-            let (transcript_desc, transcript_color) = if !state.settings.transcript_on {
-                ("Off".to_string(), t.muted)
-            } else {
-                use asr_onnx::pipeline::TranscriptState as S;
-                match transcript.state {
-                    S::Listening | S::Transcribing => (format!("{} \u{00B7} saved for this call", transcript.line()), t.success),
-                    S::Loading => (transcript.line(), t.warning),
-                    S::Unavailable => (transcript.line(), t.danger),
-                    S::Off => (transcript.line(), t.muted),
-                }
-            };
-
             let voice = section(
                 column![
                     row![
@@ -1243,25 +1231,6 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                 .into(),
             );
 
-            let transcript_card = section(
-                column![
-                    row![
-                        glyph_icon(icons::CAPTIONS, 18.0, ink),
-                        column![text("Live transcript").size(15), text(transcript_desc).size(12).color(transcript_color)].spacing(3).width(Length::Fill),
-                        toggler(state.settings.transcript_on).on_toggle(Message::ToggleTranscript).size(24).style(style::toggle),
-                    ]
-                    .spacing(12)
-                    .align_y(iced::Alignment::Center),
-                    btn(container(text("Open transcript").size(13).font(bold()).color(t.primary)).center_x(Length::Fill))
-                        .width(Length::Fill)
-                        .padding([9, 0])
-                        .on_press(Message::OpenTranscriptFolder)
-                        .style(style::outline),
-                ]
-                .spacing(12)
-                .into(),
-            );
-
             let refresh = row![
                 text("Changed headset? Refresh switches to the default.").size(12).color(t.muted),
                 container(text("")).width(Length::Fill),
@@ -1270,7 +1239,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
             .spacing(6)
             .align_y(iced::Alignment::Center);
 
-            column![profile_row, voice, transcript_card, refresh].spacing(12).into()
+            column![profile_row, voice, refresh].spacing(12).into()
         }
     };
 
