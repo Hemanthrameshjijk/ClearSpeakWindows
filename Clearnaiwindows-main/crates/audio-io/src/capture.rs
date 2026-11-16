@@ -13,7 +13,6 @@
 
 #![cfg(windows)]
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -22,8 +21,8 @@ use anyhow::{bail, Context, Result};
 use dsp_core::{FrameCounters, Producer, FRAME_SAMPLES};
 use wasapi::{initialize_mta, DeviceEnumerator, Direction, StreamMode};
 
-use crate::bytes::pop_f32_le;
 use crate::devices::{find_capture_device_by_name, open_capture_device_by_id};
+use crate::follow::{self, Choice, Target};
 use crate::{
     engine_wave_format, sleep_respecting_stop, warn_if_buffer_size_mismatched, RECONNECT_BACKOFF,
     REQUESTED_BUFFER_DURATION_HNS,
@@ -56,11 +55,9 @@ impl MicCapture {
         // itself - see note above) is what actually crosses into the
         // capture thread.
         let enumerator = DeviceEnumerator::new().context("creating WASAPI device enumerator")?;
-        let device = enumerator
-            .get_default_device(&Direction::Capture)
-            .context("opening default capture device")?;
-        let device_id = device.get_id().context("reading default capture device id")?;
-        Self::start_on_device_id(&device_id, producer, counters)
+        enumerator.get_default_device(&Direction::Capture).context("opening default capture device")?;
+        // Followed while running: earbuds that connect later (and become the Windows default) are picked up.
+        Self::spawn(Target::Default, true, producer, counters)
     }
 
     /// Opens the capture device whose friendly name contains
@@ -74,10 +71,20 @@ impl MicCapture {
 
     /// Opens a specific capture device by its enumerated device id (see
     /// `devices::list_capture_devices`) and starts streaming.
+    /// A microphone that is unplugged is replaced by the Windows default until it is back.
     pub fn start_on_device_id(device_id: &str, producer: Producer<f32>, counters: Arc<FrameCounters>) -> Result<Self> {
+        Self::spawn(Target::Id(device_id.to_string()), true, producer, counters)
+    }
+
+    /// Like [`start_on_device_id`](Self::start_on_device_id) but never falls back to the default microphone: for a
+    /// capture that is not the user's voice (the call-audio source), the real mic would play your own voice back.
+    pub fn start_on_device_id_no_fallback(device_id: &str, producer: Producer<f32>, counters: Arc<FrameCounters>) -> Result<Self> {
+        Self::spawn(Target::Id(device_id.to_string()), false, producer, counters)
+    }
+
+    fn spawn(target: Target, allow_fallback: bool, producer: Producer<f32>, counters: Arc<FrameCounters>) -> Result<Self> {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let thread_stop = stop_flag.clone();
-        let device_id = device_id.to_string();
 
         let handle = thread::Builder::new()
             .name("audio-io-mic-capture".into())
@@ -93,9 +100,16 @@ impl MicCapture {
                 // permanently kill mic capture until the app was restarted.
                 // Retry with a backoff instead.
                 let mut failed_attempts: u32 = 0;
+                let mut last_opened: Option<String> = None;
                 while !thread_stop.load(Ordering::Relaxed) {
                     let started = std::time::Instant::now();
-                    if let Err(e) = capture_loop(&device_id, &mut producer, &thread_stop, &counters) {
+                    let result = capture_loop(&target, allow_fallback, &mut last_opened, &mut producer, &thread_stop, &counters);
+                    if let Ok(true) = result {
+                        // A better device appeared (earbuds connected, default changed): reopen right away.
+                        failed_attempts = 0;
+                        continue;
+                    }
+                    if let Err(e) = result {
                         // A session that streamed for a while before dying starts the count over; a device
                         // that never opens (unplugged, stale id) fails identically each time, so say so on
                         // the first failure and then about once a minute.
@@ -144,12 +158,20 @@ impl Drop for MicCapture {
     }
 }
 
+/// How often a streaming thread looks for a better device (default changed, saved headset back).
+const FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+/// First wait for audio after opening: a Bluetooth headset switching into call mode can take several seconds.
+const FIRST_EVENT_TIMEOUT_MS: u32 = 5000;
+
+/// Streams until stopped (`Ok(false)`), until a better device should be used (`Ok(true)`), or until the device fails.
 fn capture_loop(
-    device_id: &str,
+    target: &Target,
+    allow_fallback: bool,
+    last_opened: &mut Option<String>,
     producer: &mut Producer<f32>,
     stop_flag: &Arc<AtomicBool>,
     counters: &FrameCounters,
-) -> Result<()> {
+) -> Result<bool> {
     // Every thread that touches WASAPI needs its own COM apartment, and
     // COM objects (like the `Device`/`IAudioClient` below) should be
     // activated on the thread that will use them - hence re-resolving the
@@ -157,11 +179,29 @@ fn capture_loop(
     // spawning thread.
     let _ = initialize_mta();
 
+    // A saved mic that is unplugged is replaced by the Windows default (better than silence) and taken back as soon
+    // as it returns; one that came back under a new id is found by name.
+    let choice: Choice = follow::resolve(&Direction::Capture, target, allow_fallback)
+        .context("the capture device is not connected")?;
+    let device_id = choice.id.as_str();
     let device = open_capture_device_by_id(device_id)
         .with_context(|| format!("re-opening capture device '{device_id}' on capture thread"))?;
+    let name = device.get_friendlyname().unwrap_or_else(|_| "unnamed microphone".to_string());
     let mut audio_client = device
         .get_iaudioclient()
-        .context("activating IAudioClient on capture device")?;
+        .with_context(|| format!("activating IAudioClient on capture device '{name}'"))?;
+    let device_rate = audio_client.get_mixformat().map(|f| f.get_samplespersec()).unwrap_or(0);
+    if last_opened.as_deref() != Some(device_id) {
+        let mut note = format!("[audio-io] INFO: microphone: '{name}' ({device_rate} Hz)");
+        if choice.fallback {
+            note += "; the chosen microphone is not connected, using the Windows default until it is back";
+        }
+        if follow::is_hands_free(&name, device_rate) {
+            note += "; Bluetooth call mode (phone quality): for best sound talk on the PC or USB mic";
+        }
+        crate::report_error(&note);
+        *last_opened = Some(device_id.to_string());
+    }
 
     let format = engine_wave_format();
 
@@ -194,15 +234,26 @@ fn capture_loop(
         .start_stream()
         .context("starting capture stream")?;
 
-    let mut byte_queue: VecDeque<u8> = VecDeque::with_capacity(FRAME_SAMPLES * 4 * 4);
+    // Mono f32: 4 bytes a frame. Grown if a device ever hands over a bigger packet.
+    let mut scratch: Vec<u8> = vec![0; 48_000 * 4 / 2];
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES);
+    let mut timeout_ms = FIRST_EVENT_TIMEOUT_MS;
+    let mut last_follow_check = std::time::Instant::now();
 
     while !stop_flag.load(Ordering::Relaxed) {
         // A stalled event most likely means the device was removed/disabled
         // out from under us; surface that as a real error rather than
         // spinning silently forever.
-        if event_handle.wait_for_event(1000).is_err() {
+        if event_handle.wait_for_event(timeout_ms).is_err() {
             bail!("capture event wait failed or timed out; capture device likely became unavailable");
+        }
+        timeout_ms = 1000;
+        if last_follow_check.elapsed() >= FOLLOW_EVERY {
+            last_follow_check = std::time::Instant::now();
+            if follow::should_switch(&Direction::Capture, target, &choice, allow_fallback) {
+                audio_client.stop_stream().ok();
+                return Ok(true);
+            }
         }
 
         loop {
@@ -213,19 +264,26 @@ fn capture_loop(
             // then hung joining this thread, and the abandoned thread kept
             // filling its old ring ("mic capture ring buffer full" and the
             // dropped-frames counter climbing at 100/s, forever).
-            match capture_client
+            let frames = match capture_client
                 .get_next_packet_size()
                 .context("polling capture packet size")?
             {
-                Some(frames) if frames > 0 => {}
+                Some(frames) if frames > 0 => frames as usize,
                 _ => break,
+            };
+            if scratch.len() < frames * 4 {
+                scratch.resize(frames * 4, 0);
             }
 
-            capture_client
-                .read_from_device_to_deque(&mut byte_queue)
+            // `read_from_device` returns errors; the deque variant unwraps ReleaseBuffer, which aborts the whole
+            // engine (panic = abort) when the device disappears in the middle of a read.
+            let (got, info) = capture_client
+                .read_from_device(&mut scratch)
                 .context("reading captured audio from device")?;
 
-            while let Some(sample) = pop_f32_le(&mut byte_queue) {
+            for c in scratch[..got as usize * 4].chunks_exact(4) {
+                // A packet marked silent (Bluetooth glitch, profile switch) is silence whatever its bytes say.
+                let sample = if info.flags.silent { 0.0 } else { f32::from_le_bytes([c[0], c[1], c[2], c[3]]) };
                 pending.push(sample);
                 if pending.len() == FRAME_SAMPLES {
                     push_frame(producer, &pending, counters);
@@ -240,7 +298,7 @@ fn capture_loop(
     }
 
     audio_client.stop_stream().ok();
-    Ok(())
+    Ok(false)
 }
 
 /// Pushes one full frame into the ring buffer. If the consumer isn't

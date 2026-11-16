@@ -18,6 +18,8 @@ use anyhow::{bail, Context, Result};
 use dsp_core::{Consumer, FrameCounters, FRAME_SAMPLES};
 use wasapi::{initialize_mta, Device, DeviceEnumerator, Direction, StreamMode};
 
+use crate::follow::{self, Target as RenderTarget};
+
 use crate::bytes::push_f32_le;
 use crate::devices::{find_render_device_by_name, open_render_device_by_id};
 use crate::{engine_wave_format, warn_if_buffer_size_mismatched, RECONNECT_BACKOFF, REQUESTED_BUFFER_DURATION_HNS};
@@ -99,6 +101,10 @@ impl HardwareRender {
                     if streaming {
                         failed_attempts = 0;
                     }
+                    if let Ok(true) = result {
+                        // A better device appeared (default changed, the device came back under a new id).
+                        continue;
+                    }
                     if let Err(e) = result {
                         failed_attempts += 1;
                         // A device that stays unavailable (unplugged headset,
@@ -146,14 +152,6 @@ impl Drop for HardwareRender {
     }
 }
 
-/// What a render thread opens on every (re)connect attempt.
-enum RenderTarget {
-    Id(String),
-    /// Whatever Windows' default render device is at the moment of the
-    /// attempt (not fixed when the thread was started).
-    Default,
-}
-
 fn default_render_device() -> Result<Device> {
     DeviceEnumerator::new()
         .context("creating WASAPI device enumerator")?
@@ -191,14 +189,18 @@ fn render_loop(
     counters: &FrameCounters,
     failed_attempts: u32,
     streaming: &mut bool,
-) -> Result<()> {
+) -> Result<bool> {
     let _ = initialize_mta();
 
-    let device = match target {
-        RenderTarget::Id(id) => open_render_device_by_id(id)
-            .with_context(|| format!("re-opening render device '{id}' on render thread"))?,
-        RenderTarget::Default => default_render_device()?,
-    };
+    // Never fall back to the default here: for the virtual-mic cable that would play the cleaned voice out of the
+    // real speakers. A device that is not connected is reported as such instead of activating a dead id (which
+    // failed with 0x88890004 on every retry); one that came back under a new id is found by name.
+    let choice = follow::resolve(&Direction::Render, target, false).with_context(|| match target {
+        RenderTarget::Id(id) => format!("render device '{id}' is not connected"),
+        RenderTarget::Default => "there is no default render device".to_string(),
+    })?;
+    let device = open_render_device_by_id(&choice.id)
+        .with_context(|| format!("re-opening render device '{}' on render thread", choice.id))?;
     let name = device.get_friendlyname().unwrap_or_else(|_| "unnamed device".to_string());
     let mut audio_client = device
         .get_iaudioclient()
@@ -264,9 +266,17 @@ fn render_loop(
     // log the first one and then a summary at most every 30 s instead of a line per second.
     let mut last_underrun_log: Option<std::time::Instant> = None;
     let mut underruns_since_log: u64 = 0;
+    let mut last_follow_check = std::time::Instant::now();
     while !stop_flag.load(Ordering::Relaxed) {
         if event_handle.wait_for_event(1000).is_err() {
             bail!("render event wait failed or timed out; render device likely became unavailable");
+        }
+        if last_follow_check.elapsed() >= Duration::from_secs(1) {
+            last_follow_check = std::time::Instant::now();
+            if follow::should_switch(&Direction::Render, target, &choice, false) {
+                audio_client.stop_stream().ok();
+                return Ok(true);
+            }
         }
 
         let available = audio_client
@@ -314,7 +324,7 @@ fn render_loop(
     }
 
     audio_client.stop_stream().ok();
-    Ok(())
+    Ok(false)
 }
 
 /// Pulls up to `out.len()` samples from `consumer` into `out`, returning how

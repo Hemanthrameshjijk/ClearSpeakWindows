@@ -1188,9 +1188,17 @@ fn update_main(state: &mut MainState, message: Message) {
             });
         }
         Message::ToggleMonitor(on) => {
+            let was_on = state.handles.monitor.is_on();
             state.handles.monitor.set(on);
             state.settings.monitor_enabled = on;
             persist(&state.settings);
+            // The monitor device is open only while monitoring is on (see the engine's startup).
+            if on != was_on {
+                let id = if on { state.settings.monitor_device_id.clone() } else { None };
+                let seq = state.device_switch_seqs.monitor.clone();
+                let this_seq = next_seq(&seq);
+                spawn_device_switch(state.handles.device_switcher.clone(), seq, this_seq, move |s| s.set_monitor_device(id));
+            }
         }
         Message::ToggleVirtualMic(on) => {
             state.handles.virtual_mic.set(on);
@@ -1203,8 +1211,11 @@ fn update_main(state: &mut MainState, message: Message) {
             state.warnings.retain(|w| !w.contains("Monitor output device could not be started"));
             let seq = state.device_switch_seqs.monitor.clone();
             let this_seq = next_seq(&seq);
+            let on = state.handles.monitor.is_on();
             spawn_device_switch(state.handles.device_switcher.clone(), seq, this_seq, move |s| {
-                s.set_monitor_device(Some(device.id))
+                if on {
+                    s.set_monitor_device(Some(device.id))
+                }
             });
         }
         Message::ToggleCancelNoise(on) => {

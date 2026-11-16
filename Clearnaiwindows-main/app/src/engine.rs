@@ -209,7 +209,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
         match device_id {
             Some(id) => {
                 let (producer, consumer) = make_ring_buffer(2.0);
-                match MicCapture::start_on_device_id(&id, producer, self.speaker_counters.clone()) {
+                match MicCapture::start_on_device_id_no_fallback(&id, producer, self.speaker_counters.clone()) {
                     Ok(capture) => {
                         *self.speaker_in_swap.lock().unwrap() = Some(consumer);
                         Self::stop_and_replace_mic(&self.speaker_capture, Some(capture));
@@ -745,7 +745,10 @@ pub fn start(
     // both downstream producers (the SPSC ring buffers used throughout this
     // crate cannot fan a single one out to two consumers, hence a wholly
     // separate ring buffer pair here). ---
-    let (monitor_render, monitor_out_p) = match settings.monitor_device_id.as_deref() {
+    // Only while "Hear my processed mic" is on: an open stream on a Bluetooth headset that is not being used still
+    // holds it (and can keep it in the wrong profile). The GUI starts and stops it with the toggle.
+    let monitor_id = settings.monitor_device_id.as_deref().filter(|_| settings.monitor_enabled);
+    let (monitor_render, monitor_out_p) = match monitor_id {
         Some(id) => {
             let (p, c) = make_ring_buffer(2.0);
             match HardwareRender::start_on_device_id(id, c, handles.counters.clone()) {
@@ -864,7 +867,7 @@ pub fn start(
     let (speaker_capture, speaker_in_p) = match virtual_speaker_source_id {
         Some(id) => {
             let (p, c) = make_ring_buffer(2.0);
-            match MicCapture::start_on_device_id(id, p, handles.speaker_counters.clone()) {
+            match MicCapture::start_on_device_id_no_fallback(id, p, handles.speaker_counters.clone()) {
                 Ok(capture) => (Some(capture), Some(c)),
                 Err(e) => {
                     warnings.push(format!(

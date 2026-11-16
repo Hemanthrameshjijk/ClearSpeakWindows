@@ -14,6 +14,7 @@
 
 pub mod capture;
 pub mod devices;
+pub mod follow;
 pub mod loopback;
 pub mod mmcss;
 pub mod render;
