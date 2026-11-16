@@ -292,7 +292,8 @@ pub enum Message {
     SelectMicStudioPreset(&'static str),
     /// Noise reduction strength of the mic path (label from `ui_logic::NR_STRENGTH_NAMES`).
     SelectNrStrength(&'static str),
-    SelectMicBoost(&'static str),
+    ToggleMicBoost(bool),
+    SetMicBoostDb(u8),
     /// Profile / sign-in page: license typed, Apply pressed.
     LicenseInput(String),
     ApplyLicense,
@@ -1135,12 +1136,15 @@ fn update_main(state: &mut MainState, message: Message) {
                 persist(&state.settings);
             }
         }
-        Message::SelectMicBoost(name) => {
-            if let Some(choice) = crate::ui_logic::mic_boost_from_name(name) {
-                state.handles.mic_boost.store(choice);
-                state.settings.mic_boost = choice;
-                persist(&state.settings);
-            }
+        Message::ToggleMicBoost(on) => {
+            state.settings.mic_boost_on = on;
+            state.handles.mic_boost.store(dsp_core::mic_boost_effective(on, state.settings.mic_boost_db));
+            persist(&state.settings);
+        }
+        Message::SetMicBoostDb(db) => {
+            state.settings.mic_boost_db = db.min(dsp_core::MIC_BOOST_MAX_DB);
+            state.handles.mic_boost.store(dsp_core::mic_boost_effective(state.settings.mic_boost_on, state.settings.mic_boost_db));
+            persist(&state.settings);
         }
         Message::ToggleAccent(on) => {
             state.settings.accent_on = on;

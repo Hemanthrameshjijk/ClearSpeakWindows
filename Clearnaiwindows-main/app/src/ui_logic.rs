@@ -174,27 +174,13 @@ pub fn nr_strength_from_name(name: &str) -> Option<u8> {
     NR_STRENGTH_NAMES.iter().position(|n| *n == name).map(|i| i as u8)
 }
 
-/// Mic boost choices, in the order of `Settings::mic_boost` / `dsp_core::mic_boost_db`.
-pub const MIC_BOOST_NAMES: [&str; 5] = ["Auto", "Off", "+6 dB", "+12 dB", "+18 dB"];
-
-/// The label of a mic boost index (unknown indexes read as Auto, which is what the engine uses for them).
-pub fn mic_boost_name(choice: u8) -> &'static str {
-    MIC_BOOST_NAMES.get(choice as usize).copied().unwrap_or(MIC_BOOST_NAMES[0])
-}
-
-pub fn mic_boost_from_name(name: &str) -> Option<u8> {
-    MIC_BOOST_NAMES.iter().position(|n| *n == name).map(|i| i as u8)
-}
-
-/// The note under the mic picker while a Bluetooth headset mic is in call mode: what the boost does for it, and what
-/// to try when words still get cut.
-pub fn bluetooth_hint_text(mic_boost: u8) -> String {
-    let boost = dsp_core::mic_boost_db(mic_boost, true);
-    let level = if boost > 0.0 {
-        let who = if mic_boost == 0 { "Mic boost Auto" } else { "Mic boost" };
-        format!("{who} is adding +{boost:.0} dB.")
+/// The note under the mic picker while a Bluetooth headset mic is in call mode: what the boost (in dB, 0 = off) does
+/// for it, and what to try when words still get cut.
+pub fn bluetooth_hint_text(boost_db: u8) -> String {
+    let level = if boost_db > 0 {
+        format!("Mic boost is adding +{boost_db} dB.")
     } else {
-        "Mic boost is Off, so your voice may be quiet.".to_string()
+        "Your voice may be quiet: turn on Mic boost (about +12 dB).".to_string()
     };
     format!(
         "Bluetooth mic: call quality. {level} If words get cut, set Noise reduction to Gentle. Best sound: listen on \
@@ -507,15 +493,8 @@ mod tests {
         }
         assert_eq!(nr_strength_from_name("Nope"), None);
         assert_eq!(nr_strength_name(9), "Maximum");
-        for (i, name) in MIC_BOOST_NAMES.iter().enumerate() {
-            assert_eq!(mic_boost_from_name(name), Some(i as u8));
-            assert_eq!(mic_boost_name(i as u8), *name);
-        }
-        assert_eq!(mic_boost_name(9), "Auto");
-        assert_eq!(mic_boost_from_name("Nope"), None);
-        assert!(bluetooth_hint_text(0).contains("Mic boost Auto is adding +12 dB."));
-        assert!(bluetooth_hint_text(4).contains("Mic boost is adding +18 dB."));
-        assert!(bluetooth_hint_text(1).contains("Mic boost is Off"));
+        assert!(bluetooth_hint_text(12).contains("Mic boost is adding +12 dB."));
+        assert!(bluetooth_hint_text(0).contains("turn on Mic boost"));
     }
 
     #[test]

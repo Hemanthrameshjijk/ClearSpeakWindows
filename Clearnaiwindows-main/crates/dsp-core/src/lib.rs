@@ -21,8 +21,8 @@ mod watchdog;
 pub use agc::AutoGainStage;
 pub use output_limiter::OutputLimiter;
 pub use pre_gain::{
-    agc_max_gain_for_db, distance_gain_db, mic_boost_db, PreGainStage, BLUETOOTH_AUTO_BOOST_DB, DISTANCE_GAIN_DB,
-    MAX_GAIN_DB, MIC_BOOST_DB,
+    agc_max_gain_for_db, distance_gain_db, mic_boost_effective, PreGainStage, DISTANCE_GAIN_DB, MAX_GAIN_DB,
+    MIC_BOOST_DEFAULT_DB, MIC_BOOST_MAX_DB,
 };
 pub use clock::{FrameConfig, FrameDeadline, DEFAULT_FRAME_CONFIG};
 pub use metrics::{

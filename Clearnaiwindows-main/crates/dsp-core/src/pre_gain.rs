@@ -42,20 +42,19 @@ pub fn agc_max_gain_for_db(_db: u8) -> f32 {
     8.0
 }
 
-/// Mic boost choices (settings index): 0 Auto, 1 Off, 2 +6 dB, 3 +12 dB, 4 +18 dB.
-pub const MIC_BOOST_DB: [f32; 4] = [0.0, 6.0, 12.0, 18.0];
+/// Top of the Mic boost slider. A Bluetooth headset in call mode needs about +12 dB (live log: its voice reached the
+/// output around -40 dBFS); the soft knee keeps the top of the range from clipping.
+pub const MIC_BOOST_MAX_DB: u8 = 24;
 
-/// What Auto adds for a Bluetooth headset in call mode. Its mic arrives far quieter than a wired/USB one (live log:
-/// output peaks around -25 dBFS with the normal +18 dB AutoGain ceiling), so it needs about this much on top.
-pub const BLUETOOTH_AUTO_BOOST_DB: f32 = 12.0;
+/// Where the slider starts the first time: enough for a Bluetooth call-mode mic.
+pub const MIC_BOOST_DEFAULT_DB: u8 = 12;
 
-/// The boost in dB for a mic boost choice. Auto (0, or any unknown index) boosts only a Bluetooth call-mode mic, so
-/// wired and USB mics keep exactly their earlier sound.
-pub fn mic_boost_db(choice: u8, hands_free: bool) -> f32 {
-    match choice {
-        1..=4 => MIC_BOOST_DB[choice as usize - 1],
-        _ if hands_free => BLUETOOTH_AUTO_BOOST_DB,
-        _ => 0.0,
+/// The boost the mic chain applies, in dB: the slider value while the switch is on, else 0 (exactly untouched).
+pub fn mic_boost_effective(on: bool, db: u8) -> u8 {
+    if on {
+        db.min(MIC_BOOST_MAX_DB)
+    } else {
+        0
     }
 }
 
@@ -113,13 +112,11 @@ mod tests {
     }
 
     #[test]
-    fn auto_boosts_only_bluetooth_call_mode() {
-        assert_eq!(mic_boost_db(0, false), 0.0);
-        assert_eq!(mic_boost_db(0, true), BLUETOOTH_AUTO_BOOST_DB);
-        assert_eq!(mic_boost_db(1, true), 0.0, "Off never boosts, even on Bluetooth");
-        assert_eq!(mic_boost_db(3, false), 12.0);
-        assert_eq!(mic_boost_db(4, true), 18.0);
-        assert_eq!(mic_boost_db(9, false), 0.0, "unknown index reads as Auto");
+    fn mic_boost_is_the_slider_only_while_on() {
+        assert_eq!(mic_boost_effective(false, 18), 0, "off never boosts");
+        assert_eq!(mic_boost_effective(true, 12), 12);
+        assert_eq!(mic_boost_effective(true, 0), 0);
+        assert_eq!(mic_boost_effective(true, 200), MIC_BOOST_MAX_DB, "capped at the slider top");
     }
 
     #[test]

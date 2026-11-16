@@ -26,8 +26,8 @@ fn red() -> Color {
 const LOGO_MARK_PNG: &[u8] = include_bytes!("../../assets/logo_mark.png");
 const LOGO_WORD_LIGHT_PNG: &[u8] = include_bytes!("../../assets/logo_word_light.png");
 const LOGO_WORD_DARK_PNG: &[u8] = include_bytes!("../../assets/logo_word_dark.png");
-/// Width / height of the wordmark pictures (700 x 190).
-const WORD_ASPECT: f32 = 700.0 / 190.0;
+/// Width / height of the ClearSpeak wordmark pictures (902 x 190; made by `assets/brand` -> transparent PNGs).
+const WORD_ASPECT: f32 = 902.0 / 190.0;
 
 // `image::Handle::from_bytes` makes a new texture id on every call, so each picture is built once and cloned.
 static MARK_HANDLE: std::sync::OnceLock<image::Handle> = std::sync::OnceLock::new();
@@ -39,7 +39,7 @@ pub fn logo_mark<'a>(_dark: bool, size: f32) -> Element<'a, Message> {
     image(MARK_HANDLE.get_or_init(|| image::Handle::from_bytes(LOGO_MARK_PNG)).clone()).width(size).height(size).into()
 }
 
-/// The mark plus the "ClearNAI" wordmark: navy and blue on light, white and blue on dark.
+/// The mark plus the "ClearSpeak by CitrusIQ" wordmark: navy and blue on light, white and blue on dark.
 pub fn logo_with_wordmark<'a>(dark: bool, size: f32) -> Element<'a, Message> {
     let handle = if dark {
         WORD_DARK_HANDLE.get_or_init(|| image::Handle::from_bytes(LOGO_WORD_DARK_PNG))
@@ -233,6 +233,31 @@ fn bluetooth_hint(state: &MainState) -> Element<'static, Message> {
     } else {
         column![].into()
     }
+}
+
+/// Mic boost: an on/off switch with the current amount, and a slider (0..+24 dB) to drag. Used on the card and on
+/// the Microphone tab (`label_size` matches the rows around it). The slider keeps its value while the switch is off.
+fn mic_boost_control(state: &MainState, label_size: f32) -> Element<'static, Message> {
+    let t = style::tokens_for(state.settings.theme_dark);
+    let on = state.settings.mic_boost_on;
+    let db = state.settings.mic_boost_db.min(dsp_core::MIC_BOOST_MAX_DB);
+    let amount = text(if on { format!("+{db} dB") } else { "Off".to_string() })
+        .size(13)
+        .color(if on { t.text } else { t.muted });
+    column![
+        row![
+            text("Mic boost").size(label_size).color(t.muted),
+            container(text("")).width(Length::Fill),
+            amount,
+            toggler(on).on_toggle(Message::ToggleMicBoost).size(20).style(style::toggle),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
+        iced::widget::slider(0..=dsp_core::MIC_BOOST_MAX_DB, db, Message::SetMicBoostDb),
+        text("For quiet mics such as Bluetooth earbuds. Drag to set how much.").size(12).color(t.muted),
+    ]
+    .spacing(6)
+    .into()
 }
 
 /// What the license allows on this PC now: nothing before sign-in.
@@ -1264,17 +1289,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
-                    row![
-                        text("Mic boost").size(13).color(t.muted),
-                        container(text("")).width(Length::Fill),
-                        pick_list(&ui_logic::MIC_BOOST_NAMES[..], Some(ui_logic::mic_boost_name(h.mic_boost.load())), Message::SelectMicBoost)
-                            .width(Length::Fixed(120.0))
-                            .padding([6, 10])
-                            .text_size(13)
-                            .style(style::select),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
+                    mic_boost_control(state, 13.0),
                     if allowed(state).accent {
                         switch_row("Convert my accent", accent_desc, accent_color, state.settings.accent_on, Message::ToggleAccent)
                     } else {
@@ -1664,15 +1679,7 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
             .style(style::select)
             .into(),
     ));
-    col = col.push(select_row(
-        state,
-        "Mic boost (Auto lifts Bluetooth earbuds)",
-        pick_list(&ui_logic::MIC_BOOST_NAMES[..], Some(ui_logic::mic_boost_name(h.mic_boost.load())), Message::SelectMicBoost)
-            .padding([9, 12])
-            .text_size(13)
-            .style(style::select)
-            .into(),
-    ));
+    col = col.push(mic_boost_control(state, 14.0));
     col = col
         .push(setting_row(state, "Quiet nearby voices", Some("Fast. Lowers voices quieter than yours."), h.mic_voice_gate.is_on(), Message::ToggleMicVoiceGate))
         .push(setting_row(

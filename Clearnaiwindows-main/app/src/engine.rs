@@ -1097,9 +1097,9 @@ fn spawn_mic_pipeline(
             let mut auto_gain = dsp_core::AutoGainStage::new();
             // Mic boost: a fixed gain applied BEFORE noise cleanup, so Hush gets a healthy level instead of a quiet
             // Bluetooth call-mode voice it partly cuts (a boost after Hush could not bring that speech back). A
-            // constant gain lifts voice and background equally, so the contrast Hush relies on is kept. Auto boosts
-            // only a Bluetooth headset in call mode; wired/USB mics stay exactly as before unless a manual step is
-            // picked. Soft knee at 0.8 (no clipping into Hush), ramped per frame, exactly untouched at 0 dB.
+            // constant gain lifts voice and background equally, so the contrast Hush relies on is kept. Set by the
+            // user (switch + slider, 0..+24 dB; off = 0). Soft knee at 0.8 (no clipping into Hush), ramped per frame,
+            // exactly untouched at 0 dB.
             let mut mic_boost = dsp_core::PreGainStage::new();
             // Last stage: soft-limits loud bursts instead of letting them hard-clip. Untouched below 0.9.
             let mut output_limiter = dsp_core::OutputLimiter::new();
@@ -1149,10 +1149,7 @@ fn spawn_mic_pipeline(
                 // docs and `mic_voice_gate_stage`'s construction comment above.
                 run_if_enabled(voice_gate_stage.as_mut(), &handles.mic_voice_gate, &mut frame);
 
-                mic_boost.set_db(dsp_core::mic_boost_db(
-                    handles.mic_boost.load(),
-                    handles.counters.hands_free.load(Ordering::Relaxed),
-                ));
+                mic_boost.set_db(handles.mic_boost.load().min(dsp_core::MIC_BOOST_MAX_DB) as f32);
                 // Before Hush/BVC (and before RNNoise/AutoGain on the BVC-off path).
                 mic_boost.process(&mut frame);
 

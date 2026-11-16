@@ -41,10 +41,13 @@ pub struct Settings {
     /// Maximum can cut soft speech; Gentle keeps it but leaves a little more noise in pauses. Default Balanced.
     #[serde(default = "default_nr_strength")]
     pub mic_nr_strength: u8,
-    /// Mic boost before noise cleanup: 0 Auto (+12 dB only for a Bluetooth headset in call mode), 1 Off, 2 +6 dB,
-    /// 3 +12 dB, 4 +18 dB (see `dsp_core::mic_boost_db`). Default Auto.
+    /// Mic boost before noise cleanup (for quiet mics such as Bluetooth earbuds in call mode): the on/off switch.
+    /// Default off, so wired and USB mics keep their sound until the user turns it on.
     #[serde(default)]
-    pub mic_boost: u8,
+    pub mic_boost_on: bool,
+    /// The Mic boost slider in dB, `0..=dsp_core::MIC_BOOST_MAX_DB`; kept while the switch is off.
+    #[serde(default = "default_mic_boost_db")]
+    pub mic_boost_db: u8,
     /// Who uses this copy: shown in the sidebar and on the Profile page.
     #[serde(default)]
     pub user_name: String,
@@ -232,6 +235,10 @@ fn default_nr_strength() -> u8 {
     1
 }
 
+fn default_mic_boost_db() -> u8 {
+    dsp_core::MIC_BOOST_DEFAULT_DB
+}
+
 fn default_studio_preset() -> u8 {
     1 // Natural
 }
@@ -253,7 +260,8 @@ impl Default for Settings {
             mic_studio_on: true,
             mic_studio_preset: default_studio_preset(),
             mic_nr_strength: default_nr_strength(),
-            mic_boost: 0,
+            mic_boost_on: false,
+            mic_boost_db: default_mic_boost_db(),
             user_name: String::new(),
             user_email: String::new(),
             license_key: String::new(),
