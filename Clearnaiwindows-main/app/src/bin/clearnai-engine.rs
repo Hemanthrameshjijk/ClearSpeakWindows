@@ -4,5 +4,10 @@
 
 fn main() {
     #[cfg(windows)]
-    clearnai_app::host::run_engine();
+    if std::env::args().any(|a| a == "--voice-test") {
+        // The "Test my voice" helper: records, builds each version, exits. Never the engine itself.
+        clearnai_app::voice_test::run_helper();
+    } else {
+        clearnai_app::host::run_engine();
+    }
 }

@@ -1221,6 +1221,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
         Some(p) => password_box(state, p),
         // Before a license, the card is the sign-in screen (Device Code, paste, Sign in).
         None if needs_sign_in(state) => sign_in_form(state, true),
+        None if state.voice_test.open => container(voice_test_panel(state, true)).padding(14).width(Length::Fill).style(style::card).into(),
         None => {
             // "Cancel noise" is one switch for everything that cleans the mic: noise, background voices and echo.
             let cancel_on = h.mic_noise.is_on() || h.mic_bvc.is_on() || h.echo_cancel.is_on();
@@ -1318,7 +1319,20 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
             .spacing(6)
             .align_y(iced::Alignment::Center);
 
-            column![profile_row, voice, refresh].spacing(12).into()
+            let test_voice = btn(
+                container(
+                    row![glyph_icon(icons::PLAY, 14.0, t.primary), text("Test my voice").size(14).font(bold()).color(t.primary)]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                )
+                .center_x(Length::Fill),
+            )
+            .width(Length::Fill)
+            .padding([10, 0])
+            .on_press(Message::OpenVoiceTest)
+            .style(style::outline);
+
+            column![profile_row, voice, test_voice, refresh].spacing(12).into()
         }
     };
 
@@ -1352,6 +1366,137 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
     });
     // Press anywhere that is not a control to drag the (undecorated) window.
     iced::widget::mouse_area(container(panel).padding(4)).on_press(Message::DragWindow).into()
+}
+
+/// "Test my voice": record 20 s, then play the original and each feature's version, each with the words it gives.
+/// `small` = the card's screen (with a Back button); otherwise a section of the Microphone page.
+pub fn voice_test_panel(state: &MainState, small: bool) -> Element<'_, Message> {
+    use crate::voice_test::{Phase, MIN_SECONDS, SECONDS};
+    use super::icons;
+    let t = style::tokens_for(state.settings.theme_dark);
+    let vt = &state.voice_test;
+    let mut col = column![].spacing(12);
+
+    let mut head = row![glyph_icon(icons::MIC, 17.0, t.primary), text("Test my voice").size(16).font(bold())]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+    if small {
+        head = head.push(container(text("")).width(Length::Fill)).push(
+            btn(text("Back").size(12).font(bold()).color(t.primary)).padding([4, 6]).on_press(Message::CloseVoiceTest).style(style::text_button),
+        );
+    }
+    col = col.push(head);
+
+    if vt.running {
+        match vt.progress.phase {
+            Phase::Starting | Phase::Recording => {
+                let secs = vt.progress.recorded_s;
+                col = col
+                    .push(text("Speak normally, as on a call. Read a few sentences aloud.").size(13))
+                    .push(progress_bar(0.0..=SECONDS, secs).girth(Length::Fixed(8.0)).style(style::meter))
+                    .push(
+                        row![
+                            text(if vt.progress.phase == Phase::Starting {
+                                "Opening the microphone...".to_string()
+                            } else {
+                                format!("Recording: {secs:.0} s of {SECONDS:.0} s")
+                            })
+                            .size(12)
+                            .color(t.muted),
+                            container(text("")).width(Length::Fill),
+                            progress_bar(0.0..=1.0, vt.progress.level).length(Length::Fixed(90.0)).girth(Length::Fixed(6.0)).style(style::meter),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    );
+                let finish = btn(text("Finish now").size(13).font(bold())).padding([8, 14]).style(style::outline);
+                col = col.push(if secs >= MIN_SECONDS { finish.on_press(Message::StopVoiceTestRecording) } else { finish });
+            }
+            _ => {
+                col = col
+                    .push(text(if vt.progress.step.is_empty() { "Preparing..." } else { vt.progress.step.as_str() }).size(13))
+                    .push(text("Making each version of your recording. This takes up to a minute.").size(12).color(t.muted));
+            }
+        }
+        return col.into();
+    }
+
+    if let Some(e) = &vt.error {
+        col = col.push(text(e.as_str()).size(12).color(t.danger));
+    }
+
+    match &vt.results {
+        Some(r) => {
+            col = col.push(
+                text("Play each one. Use headphones, so your speakers don't play into the mic.").size(12).color(t.muted),
+            );
+            for v in &r.versions {
+                let playing = vt.playing.as_ref().is_some_and(|(k, _)| *k == v.key);
+                let (icon, msg) = if playing {
+                    (icons::STOP, Message::StopVoiceTestPlayback)
+                } else {
+                    (icons::PLAY, Message::PlayVoiceTest(v.key.clone()))
+                };
+                let play = btn(container(glyph_icon(icon, 15.0, Color::WHITE)).center_x(Length::Fill).center_y(Length::Fill))
+                    .width(32)
+                    .height(32)
+                    .padding(0)
+                    .on_press(msg)
+                    .style(style::primary);
+                let words: Element<'_, Message> = if !r.transcript_note.is_empty() {
+                    text("").size(1).into()
+                } else if v.transcript.is_empty() {
+                    text("(no words recognised)").size(12).color(t.muted).into()
+                } else {
+                    text(format!("\u{201C}{}\u{201D}", v.transcript)).size(12).color(t.muted).into()
+                };
+                col = col.push(
+                    container(
+                        row![
+                            play,
+                            column![
+                                text(v.label.as_str()).size(14).font(bold()).color(if playing { t.primary } else { t.text }),
+                                words,
+                            ]
+                            .spacing(3)
+                            .width(Length::Fill),
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Alignment::Start),
+                    )
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(style::soft_box),
+                );
+            }
+            if !r.transcript_note.is_empty() {
+                col = col.push(text(r.transcript_note.as_str()).size(12).color(t.muted));
+            }
+            if r.versions.len() == 1 {
+                col = col.push(text("Your license has no cleaning features, so only the original is shown.").size(12).color(t.muted));
+            }
+            col = col.push(btn(text("Record again").size(13).font(bold())).padding([8, 14]).on_press(Message::StartVoiceTest).style(style::outline));
+        }
+        None => {
+            col = col
+                .push(
+                    text(format!(
+                        "Record {SECONDS:.0} seconds of your voice. Then hear it as it is, with noise removed, with background voices \
+                         removed, with the accent and all together, and see the words each version gives."
+                    ))
+                    .size(13),
+                )
+                .push(
+                    btn(container(text("Start recording").size(14).font(bold()).color(Color::WHITE)).center_x(Length::Fill))
+                        .width(Length::Fill)
+                        .padding([11, 0])
+                        .on_press(Message::StartVoiceTest)
+                        .style(style::primary),
+                )
+                .push(text("Your call keeps working during the test.").size(12).color(t.muted));
+        }
+    }
+    col.into()
 }
 
 /// The panel's body while the settings are locked: a password box (focused as it appears) with Unlock and Cancel.
@@ -1724,7 +1869,7 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         .style(style::select)
         .into(),
     ));
-    card(col)
+    column![card(col), card(voice_test_panel(state, false))].spacing(16).into()
 }
 
 fn call_audio_tab(state: &MainState) -> Element<'_, Message> {

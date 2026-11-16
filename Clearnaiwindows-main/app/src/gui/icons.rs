@@ -109,6 +109,12 @@ pub const SPEAKER_BOX: &[u8] = icon!(r#"<rect x="5" y="2" width="14" height="20"
 /// Close.
 pub const CLOSE: &[u8] = icon!(r#"<path d="M6 6l12 12M18 6 6 18"/>"#);
 
+/// Play (voice test).
+pub const PLAY: &[u8] = icon!(r#"<path d="M7 4.5v15l12-7.5z"/>"#);
+
+/// Stop (voice test).
+pub const STOP: &[u8] = icon!(r#"<rect x="6" y="6" width="12" height="12" rx="1.5"/>"#);
+
 /// Expand to the full window.
 pub const EXPAND: &[u8] = icon!(r#"<path d="M14.5 3H21v6.5M9.5 21H3v-6.5M21 3l-7 7M3 21l7-7"/>"#);
 
@@ -152,6 +158,8 @@ mod tests {
             ("sparkles", SPARKLES),
             ("waves", WAVES),
             ("speaker_box", SPEAKER_BOX),
+            ("play", PLAY),
+            ("stop", STOP),
         ] {
             let s = std::str::from_utf8(bytes).unwrap();
             assert!(s.starts_with("<svg") && s.ends_with("</svg>"), "{name} is not a whole svg");

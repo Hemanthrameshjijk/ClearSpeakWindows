@@ -33,6 +33,7 @@ pub mod status_ui;
 pub mod sysutil;
 pub mod tray;
 pub mod ui_logic;
+pub mod voice_test;
 
 #[cfg(windows)]
 pub mod driver_pipe;

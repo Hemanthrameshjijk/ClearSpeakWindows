@@ -151,6 +151,23 @@ struct MainState {
     clock_wrong: bool,
     /// How many Ticks in a row the accent has been paused (the banner waits for a lasting pause, not a blip).
     accent_paused_ticks: u32,
+    /// "Test my voice": shown in place of the card's controls while `open`; also a section of the Microphone page.
+    voice_test: VoiceTestUi,
+}
+
+/// What the window knows about the current voice test (the helper process does the work, see `voice_test`).
+#[derive(Default)]
+pub struct VoiceTestUi {
+    pub open: bool,
+    /// The helper is recording or preparing the versions.
+    pub running: bool,
+    pub progress: crate::voice_test::Progress,
+    pub results: Option<crate::voice_test::Results>,
+    pub error: Option<String>,
+    /// The version playing now and when it started (playback has no end event, so it is timed).
+    pub playing: Option<(String, std::time::Instant)>,
+    /// Ticks without a progress file while running (the helper did not start).
+    stalled_ticks: u32,
 }
 
 #[derive(Default)]
@@ -207,6 +224,7 @@ impl MainState {
             license_token,
             license_status: license::Status::SignIn,
             clock_wrong: false,
+            voice_test: VoiceTestUi::default(),
         }
     }
 }
@@ -319,6 +337,14 @@ pub enum Message {
     ToggleVirtualMic(bool),
     /// From the bar before sign-in: turn the window into the card, which shows the sign-in screen.
     ShowSignInCard,
+    /// "Test my voice": open/close the test screen on the card, start a 20 s recording, finish it early, play one
+    /// version (by key) or stop playing.
+    OpenVoiceTest,
+    CloseVoiceTest,
+    StartVoiceTest,
+    StopVoiceTestRecording,
+    PlayVoiceTest(String),
+    StopVoiceTestPlayback,
     SelectMonitorDevice(DeviceOption),
     /// Re-enumerates devices (e.g. after starting VoiceMeter/VB-Cable
     /// *after* ClearNAI) without restarting the app. See
@@ -871,6 +897,7 @@ fn update_main(state: &mut MainState, message: Message) {
     }
     match message {
         Message::Tick => {
+            poll_voice_test(&mut state.voice_test);
             refresh_alerts(state);
             // What the license does not allow is shown off (the engine switches it off too, see `license_gate`).
             {
@@ -961,6 +988,41 @@ fn update_main(state: &mut MainState, message: Message) {
                 state.settings.mic_bvc_on = false;
                 persist(&state.settings);
             }
+        }
+        Message::OpenVoiceTest => state.voice_test.open = true,
+        Message::CloseVoiceTest => {
+            crate::voice_test::stop_playback();
+            state.voice_test.playing = None;
+            state.voice_test.open = false;
+        }
+        Message::StartVoiceTest => {
+            let vt = &mut state.voice_test;
+            vt.results = None;
+            vt.playing = None;
+            vt.progress = Default::default();
+            vt.stalled_ticks = 0;
+            match crate::voice_test::start() {
+                Ok(()) => {
+                    vt.running = true;
+                    vt.error = None;
+                }
+                Err(e) => vt.error = Some(e),
+            }
+        }
+        Message::StopVoiceTestRecording => crate::voice_test::request_stop(),
+        Message::PlayVoiceTest(key) => {
+            let file = state.voice_test.results.as_ref().and_then(|r| r.versions.iter().find(|v| v.key == key)).map(|v| v.file.clone());
+            if let Some(file) = file {
+                if crate::voice_test::play(&file) {
+                    state.voice_test.playing = Some((key, std::time::Instant::now()));
+                } else {
+                    state.voice_test.error = Some("Could not play the recording on the default speakers.".to_string());
+                }
+            }
+        }
+        Message::StopVoiceTestPlayback => {
+            crate::voice_test::stop_playback();
+            state.voice_test.playing = None;
         }
         Message::SelectProfile(name) => {
             crate::log_info!("[action] profile: {name}");
@@ -1419,6 +1481,47 @@ fn update_main(state: &mut MainState, message: Message) {
         | Message::SubmitPassword
         | Message::CancelPassword
         | Message::OpenFullAt(_) => {}
+    }
+}
+
+/// Follows the voice-test helper through its progress file, and ends the "playing" mark when the file has played.
+fn poll_voice_test(vt: &mut VoiceTestUi) {
+    use crate::voice_test::Phase;
+    if let Some((_, since)) = &vt.playing {
+        let secs = vt.results.as_ref().map_or(0.0, |r| r.seconds);
+        if since.elapsed().as_secs_f32() > secs + 0.3 {
+            vt.playing = None;
+        }
+    }
+    if !vt.running {
+        return;
+    }
+    match crate::voice_test::read_progress() {
+        Some(p) => {
+            vt.stalled_ticks = if p.phase == Phase::Starting { vt.stalled_ticks + 1 } else { 0 };
+            match p.phase {
+                Phase::Done => {
+                    vt.running = false;
+                    vt.results = crate::voice_test::read_results();
+                    if vt.results.is_none() {
+                        vt.error = Some("The test finished but its results could not be read.".to_string());
+                    }
+                }
+                Phase::Failed => {
+                    vt.running = false;
+                    vt.error = Some(p.error.clone());
+                }
+                _ => {}
+            }
+            vt.progress = p;
+        }
+        None => vt.stalled_ticks += 1,
+    }
+    // 4 ticks a second: 20 s without the helper ever starting to record.
+    if vt.running && vt.stalled_ticks > 80 {
+        vt.running = false;
+        vt.error = Some("The voice test did not start. Close ClearNAI from the tray, open it again and retry.".to_string());
+        crate::log_error!("[voice-test] the helper never reported progress");
     }
 }
 

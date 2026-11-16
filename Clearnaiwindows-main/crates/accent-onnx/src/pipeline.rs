@@ -737,6 +737,36 @@ fn set_error(sh: &Shared, msg: String) {
     }
 }
 
+/// Converts a whole 48 kHz recording at once (the "Test my voice" screen), with the same resamplers, leveler and push
+/// size as the live worker, so it sounds like the live accent. `voice` is 1..=6. `init_runtime` must have been called.
+/// The result is 48 kHz, the same length as the input (the model delay is removed so both line up).
+pub fn convert_offline(models: &std::path::Path, threads: usize, voice: u8, x48: &[f32]) -> Result<Vec<f32>, String> {
+    let name = VOICE_NAMES.get((voice.max(1) - 1) as usize).ok_or("unknown voice")?;
+    let mut eng = AccentStream::load(models, threads, name)?;
+    let mut down = CausalDownsampler3x::new(RESAMPLER_TAPS);
+    let mut up = CausalUpsampler2x::new(RESAMPLER_TAPS);
+    let mut leveler = Leveler::new();
+    let mut x16: Vec<f32> = Vec::with_capacity(x48.len() / 3 + PUSH16);
+    for c in x48.chunks(PUSH48) {
+        x16.extend(down.push(c));
+    }
+    // Pad so the last words come out of the model look-ahead too.
+    let pad = ((eng.algorithmic_latency_ms() + 200.0) * 16.0) as usize;
+    x16.extend(std::iter::repeat_n(0.0, pad.div_ceil(PUSH16) * PUSH16));
+    let mut out48: Vec<f32> = Vec::with_capacity(x48.len() + pad * 3);
+    for c in x16.chunks(PUSH16) {
+        let mut chunk = c.to_vec();
+        leveler.process(&mut chunk);
+        out48.extend(up.push(&eng.push(&chunk)?));
+    }
+    out48.extend(up.push(&eng.flush()?));
+    // Remove the model + resampler delay so the converted voice lines up with the original.
+    let delay = ((eng.algorithmic_latency_ms() * 48.0) as usize + RESAMPLER_TAPS).min(out48.len());
+    out48.drain(..delay);
+    out48.resize(x48.len(), 0.0);
+    Ok(out48)
+}
+
 fn worker(sh: Arc<Shared>, mut in_cons: Consumer<f32>, mut out_prod: Producer<f32>, mut cfg: AccentConfig) {
     raise_thread_priority();
     let mut engine: Option<AccentStream> = None;
