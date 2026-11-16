@@ -149,6 +149,9 @@ pub struct FrameCounters {
     /// Set by the capture thread: the open microphone is a Bluetooth headset in call mode (Hands-Free, 8-16 kHz),
     /// which delivers a much quieter voice than a wired or USB mic. Read by the mic chain for the Auto mic boost.
     pub hands_free: std::sync::atomic::AtomicBool,
+    /// Name of the capture device feeding these counters (set when it opens, never on the audio path). Lets a render
+    /// thread sharing them notice it is the same Bluetooth headset as the mic (see `audio_io::render`).
+    pub capture_device: std::sync::Mutex<String>,
 }
 
 #[cfg(test)]

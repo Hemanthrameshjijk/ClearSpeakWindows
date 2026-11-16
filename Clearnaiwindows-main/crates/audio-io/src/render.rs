@@ -267,6 +267,11 @@ fn render_loop(
     let mut last_underrun_log: Option<std::time::Instant> = None;
     let mut underruns_since_log: u64 = 0;
     let mut last_follow_check = std::time::Instant::now();
+    // Playing into the same Bluetooth headset that is the microphone in call mode (the Monitor on the earbuds)
+    // makes the headset juggle both directions and glitch; such an output plays silence instead (still draining
+    // its ring so nothing piles up). Only possible for a render sharing the mic's counters (Monitor, virtual-mic
+    // target); a cable or the ClearNAI device never matches a headset's name.
+    let mut same_headset = false;
     while !stop_flag.load(Ordering::Relaxed) {
         if event_handle.wait_for_event(1000).is_err() {
             bail!("render event wait failed or timed out; render device likely became unavailable");
@@ -276,6 +281,16 @@ fn render_loop(
             if follow::should_switch(&Direction::Render, target, &choice, false) {
                 audio_client.stop_stream().ok();
                 return Ok(true);
+            }
+            let now_same = counters.hands_free.load(Ordering::Relaxed)
+                && counters.capture_device.lock().map_or(false, |mic| follow::same_physical_device(&name, &mic));
+            if now_same != same_headset {
+                same_headset = now_same;
+                crate::report_error(&if now_same {
+                    format!("[audio-io] INFO: '{name}' is the Bluetooth headset used as the microphone; playing silence on it (Monitor paused) to avoid glitches")
+                } else {
+                    format!("[audio-io] INFO: '{name}' plays again")
+                });
             }
         }
 
@@ -300,7 +315,7 @@ fn render_loop(
                 let due = last_underrun_log.map_or(true, |t| t.elapsed() >= std::time::Duration::from_secs(30));
                 if due {
                     crate::report_error(&format!(
-                        "[audio-io] render underrun: {underruns_since_log} frame(s) padded with silence since the last note"
+                        "[audio-io] render underrun on '{name}': {underruns_since_log} frame(s) padded with silence since the last note"
                     ));
                     last_underrun_log = Some(std::time::Instant::now());
                     underruns_since_log = 0;
@@ -310,7 +325,7 @@ fn render_loop(
 
         out_bytes.clear();
         for &sample in pending.iter().take(available as usize) {
-            push_f32_le(&mut out_bytes, sample);
+            push_f32_le(&mut out_bytes, if same_headset { 0.0 } else { sample });
         }
         render_client
             .write_to_device_from_deque(available as usize, &mut out_bytes, None)

@@ -1103,6 +1103,12 @@ fn spawn_mic_pipeline(
             let mut mic_boost = dsp_core::PreGainStage::new();
             // Last stage: soft-limits loud bursts instead of letting them hard-clip. Untouched below 0.9.
             let mut output_limiter = dsp_core::OutputLimiter::new();
+            // Clock-drift compensation before the fan-out (see `dsp_core::DriftCompensator`).
+            let mut drift = dsp_core::DriftCompensator::new();
+            let mut synced = vec![0.0f32; FRAME_SAMPLES];
+            let sync_clock = Instant::now();
+            let mut last_sync_log = Instant::now();
+            let mut last_accent_gaps = 0u32;
             let mut echo_canceller = aec::NlmsAec::new_default();
             let mut echo_reference = vec![0.0f32; FRAME_SAMPLES];
             loop {
@@ -1219,6 +1225,25 @@ fn spawn_mic_pipeline(
                     frame.copy_from_slice(&silence);
                 }
 
+                // Keep the outputs in step with real time: a slow or gappy mic clock (Bluetooth call mode) is
+                // stretched by up to 1 % instead of letting the driver/cable buffers run dry into silence (cut
+                // words). Bit-exact pass-through while the mic keeps time; usually one frame out per frame in.
+                drift.push(&frame, started.duration_since(sync_clock).as_secs_f64());
+                if last_sync_log.elapsed() >= std::time::Duration::from_secs(60) {
+                    last_sync_log = Instant::now();
+                    let s = drift.take_stats();
+                    let gaps = handles.accent.status().underruns;
+                    crate::log_info!(
+                        "[clearnairt] mic sync last 60s: ratio {:.4}..{:.4}, behind {:.1} ms, {} restart(s); accent gaps +{}",
+                        s.min_ratio,
+                        s.max_ratio,
+                        s.deficit_ms,
+                        s.resets,
+                        gaps.saturating_sub(last_accent_gaps)
+                    );
+                    last_accent_gaps = gaps;
+                }
+                while drift.pop_frame(&mut synced) {
                 // Hand a *copy* of the one final processed frame to each
                 // independent downstream path that's actually active. This
                 // is the fan-out `dsp_core`'s SPSC ring buffers can't do on
@@ -1229,7 +1254,7 @@ fn spawn_mic_pipeline(
                 // producers exist.
                 // Virtual microphone switched off (Devices page): meeting apps get silence. The monitor below
                 // still plays the processed voice, so the user can test without being heard in a call.
-                let to_meeting: &[f32] = if handles.virtual_mic.is_on() { &frame } else { &silence };
+                let to_meeting: &[f32] = if handles.virtual_mic.is_on() { &synced } else { &silence };
                 push_frame(&mic_out, to_meeting);
                 // Real, tested write into the driver-transport shared
                 // section (see docs/DRIVER_PLAN.md) - a genuine second
@@ -1253,9 +1278,10 @@ fn spawn_mic_pipeline(
                 // is configured at all, `push_frame` on a `None` swap is
                 // already a no-op either way.
                 if handles.monitor.is_on() {
-                    push_frame(&monitor_out, &frame);
+                    push_frame(&monitor_out, &synced);
                 } else {
                     push_frame(&monitor_out, &silence);
+                }
                 }
             }
         })

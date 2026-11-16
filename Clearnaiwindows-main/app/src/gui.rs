@@ -1143,6 +1143,8 @@ fn update_main(state: &mut MainState, message: Message) {
         }
         Message::SetMicBoostDb(db) => {
             state.settings.mic_boost_db = db.min(dsp_core::MIC_BOOST_MAX_DB);
+            // Dragging means "I want this much": switch the boost on (before, a drag with the switch off did nothing).
+            state.settings.mic_boost_on = db > 0;
             state.handles.mic_boost.store(dsp_core::mic_boost_effective(state.settings.mic_boost_on, state.settings.mic_boost_db));
             persist(&state.settings);
         }

@@ -192,6 +192,9 @@ fn capture_loop(
         .with_context(|| format!("activating IAudioClient on capture device '{name}'"))?;
     let device_rate = audio_client.get_mixformat().map(|f| f.get_samplespersec()).unwrap_or(0);
     counters.hands_free.store(follow::is_hands_free(&name, device_rate), Ordering::Relaxed);
+    if let Ok(mut n) = counters.capture_device.lock() {
+        n.clone_from(&name);
+    }
     if last_opened.as_deref() != Some(device_id) {
         let mut note = format!("[audio-io] INFO: microphone: '{name}' ({device_rate} Hz)");
         if choice.fallback {
@@ -240,6 +243,9 @@ fn capture_loop(
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES);
     let mut timeout_ms = FIRST_EVENT_TIMEOUT_MS;
     let mut last_follow_check = std::time::Instant::now();
+    // Per-minute summary: how much audio the device really delivered, and how often it said it lost some.
+    let mut stats_since = std::time::Instant::now();
+    let (mut stat_samples, mut stat_gaps, mut stat_silent) = (0u64, 0u32, 0u32);
 
     while !stop_flag.load(Ordering::Relaxed) {
         // A stalled event most likely means the device was removed/disabled
@@ -281,6 +287,9 @@ fn capture_loop(
             let (got, info) = capture_client
                 .read_from_device(&mut scratch)
                 .context("reading captured audio from device")?;
+            stat_samples += got as u64;
+            stat_gaps += info.flags.data_discontinuity as u32;
+            stat_silent += info.flags.silent as u32;
 
             for c in scratch[..got as usize * 4].chunks_exact(4) {
                 // A packet marked silent (Bluetooth glitch, profile switch) is silence whatever its bytes say.
@@ -291,6 +300,18 @@ fn capture_loop(
                     pending.clear();
                 }
             }
+        }
+
+        if stats_since.elapsed() >= std::time::Duration::from_secs(60) {
+            let secs = stats_since.elapsed().as_secs_f64();
+            crate::report_error(&format!(
+                "[audio-io] INFO: microphone '{name}' last {secs:.0}s: {} frames received ({:.1}% of real time), \
+                 {stat_gaps} gap(s) reported by the device, {stat_silent} silent packet(s)",
+                stat_samples / FRAME_SAMPLES as u64,
+                stat_samples as f64 / (secs * 48_000.0) * 100.0
+            ));
+            stats_since = std::time::Instant::now();
+            (stat_samples, stat_gaps, stat_silent) = (0, 0, 0);
         }
 
         if stop_flag.load(Ordering::Relaxed) {

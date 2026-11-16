@@ -62,6 +62,17 @@ pub fn is_hands_free(name: &str, sample_rate: u32) -> bool {
     n.contains("hands-free") || n.contains("handsfree") || (sample_rate > 0 && sample_rate <= 16_000)
 }
 
+/// Two endpoints of the same physical device: Windows names them "Headset (realme Buds T310)" and
+/// "Headphones (realme Buds T310)", so the text in the last brackets matches.
+pub fn same_physical_device(a: &str, b: &str) -> bool {
+    fn key(n: &str) -> Option<&str> {
+        let open = n.rfind('(')?;
+        let close = n.rfind(')')?;
+        (close > open + 1).then(|| n[open + 1..close].trim())
+    }
+    matches!((key(a), key(b)), (Some(x), Some(y)) if !x.is_empty() && x.eq_ignore_ascii_case(y))
+}
+
 #[cfg(windows)]
 mod live {
     use super::{choose, Choice, Snapshot, Target};
@@ -154,6 +165,14 @@ mod tests {
         let s = Snapshot { active: &a, default_id: Some("mic-laptop"), saved_name: Some("EPOS PC 8 USB") };
         assert_eq!(choose(&Target::Id("gone".into()), &s, true), Some(Choice { id: "mic-laptop".into(), fallback: true }));
         assert_eq!(choose(&Target::Id("gone".into()), &s, false), None, "never render the virtual mic into the speakers");
+    }
+
+    #[test]
+    fn same_physical_device_matches_the_bracketed_name() {
+        assert!(same_physical_device("Headset (realme Buds T310)", "Headphones (realme Buds T310)"));
+        assert!(!same_physical_device("Headset (realme Buds T310)", "CABLE Input (VB-Audio Virtual Cable)"));
+        assert!(!same_physical_device("Headset", "Headphones"));
+        assert!(!same_physical_device("Headset ()", "Headphones ()"));
     }
 
     #[test]

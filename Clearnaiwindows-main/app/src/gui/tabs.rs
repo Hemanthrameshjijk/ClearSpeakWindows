@@ -254,7 +254,7 @@ fn mic_boost_control(state: &MainState, label_size: f32) -> Element<'static, Mes
         .spacing(10)
         .align_y(iced::Alignment::Center),
         iced::widget::slider(0..=dsp_core::MIC_BOOST_MAX_DB, db, Message::SetMicBoostDb),
-        text("For quiet mics such as Bluetooth earbuds. Drag to set how much.").size(12).color(t.muted),
+        text("For quiet mics such as Bluetooth earbuds. Drag to turn it on and set how much.").size(12).color(t.muted),
     ]
     .spacing(6)
     .into()
