@@ -41,7 +41,7 @@ pub struct Settings {
     /// Maximum can cut soft speech; Gentle keeps it but leaves a little more noise in pauses. Default Balanced.
     #[serde(default = "default_nr_strength")]
     pub mic_nr_strength: u8,
-    /// Mic boost after noise cleanup: 0 Auto (+12 dB only for a Bluetooth headset in call mode), 1 Off, 2 +6 dB,
+    /// Mic boost before noise cleanup: 0 Auto (+12 dB only for a Bluetooth headset in call mode), 1 Off, 2 +6 dB,
     /// 3 +12 dB, 4 +18 dB (see `dsp_core::mic_boost_db`). Default Auto.
     #[serde(default)]
     pub mic_boost: u8,

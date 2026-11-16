@@ -182,8 +182,8 @@ pub struct EngineHandles {
     /// Noise reduction strength of the mic path (0 Maximum, 1 Balanced, 2 Gentle), see
     /// `bvc_hush::STRENGTH_ATTEN_LIM_DB`. The mic Hush stages read it once per frame.
     pub mic_nr_strength: SharedPreset,
-    /// Mic boost choice (0 Auto, 1 Off, 2 +6, 3 +12, 4 +18 dB), see `dsp_core::mic_boost_db`. Read once per frame by
-    /// the mic chain, together with `counters.hands_free` for Auto.
+    /// Mic boost choice (0 Auto, 1 Off, 2 +6, 3 +12, 4 +18 dB), see `dsp_core::mic_boost_db`. Applied before noise
+    /// cleanup; read once per frame by the mic chain, together with `counters.hands_free` for Auto.
     pub mic_boost: SharedPreset,
     /// Speaker-outbound path (Pipeline 2) - real, wired by `engine::start`'s
     /// `spawn_speaker_pipeline`. RNNoise for incoming-call audio, "Speaker
