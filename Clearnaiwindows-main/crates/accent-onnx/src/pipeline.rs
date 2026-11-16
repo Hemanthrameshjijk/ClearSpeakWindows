@@ -31,7 +31,18 @@ const PUSH_MS: f32 = 100.0;
 const MAX_BACKLOG48: usize = 4 * PUSH48;
 const RING_SECONDS: usize = 1;
 const RAMP_SAMPLES: f32 = 1920.0; // 40 ms crossfade
-const REPRIME_HOLDOFF_FRAMES: u32 = 100; // 1 s of dry after an underrun before trusting the accent again
+const REPRIME_HOLDOFF_FRAMES: u32 = 100; // 1 s of dry after a long stall before trusting the accent again
+/// A short shortfall (the worker is a little late) is covered with silence in the converted voice instead of switching
+/// to the plain voice and re-priming: the old way lost ~0.5 s of speech and then repeated ~0.5 s (heard as a skip).
+/// Only a stall longer than this many 10 ms frames falls back to the plain voice.
+const MAX_CONCEAL_FRAMES: u32 = 30;
+/// Edge ramp (samples) around a concealed gap, so the silence does not click.
+const GAP_RAMP: usize = 96;
+/// The jitter buffer is trimmed back only after this many quiet 10 ms frames in a row (real silence, not a quiet
+/// moment inside a word) and only if the audio about to be dropped is quiet too.
+const QUIET_FRAMES_BEFORE_TRIM: u32 = 15;
+/// Starting jitter buffer, ms. 100 ms was too tight: one slow inference push (another app, Transcript) drained it.
+pub const DEFAULT_JITTER_MS: u32 = 160;
 // RTF 1.0 is the real limit (above it the output falls behind). Pausing at 0.9 for 2 s flapped on PCs that run right at
 // 0.90-0.95 (log: paused/resumed every few seconds, each a 40 ms crossfade the listener hears), so pause only when
 // clearly over, for 5 s, and resume only once clearly under, for 3 s.
@@ -239,7 +250,7 @@ impl AccentConfig {
     pub fn new(onnxruntime_dll: PathBuf) -> Self {
         let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
         let threads = std::env::var("CLEARNAI_ACCENT_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| accent_threads_for_cores(cores));
-        Self { models_dir: None, onnxruntime_dll, threads, jitter_ms: 100, initial_voice: ACCENT_OFF, prepare_models: None }
+        Self { models_dir: None, onnxruntime_dll, threads, jitter_ms: DEFAULT_JITTER_MS, initial_voice: ACCENT_OFF, prepare_models: None }
     }
 }
 
@@ -253,6 +264,12 @@ pub struct AccentStage {
     base_jitter: usize,
     /// Frames since the last underrun (drives the jitter-buffer decay).
     stable: u32,
+    /// Consecutive frames covered with silence (a short shortfall); past `MAX_CONCEAL_FRAMES` it is a real stall.
+    short_run: u32,
+    /// Consecutive quiet converted frames (the jitter buffer is trimmed only in real silence).
+    quiet_run: u32,
+    /// Ramp the next real frame in after a concealed gap.
+    fade_in: bool,
     primed: bool,
     mix: f32,
     was_on: bool,
@@ -267,7 +284,7 @@ pub fn start(cfg: AccentConfig) -> (AccentStage, AccentHandle) {
 
 fn start_inner(cfg: Option<AccentConfig>, unavailable_reason: &str) -> (AccentStage, AccentHandle) {
     let initial_voice = cfg.as_ref().map_or(ACCENT_OFF, |c| c.initial_voice);
-    let jitter_ms = cfg.as_ref().map_or(100, |c| c.jitter_ms);
+    let jitter_ms = cfg.as_ref().map_or(DEFAULT_JITTER_MS, |c| c.jitter_ms);
     let sh = Arc::new(Shared {
         voice: AtomicU8::new(initial_voice.min(VOICE_NAMES.len() as u8)),
         worker: AtomicU8::new(W_IDLE),
@@ -313,6 +330,9 @@ fn start_inner(cfg: Option<AccentConfig>, unavailable_reason: &str) -> (AccentSt
         jitter,
         base_jitter: jitter,
         stable: 0,
+        short_run: 0,
+        quiet_run: 0,
+        fade_in: false,
         primed: false,
         mix: 0.0,
         was_on: false,
@@ -324,6 +344,18 @@ fn start_inner(cfg: Option<AccentConfig>, unavailable_reason: &str) -> (AccentSt
 impl Drop for AccentStage {
     fn drop(&mut self) {
         self.sh.stop.store(true, Relaxed);
+    }
+}
+
+/// True when the next `n` converted samples are all quiet (looked at without consuming them).
+fn upcoming_is_quiet(cons: &mut Consumer<f32>, n: usize) -> bool {
+    match cons.read_chunk(n) {
+        // Dropped without `commit`: nothing is consumed.
+        Ok(chunk) => {
+            let (a, b) = chunk.as_slices();
+            a.iter().chain(b.iter()).all(|v| v.abs() < 0.003)
+        }
+        Err(_) => false,
     }
 }
 
@@ -378,34 +410,63 @@ impl Stage for AccentStage {
             }
         }
         if self.primed {
-            if self.out_cons.slots() >= FRAME_SAMPLES {
+            let n = self.out_cons.slots();
+            if n >= FRAME_SAMPLES {
                 for w in self.wet.iter_mut() {
                     *w = self.out_cons.pop().unwrap_or(0.0);
                 }
+                if std::mem::take(&mut self.fade_in) {
+                    for (i, w) in self.wet.iter_mut().take(GAP_RAMP).enumerate() {
+                        *w *= i as f32 / GAP_RAMP as f32;
+                    }
+                }
+                self.short_run = 0;
                 have = true;
             } else {
-                self.primed = false;
-                self.holdoff = REPRIME_HOLDOFF_FRAMES;
+                if self.short_run == 0 {
+                    // One count per gap. Adaptive jitter buffer: each gap asks for 40 ms more cushion (max 300 ms).
+                    sh.underruns.fetch_add(1, Relaxed);
+                    self.jitter = (self.jitter + 40 * 48).min(300 * 48);
+                    sh.jitter_ms.store((self.jitter / 48) as u32, Relaxed);
+                }
+                self.short_run += 1;
                 self.stable = 0;
-                sh.underruns.fetch_add(1, Relaxed);
-                // Adaptive jitter buffer: every underrun asks for 40 ms more cushion (max 300 ms), so a
-                // machine that cannot hold the first setting settles instead of flipping between the live
-                // signal and the 300 ms-delayed accent signal (which is exactly what sounds like echo).
-                self.jitter = (self.jitter + 40 * 48).min(300 * 48);
-                sh.jitter_ms.store((self.jitter / 48) as u32, Relaxed);
+                if self.short_run > MAX_CONCEAL_FRAMES {
+                    // A real stall (the worker stopped for >300 ms): fall back to the plain voice and start over.
+                    self.primed = false;
+                    self.holdoff = REPRIME_HOLDOFF_FRAMES;
+                    self.short_run = 0;
+                    self.fade_in = false;
+                } else {
+                    // The worker is a little late: play what is there, then silence, and keep the timeline. The
+                    // silence becomes extra cushion once the late push arrives (nothing is skipped or repeated).
+                    self.wet = [0.0; FRAME_SAMPLES];
+                    for w in self.wet.iter_mut().take(n) {
+                        *w = self.out_cons.pop().unwrap_or(0.0);
+                    }
+                    let ramp = n.min(GAP_RAMP);
+                    for (i, w) in self.wet[n - ramp..n].iter_mut().enumerate() {
+                        *w *= 1.0 - (i + 1) as f32 / ramp.max(1) as f32;
+                    }
+                    self.fade_in = true;
+                    have = true;
+                }
             }
         }
         if !have {
             self.wet = [0.0; FRAME_SAMPLES];
+            self.quiet_run = 0;
         } else {
-            // The cushion only ever grew after an underrun, so a rough patch left the delay permanently higher
-            // (heard as "lag"). After 20 s without an underrun, give 20 ms back - but only while the converted
-            // signal is silent, so the dropped samples are inaudible.
+            // The cushion only ever grows after a gap, so a rough patch would leave the delay permanently higher
+            // (heard as "lag"). After 20 s without a gap, give 20 ms back - only in real silence (several quiet
+            // frames in a row, and the 20 ms about to be dropped is quiet too), so nothing audible is cut.
             self.stable = self.stable.saturating_add(1);
+            self.quiet_run = if self.wet.iter().all(|v| v.abs() < 0.003) { self.quiet_run.saturating_add(1) } else { 0 };
             if self.stable >= 2000
                 && self.jitter > self.base_jitter
+                && self.quiet_run >= QUIET_FRAMES_BEFORE_TRIM
                 && self.out_cons.slots() >= 2 * FRAME_SAMPLES
-                && self.wet.iter().all(|v| v.abs() < 0.003)
+                && upcoming_is_quiet(&mut self.out_cons, 20 * 48)
             {
                 for _ in 0..20 * 48 {
                     let _ = self.out_cons.pop();
@@ -433,7 +494,9 @@ impl Stage for AccentStage {
         sh.mic.store(
             if want_wet && self.mix > 0.5 {
                 M_ACTIVE
-            } else if slow || (self.holdoff > 0 && self.was_on && sh.underruns.load(Relaxed) > 0) {
+            } else if slow {
+                // Only a PC that really cannot keep up (RTF over the limit for 5 s) is "paused"; a single late push
+                // is covered above and must not show "this PC cannot keep up".
                 M_PAUSED
             } else {
                 M_STARTING
@@ -526,6 +589,89 @@ mod tests {
         st.state = AccentState::Active;
         h.apply_remote(&st);
         assert_eq!(h.status().state, AccentState::Active);
+    }
+
+    /// A stage whose worker is "ready" and whose converted output we feed by hand (no model needed).
+    fn hand_fed_stage() -> (AccentStage, Producer<f32>) {
+        let (mut stage, handle) = start_inner(None, "test");
+        let (prod, cons) = RingBuffer::<f32>::new(48_000);
+        stage.out_cons = cons;
+        stage.sh.worker.store(W_READY, Relaxed);
+        handle.set_voice(1);
+        (stage, prod)
+    }
+
+    fn feed(p: &mut Producer<f32>, n: usize) {
+        for _ in 0..n {
+            p.push(0.5).unwrap();
+        }
+    }
+
+    /// Runs one 10 ms frame (dry input 0.2) and returns its last sample.
+    fn step(stage: &mut AccentStage) -> f32 {
+        let mut f = [0.2f32; FRAME_SAMPLES];
+        stage.process(&mut f);
+        f[FRAME_SAMPLES - 1]
+    }
+
+    #[test]
+    fn a_late_push_is_covered_with_silence_instead_of_falling_back_to_the_plain_voice() {
+        let (mut stage, mut out) = hand_fed_stage();
+        feed(&mut out, stage.jitter + PUSH48 + 2 * FRAME_SAMPLES);
+        for _ in 0..60 {
+            feed(&mut out, FRAME_SAMPLES);
+            step(&mut stage);
+        }
+        assert!((step(&mut stage) - 0.5).abs() < 1e-3, "fully on the converted voice");
+        // Drain the buffer, then the worker is late for a few frames.
+        while stage.out_cons.slots() > 0 {
+            let _ = stage.out_cons.pop();
+        }
+        for _ in 0..5 {
+            let last = step(&mut stage);
+            assert!(last.abs() < 1e-3, "a gap is silence in the converted voice, not the plain voice");
+        }
+        assert_eq!(stage.sh.underruns.load(Relaxed), 1, "one gap counts once");
+        assert!(stage.primed && stage.holdoff == 0, "no re-prime, no 1 s fallback");
+        assert_ne!(stage.sh.mic.load(Relaxed), M_PAUSED, "a late push is not 'PC cannot keep up'");
+        // The late audio arrives: straight back on the converted voice.
+        feed(&mut out, 4 * FRAME_SAMPLES);
+        step(&mut stage);
+        assert!((step(&mut stage) - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_long_stall_falls_back_to_the_plain_voice_without_saying_paused() {
+        let (mut stage, mut out) = hand_fed_stage();
+        feed(&mut out, stage.jitter + PUSH48 + 2 * FRAME_SAMPLES);
+        for _ in 0..60 {
+            feed(&mut out, FRAME_SAMPLES);
+            step(&mut stage);
+        }
+        while stage.out_cons.slots() > 0 {
+            let _ = stage.out_cons.pop();
+        }
+        for _ in 0..(MAX_CONCEAL_FRAMES + 10) {
+            step(&mut stage);
+        }
+        assert!(!stage.primed && stage.holdoff > 0, "a real stall re-primes");
+        assert!((step(&mut stage) - 0.2).abs() < 1e-3, "and plays the plain voice meanwhile");
+        assert_ne!(stage.sh.mic.load(Relaxed), M_PAUSED);
+    }
+
+    #[test]
+    fn the_buffer_is_trimmed_only_in_real_silence() {
+        let mut quiet = RingBuffer::<f32>::new(4800);
+        for _ in 0..1000 {
+            quiet.0.push(0.0).unwrap();
+        }
+        assert!(upcoming_is_quiet(&mut quiet.1, 960));
+        assert_eq!(quiet.1.slots(), 1000, "looking does not consume");
+        let mut speech = RingBuffer::<f32>::new(4800);
+        for i in 0..1000 {
+            speech.0.push(if i == 500 { 0.3 } else { 0.0 }).unwrap();
+        }
+        assert!(!upcoming_is_quiet(&mut speech.1, 960), "speech in the next 20 ms blocks the trim");
     }
 
     #[test]

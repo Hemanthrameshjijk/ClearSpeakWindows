@@ -1,7 +1,9 @@
 //! Cuts a continuous 16 kHz stream into utterances with a simple adaptive-energy speech detector.
 //!
-//! A segment starts after 60 ms of speech (with 300 ms of look-back kept), ends after 700 ms of silence or at 15 s,
-//! and while it is open a *partial* snapshot is offered every 1.5 s so the GUI can show text as you speak.
+//! A segment starts after 60 ms of speech (with 300 ms of look-back kept), ends after 700 ms of silence or at 10 s,
+//! and while it is open (up to 6 s) a *partial* snapshot is offered every 1.5 s so the GUI can show text as you speak.
+//! Each partial re-reads the whole open segment, so during long speech without pauses the cost grew with every
+//! snapshot and took CPU from accent conversion (heard as skips); partials stop at 6 s and segments end at 10 s.
 
 const FRAME: usize = 320; // 20 ms
 const PREROLL_FRAMES: usize = 15; // 300 ms
@@ -9,7 +11,8 @@ const START_FRAMES: usize = 3; // 60 ms above threshold
 const END_SILENCE_FRAMES: usize = 35; // 700 ms
 const KEEP_TAIL_FRAMES: usize = 10; // 200 ms of the trailing silence stays in the segment
 const MIN_SPEECH_FRAMES: usize = 20; // shorter than 400 ms of speech: ignored (clicks, coughs)
-const MAX_SEGMENT: usize = 15 * 16_000;
+const MAX_SEGMENT: usize = 10 * 16_000;
+const PARTIAL_MAX: usize = 6 * 16_000; // no partial snapshots of a longer open segment (the final comes soon)
 const PARTIAL_EVERY: usize = 24_000; // 1.5 s
 const MIN_THRESHOLD: f32 = 0.006;
 
@@ -126,7 +129,10 @@ impl Segmenter {
         }
         if self.silence >= END_SILENCE_FRAMES || self.buf.len() >= MAX_SEGMENT {
             self.finish(events);
-        } else if self.speech_frames >= MIN_SPEECH_FRAMES && self.buf.len() >= self.last_partial_len + PARTIAL_EVERY {
+        } else if self.speech_frames >= MIN_SPEECH_FRAMES
+            && self.buf.len() <= PARTIAL_MAX
+            && self.buf.len() >= self.last_partial_len + PARTIAL_EVERY
+        {
             self.last_partial_len = self.buf.len();
             events.push(Event::Partial(self.buf.clone()));
         }
@@ -164,5 +170,9 @@ mod tests {
         let mut s = Segmenter::new();
         let ev = s.push(&tone(16.0, 0.2));
         assert!(ev.iter().any(|e| matches!(e, Event::Final(a) if a.len() >= MAX_SEGMENT)));
+        assert!(
+            ev.iter().all(|e| !matches!(e, Event::Partial(a) if a.len() > PARTIAL_MAX)),
+            "long speech: no partial re-reads more than 6 s"
+        );
     }
 }

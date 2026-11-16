@@ -15,7 +15,7 @@
 
 #![cfg(windows)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -38,8 +38,13 @@ pub struct DriverSink {
     producer: Producer<f32>,
     stop: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
+    /// Frames dropped because the queue to the sender thread was full (counted on the audio thread, logged by the sender).
+    dropped: Arc<AtomicU64>,
     handle: Option<JoinHandle<()>>,
 }
+
+/// How often the sender thread writes a one-line summary (frames sent, dropped, loudest level) to the log.
+const SUMMARY_EVERY: Duration = Duration::from_secs(60);
 
 impl DriverSink {
     /// Starts the sender thread. Never fails: a missing driver only means frames are dropped.
@@ -47,7 +52,8 @@ impl DriverSink {
         let (producer, mut consumer) = make_ring_buffer(QUEUE_SECONDS);
         let stop = Arc::new(AtomicBool::new(false));
         let connected = Arc::new(AtomicBool::new(false));
-        let (t_stop, t_connected) = (stop.clone(), connected.clone());
+        let dropped = Arc::new(AtomicU64::new(0));
+        let (t_stop, t_connected, t_dropped) = (stop.clone(), connected.clone(), dropped.clone());
 
         let handle = thread::Builder::new()
             .name("clearnai-driver-pipe".into())
@@ -55,7 +61,22 @@ impl DriverSink {
                 let mut device: Option<HANDLE> = None;
                 let mut last_try = Instant::now() - Duration::from_secs(10);
                 let mut pcm = vec![0i16; FRAME_SAMPLES];
+                let (mut sent, mut failed, mut peak) = (0u64, 0u64, 0i16);
+                let mut last_summary = Instant::now();
+                let mut told_missing = false;
                 while !t_stop.load(Ordering::Relaxed) {
+                    if last_summary.elapsed() >= SUMMARY_EVERY {
+                        let lost = t_dropped.swap(0, Ordering::Relaxed);
+                        if device.is_some() || sent > 0 {
+                            crate::log_info!(
+                                "[driver] last {}s: {sent} frames sent to ClearNAI Microphone, {failed} write errors, {lost} dropped (queue full), loudest {:.1} dBFS",
+                                SUMMARY_EVERY.as_secs(),
+                                if peak <= 0 { -120.0 } else { 20.0 * (peak as f32 / 32767.0).log10() }
+                            );
+                        }
+                        (sent, failed, peak) = (0, 0, 0);
+                        last_summary = Instant::now();
+                    }
                     if consumer.slots() < FRAME_SAMPLES {
                         thread::sleep(Duration::from_millis(2));
                         continue;
@@ -63,23 +84,30 @@ impl DriverSink {
                     for p in pcm.iter_mut() {
                         let s = consumer.pop().unwrap_or(0.0);
                         *p = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                        peak = peak.max(p.saturating_abs());
                     }
                     if device.is_none() && last_try.elapsed() >= Duration::from_secs(1) {
                         last_try = Instant::now();
                         device = open_device();
                         if device.is_some() {
                             t_connected.store(true, Ordering::Relaxed);
-                            eprintln!("[clearnai] ClearNAI virtual microphone driver connected.");
+                            told_missing = false;
+                            crate::log_info!("[driver] connected to the ClearNAI virtual microphone driver");
+                        } else if !std::mem::replace(&mut told_missing, true) {
+                            crate::log_info!("[driver] ClearNAI virtual microphone driver not found (not installed or not loaded); retrying every second");
                         }
                     }
                     if let Some(h) = device {
-                        if !write_frame(h, &pcm) {
+                        if write_frame(h, &pcm) {
+                            sent += 1;
+                        } else {
+                            failed += 1;
                             unsafe {
                                 let _ = CloseHandle(h);
                             }
                             device = None;
                             t_connected.store(false, Ordering::Relaxed);
-                            eprintln!("[clearnai] ClearNAI virtual microphone driver disconnected; retrying.");
+                            crate::log_error!("[driver] write to the ClearNAI virtual microphone driver failed; reconnecting");
                         }
                     }
                 }
@@ -91,12 +119,13 @@ impl DriverSink {
             })
             .ok();
 
-        Self { producer, stop, connected, handle }
+        Self { producer, stop, connected, dropped, handle }
     }
 
     /// Queues one final processed frame (`FRAME_SAMPLES` mono f32). Never blocks; drops the frame if the queue is full.
     pub fn push_frame(&mut self, frame: &[f32]) -> bool {
         if self.producer.slots() < frame.len() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
             return false;
         }
         for &s in frame {

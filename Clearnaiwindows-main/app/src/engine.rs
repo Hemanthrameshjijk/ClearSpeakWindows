@@ -960,7 +960,11 @@ pub fn start(
 /// single-frame 10ms budget, so ordinary scheduling jitter alone never
 /// triggers a trim, but far short of `make_ring_buffer`'s full 2-second
 /// capacity, which otherwise lets backlog grow unbounded.
-const MAX_TOLERATED_BACKLOG_SAMPLES: usize = FRAME_SAMPLES * 4;
+///
+/// Was 40 ms: a single 50 ms watchdog stall or a busy moment (accent conversion, Bluetooth catching up) cut real speech
+/// before it reached Accent. Now only a lag above 150 ms is trimmed, back down to 40 ms.
+const MAX_TOLERATED_BACKLOG_SAMPLES: usize = FRAME_SAMPLES * 15;
+const BACKLOG_TARGET_SAMPLES: usize = FRAME_SAMPLES * 4;
 
 /// Clock-drift correction: the capture device (physical mic) and the
 /// eventual render device downstream of this pipeline (virtual cable) run on
@@ -982,7 +986,7 @@ fn trim_backlog(consumer: &SwapConsumer, counters: &dsp_core::FrameCounters) {
     if backlog <= MAX_TOLERATED_BACKLOG_SAMPLES {
         return;
     }
-    let to_drop = backlog - MAX_TOLERATED_BACKLOG_SAMPLES;
+    let to_drop = backlog - BACKLOG_TARGET_SAMPLES;
     let mut dropped = 0usize;
     for _ in 0..to_drop {
         if c.pop().is_err() {
