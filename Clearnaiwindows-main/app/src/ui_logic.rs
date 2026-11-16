@@ -174,6 +174,18 @@ pub fn nr_strength_from_name(name: &str) -> Option<u8> {
     NR_STRENGTH_NAMES.iter().position(|n| *n == name).map(|i| i as u8)
 }
 
+/// Mic boost choices, in the order of `Settings::mic_boost` / `dsp_core::mic_boost_db`.
+pub const MIC_BOOST_NAMES: [&str; 5] = ["Auto", "Off", "+6 dB", "+12 dB", "+18 dB"];
+
+/// The label of a mic boost index (unknown indexes read as Auto, which is what the engine uses for them).
+pub fn mic_boost_name(choice: u8) -> &'static str {
+    MIC_BOOST_NAMES.get(choice as usize).copied().unwrap_or(MIC_BOOST_NAMES[0])
+}
+
+pub fn mic_boost_from_name(name: &str) -> Option<u8> {
+    MIC_BOOST_NAMES.iter().position(|n| *n == name).map(|i| i as u8)
+}
+
 /// Quick choices next to the sensitivity slider: label and the gain in dB it sets.
 pub const DISTANCE_NAMES: [&str; 3] = ["Close", "Normal", "Far"];
 
@@ -479,6 +491,12 @@ mod tests {
         }
         assert_eq!(nr_strength_from_name("Nope"), None);
         assert_eq!(nr_strength_name(9), "Maximum");
+        for (i, name) in MIC_BOOST_NAMES.iter().enumerate() {
+            assert_eq!(mic_boost_from_name(name), Some(i as u8));
+            assert_eq!(mic_boost_name(i as u8), *name);
+        }
+        assert_eq!(mic_boost_name(9), "Auto");
+        assert_eq!(mic_boost_from_name("Nope"), None);
     }
 
     #[test]

@@ -146,6 +146,9 @@ pub struct FrameCounters {
     /// meter feed): this only ever affects that side channel, never the
     /// main audio path, which has its own separate counters above.
     pub transcript_dropped: AtomicU64,
+    /// Set by the capture thread: the open microphone is a Bluetooth headset in call mode (Hands-Free, 8-16 kHz),
+    /// which delivers a much quieter voice than a wired or USB mic. Read by the mic chain for the Auto mic boost.
+    pub hands_free: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(test)]

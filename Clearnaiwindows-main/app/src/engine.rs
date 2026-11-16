@@ -1095,6 +1095,11 @@ fn spawn_mic_pipeline(
             // this removes the dependency on the user having set Windows'
             // mic gain correctly).
             let mut auto_gain = dsp_core::AutoGainStage::new();
+            // Mic boost: a fixed gain applied AFTER noise cleanup (BVC on), so Hush always sees the untouched mic
+            // and keeps its speech/background contrast (the removed pre-noise "mic sensitivity" lifted noise along
+            // with the voice). Auto boosts only a Bluetooth headset in call mode; wired/USB mics stay as before.
+            // Soft knee, ramped per frame, exactly untouched at 0 dB.
+            let mut mic_boost = dsp_core::PreGainStage::new();
             // Last stage: soft-limits loud bursts instead of letting them hard-clip. Untouched below 0.9.
             let mut output_limiter = dsp_core::OutputLimiter::new();
             let mut echo_canceller = aec::NlmsAec::new_default();
@@ -1143,6 +1148,11 @@ fn spawn_mic_pipeline(
                 // docs and `mic_voice_gate_stage`'s construction comment above.
                 run_if_enabled(voice_gate_stage.as_mut(), &handles.mic_voice_gate, &mut frame);
 
+                mic_boost.set_db(dsp_core::mic_boost_db(
+                    handles.mic_boost.load(),
+                    handles.counters.hands_free.load(Ordering::Relaxed),
+                ));
+
                 // Real finding: when BVC (Hush/DeepFilterNet/etc, whichever
                 // the router has selected) is on, running AutoGain and
                 // RNNoise ahead of it was actively counterproductive -
@@ -1162,6 +1172,8 @@ fn spawn_mic_pipeline(
                 // no-op) is unchanged.
                 if handles.mic_bvc.is_on() {
                     bvc_stage.process(&mut frame);
+                    // After cleanup, before transcript/accent/AutoGain: they all get a healthy level.
+                    mic_boost.process(&mut frame);
                     transcript_stage.process(&mut frame); // tap only: what you said, after BVC cleanup
                     // Accent conversion sits right after BVC (which does the cleanup) and before AutoGain.
                     // Off = one atomic load, frame untouched. It is its own switch, independent of BVC.
@@ -1170,7 +1182,8 @@ fn spawn_mic_pipeline(
                 } else {
                     // BVC off: Accent (if switched on) gets the post-voice-gate mic signal - never the
                     // RNNoise output, which runs after it. Cleaner input = better conversion, so BVC on is
-                    // still recommended.
+                    // still recommended. Boost first: on this path AutoGain already runs before RNNoise too.
+                    mic_boost.process(&mut frame);
                     transcript_stage.process(&mut frame);
                     accent_stage.process(&mut frame);
                     auto_gain.process(&mut frame);

@@ -41,6 +41,10 @@ pub struct Settings {
     /// Maximum can cut soft speech; Gentle keeps it but leaves a little more noise in pauses. Default Balanced.
     #[serde(default = "default_nr_strength")]
     pub mic_nr_strength: u8,
+    /// Mic boost after noise cleanup: 0 Auto (+12 dB only for a Bluetooth headset in call mode), 1 Off, 2 +6 dB,
+    /// 3 +12 dB, 4 +18 dB (see `dsp_core::mic_boost_db`). Default Auto.
+    #[serde(default)]
+    pub mic_boost: u8,
     /// Who uses this copy: shown in the sidebar and on the Profile page.
     #[serde(default)]
     pub user_name: String,
@@ -249,6 +253,7 @@ impl Default for Settings {
             mic_studio_on: true,
             mic_studio_preset: default_studio_preset(),
             mic_nr_strength: default_nr_strength(),
+            mic_boost: 0,
             user_name: String::new(),
             user_email: String::new(),
             license_key: String::new(),

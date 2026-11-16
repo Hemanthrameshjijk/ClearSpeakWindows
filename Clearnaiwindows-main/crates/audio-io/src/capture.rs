@@ -191,6 +191,7 @@ fn capture_loop(
         .get_iaudioclient()
         .with_context(|| format!("activating IAudioClient on capture device '{name}'"))?;
     let device_rate = audio_client.get_mixformat().map(|f| f.get_samplespersec()).unwrap_or(0);
+    counters.hands_free.store(follow::is_hands_free(&name, device_rate), Ordering::Relaxed);
     if last_opened.as_deref() != Some(device_id) {
         let mut note = format!("[audio-io] INFO: microphone: '{name}' ({device_rate} Hz)");
         if choice.fallback {

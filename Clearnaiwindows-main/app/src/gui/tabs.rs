@@ -1262,6 +1262,17 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                     ]
                     .spacing(10)
                     .align_y(iced::Alignment::Center),
+                    row![
+                        text("Mic boost").size(13).color(t.muted),
+                        container(text("")).width(Length::Fill),
+                        pick_list(&ui_logic::MIC_BOOST_NAMES[..], Some(ui_logic::mic_boost_name(h.mic_boost.load())), Message::SelectMicBoost)
+                            .width(Length::Fixed(120.0))
+                            .padding([6, 10])
+                            .text_size(13)
+                            .style(style::select),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),
                     if allowed(state).accent {
                         switch_row("Convert my accent", accent_desc, accent_color, state.settings.accent_on, Message::ToggleAccent)
                     } else {
@@ -1646,6 +1657,15 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         state,
         "Noise reduction",
         pick_list(&ui_logic::NR_STRENGTH_NAMES[..], Some(ui_logic::nr_strength_name(h.mic_nr_strength.load())), Message::SelectNrStrength)
+            .padding([9, 12])
+            .text_size(13)
+            .style(style::select)
+            .into(),
+    ));
+    col = col.push(select_row(
+        state,
+        "Mic boost (Auto lifts Bluetooth earbuds)",
+        pick_list(&ui_logic::MIC_BOOST_NAMES[..], Some(ui_logic::mic_boost_name(h.mic_boost.load())), Message::SelectMicBoost)
             .padding([9, 12])
             .text_size(13)
             .style(style::select)

@@ -182,6 +182,9 @@ pub struct EngineHandles {
     /// Noise reduction strength of the mic path (0 Maximum, 1 Balanced, 2 Gentle), see
     /// `bvc_hush::STRENGTH_ATTEN_LIM_DB`. The mic Hush stages read it once per frame.
     pub mic_nr_strength: SharedPreset,
+    /// Mic boost choice (0 Auto, 1 Off, 2 +6, 3 +12, 4 +18 dB), see `dsp_core::mic_boost_db`. Read once per frame by
+    /// the mic chain, together with `counters.hands_free` for Auto.
+    pub mic_boost: SharedPreset,
     /// Speaker-outbound path (Pipeline 2) - real, wired by `engine::start`'s
     /// `spawn_speaker_pipeline`. RNNoise for incoming-call audio, "Speaker
     /// Noise".
@@ -380,6 +383,7 @@ impl EngineHandles {
             bvc_backend: SharedPreset::new(settings.mic_bvc_backend),
             speaker_bvc_backend: SharedPreset::new(settings.speaker_bvc_backend),
             mic_nr_strength: SharedPreset::new(settings.mic_nr_strength),
+            mic_boost: SharedPreset::new(settings.mic_boost),
             mic_deep_filter_available,
             mic_deep_filter_unavailable_reason,
             mic_bpo_v1_available,
@@ -422,7 +426,14 @@ impl EngineHandles {
 
     /// Every small-number selector, in the fixed order used by `ipc::Status::presets` / `ClientMsg::Preset::key`.
     pub fn presets(&self) -> [&SharedPreset; crate::ipc::PRESET_COUNT] {
-        [&self.mic_studio_preset, &self.speaker_studio_preset, &self.bvc_backend, &self.speaker_bvc_backend, &self.mic_nr_strength]
+        [
+            &self.mic_studio_preset,
+            &self.speaker_studio_preset,
+            &self.bvc_backend,
+            &self.speaker_bvc_backend,
+            &self.mic_nr_strength,
+            &self.mic_boost,
+        ]
     }
 }
 
