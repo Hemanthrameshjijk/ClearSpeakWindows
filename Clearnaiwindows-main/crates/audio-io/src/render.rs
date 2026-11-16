@@ -267,9 +267,9 @@ fn render_loop(
     let mut last_underrun_log: Option<std::time::Instant> = None;
     let mut underruns_since_log: u64 = 0;
     let mut last_follow_check = std::time::Instant::now();
-    // Playing into the same Bluetooth headset that is the microphone in call mode (the Monitor on the earbuds)
-    // makes the headset juggle both directions and glitch; such an output plays silence instead (still draining
-    // its ring so nothing piles up). Only possible for a render sharing the mic's counters (Monitor, virtual-mic
+    // Playing into the same Bluetooth headset that is the microphone in call mode (the Monitor on the earbuds) can
+    // make the headset glitch. The user wants to hear themselves, so it keeps playing; the log only notes it, which
+    // explains glitches heard there. Only possible for a render sharing the mic's counters (Monitor, virtual-mic
     // target); a cable or the ClearNAI device never matches a headset's name.
     let mut same_headset = false;
     while !stop_flag.load(Ordering::Relaxed) {
@@ -287,9 +287,9 @@ fn render_loop(
             if now_same != same_headset {
                 same_headset = now_same;
                 crate::report_error(&if now_same {
-                    format!("[audio-io] INFO: '{name}' is the Bluetooth headset used as the microphone; playing silence on it (Monitor paused) to avoid glitches")
+                    format!("[audio-io] INFO: '{name}' is the same Bluetooth headset as the microphone (call mode); it plays, but the headset may glitch")
                 } else {
-                    format!("[audio-io] INFO: '{name}' plays again")
+                    format!("[audio-io] INFO: '{name}' is no longer the microphone's headset")
                 });
             }
         }
@@ -325,7 +325,7 @@ fn render_loop(
 
         out_bytes.clear();
         for &sample in pending.iter().take(available as usize) {
-            push_f32_le(&mut out_bytes, if same_headset { 0.0 } else { sample });
+            push_f32_le(&mut out_bytes, sample);
         }
         render_client
             .write_to_device_from_deque(available as usize, &mut out_bytes, None)

@@ -35,8 +35,20 @@ pub struct Snapshot<'a> {
 /// microphone (talking on the laptop mic beats silence); no for render targets like the virtual-mic cable, where the
 /// default would be the real speakers.
 pub fn choose(target: &Target, snap: &Snapshot, allow_fallback: bool) -> Option<Choice> {
+    // For the real microphone (`allow_fallback`), the Windows default may itself be a virtual device: call apps are
+    // set to "ClearNAI Microphone" or "CABLE Output", which is often the default too. Recording that would make
+    // ClearNAI listen to its own output (seen live: a feedback loop, input backlog trimmed every 1-2 s, cut words), so
+    // the first real microphone is used instead.
+    let default_for_mic = || -> Option<String> {
+        let def = snap.default_id?;
+        let def_name = snap.active.iter().find(|(id, _)| id == def).map(|(_, n)| n.as_str());
+        if !allow_fallback || !def_name.is_some_and(is_virtual_device) {
+            return Some(def.to_string());
+        }
+        snap.active.iter().find(|(_, n)| !is_virtual_device(n)).map(|(id, _)| id.clone())
+    };
     match target {
-        Target::Default => snap.default_id.map(|id| Choice { id: id.to_string(), fallback: false }),
+        Target::Default => default_for_mic().map(|id| Choice { id, fallback: false }),
         Target::Id(saved) => {
             if snap.active.iter().any(|(id, _)| id == saved) {
                 return Some(Choice { id: saved.clone(), fallback: false });
@@ -48,7 +60,7 @@ pub fn choose(target: &Target, snap: &Snapshot, allow_fallback: bool) -> Option<
                 }
             }
             if allow_fallback {
-                snap.default_id.map(|id| Choice { id: id.to_string(), fallback: true })
+                default_for_mic().map(|id| Choice { id, fallback: true })
             } else {
                 None
             }
@@ -60,6 +72,12 @@ pub fn choose(target: &Target, snap: &Snapshot, allow_fallback: bool) -> Option<
 pub fn is_hands_free(name: &str, sample_rate: u32) -> bool {
     let n = name.to_ascii_lowercase();
     n.contains("hands-free") || n.contains("handsfree") || (sample_rate > 0 && sample_rate <= 16_000)
+}
+
+/// A virtual endpoint (ClearNAI's own device, VB-CABLE and similar), never a real microphone.
+pub fn is_virtual_device(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    l.contains("clearnai") || l.contains("cable") || l.contains("vb-audio") || l.contains("virtual")
 }
 
 /// Two endpoints of the same physical device: Windows names them "Headset (realme Buds T310)" and
@@ -95,6 +113,8 @@ mod live {
         let e = DeviceEnumerator::new().ok()?;
         let default_id = e.get_default_device(direction).ok().and_then(|d| d.get_id().ok());
         let (active, saved_name) = match target {
+            // The real mic following the default needs the list, to skip a virtual default (see `choose`).
+            Target::Default if allow_fallback => (active_devices(&e, direction), None),
             Target::Default => (Vec::new(), None),
             Target::Id(id) => {
                 let name = e.get_device(id).ok().and_then(|d| d.get_friendlyname().ok());
@@ -109,6 +129,8 @@ mod live {
     /// headset came back, or it returned under a new id). Cheap enough to call about once a second.
     pub fn should_switch(direction: &Direction, target: &Target, current: &Choice, allow_fallback: bool) -> bool {
         match target {
+            // The real mic may sit on a real device while the default is virtual: compare full decisions.
+            Target::Default if allow_fallback => resolve(direction, target, allow_fallback).is_some_and(|c| c != *current),
             // Fast path: one COM call, no enumeration.
             Target::Default => {
                 let now = DeviceEnumerator::new().ok().and_then(|e| e.get_default_device(direction).ok()).and_then(|d| d.get_id().ok());
@@ -165,6 +187,29 @@ mod tests {
         let s = Snapshot { active: &a, default_id: Some("mic-laptop"), saved_name: Some("EPOS PC 8 USB") };
         assert_eq!(choose(&Target::Id("gone".into()), &s, true), Some(Choice { id: "mic-laptop".into(), fallback: true }));
         assert_eq!(choose(&Target::Id("gone".into()), &s, false), None, "never render the virtual mic into the speakers");
+    }
+
+    #[test]
+    fn the_real_mic_never_falls_back_to_a_virtual_default() {
+        let active = vec![
+            ("clearnai".to_string(), "ClearNAI Microphone (ClearNAI Virtual Audio Device)".to_string()),
+            ("cable".to_string(), "CABLE Output (VB-Audio Virtual Cable)".to_string()),
+            ("laptop".to_string(), "Microphone Array (Realtek(R) Audio)".to_string()),
+        ];
+        let snap = Snapshot { active: &active, default_id: Some("clearnai"), saved_name: Some("Headset (realme Buds T310)") };
+        // Saved earbuds gone, default is ClearNAI's own mic: use the real laptop mic, not a feedback loop.
+        let c = choose(&Target::Id("buds".into()), &snap, true).unwrap();
+        assert_eq!((c.id.as_str(), c.fallback), ("laptop", true));
+        // Following the default: same rule.
+        assert_eq!(choose(&Target::Default, &snap, true).unwrap().id, "laptop");
+        // A virtual device the user picked on purpose is still used.
+        assert_eq!(choose(&Target::Id("cable".into()), &snap, true).unwrap().id, "cable");
+        // Call-audio capture (no fallback) keeps following a virtual default.
+        assert_eq!(choose(&Target::Default, &snap, false).unwrap().id, "clearnai");
+        // Only virtual devices connected: nothing real to record.
+        let only_virtual = vec![active[0].clone()];
+        let snap = Snapshot { active: &only_virtual, default_id: Some("clearnai"), saved_name: None };
+        assert!(choose(&Target::Default, &snap, true).is_none());
     }
 
     #[test]
