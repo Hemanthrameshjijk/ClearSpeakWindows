@@ -246,6 +246,7 @@ fn capture_loop(
     // Per-minute summary: how much audio the device really delivered, and how often it said it lost some.
     let mut stats_since = std::time::Instant::now();
     let (mut stat_samples, mut stat_gaps, mut stat_silent) = (0u64, 0u32, 0u32);
+    let mut smoother = GapSmoother::default();
 
     while !stop_flag.load(Ordering::Relaxed) {
         // A stalled event most likely means the device was removed/disabled
@@ -291,10 +292,13 @@ fn capture_loop(
             stat_gaps += info.flags.data_discontinuity as u32;
             stat_silent += info.flags.silent as u32;
 
-            for c in scratch[..got as usize * 4].chunks_exact(4) {
+            for (k, c) in scratch[..got as usize * 4].chunks_exact(4).enumerate() {
                 // A packet marked silent (Bluetooth glitch, profile switch) is silence whatever its bytes say.
-                let sample = if info.flags.silent { 0.0 } else { f32::from_le_bytes([c[0], c[1], c[2], c[3]]) };
-                pending.push(sample);
+                let raw = if info.flags.silent { 0.0 } else { f32::from_le_bytes([c[0], c[1], c[2], c[3]]) };
+                if k == 0 && info.flags.data_discontinuity {
+                    smoother.gap(raw);
+                }
+                pending.push(smoother.sample(raw));
                 if pending.len() == FRAME_SAMPLES {
                     push_frame(producer, &pending, counters);
                     pending.clear();
@@ -323,6 +327,41 @@ fn capture_loop(
     Ok(false)
 }
 
+/// Length of the join smoothing after a lost packet: 2 ms at 48 kHz.
+const SPLICE_SAMPLES: u32 = 96;
+
+/// Smooths the join after audio the device lost. A Bluetooth headset in call mode reports a few lost packets every
+/// second (live log: 156-350 a minute); the samples on both sides of the gap do not meet, and that step is heard as
+/// a click or a clipped syllable. The step (last sample before the gap minus first sample after it) is added to the
+/// new audio and faded out over 2 ms with a raised cosine, so the waveform stays continuous. Audio away from a gap
+/// is untouched.
+#[derive(Default)]
+struct GapSmoother {
+    last: f32,
+    offset: f32,
+    left: u32,
+}
+
+impl GapSmoother {
+    /// The device says audio was lost just before the next sample.
+    fn gap(&mut self, next: f32) {
+        self.offset = self.last - next;
+        self.left = SPLICE_SAMPLES;
+    }
+
+    fn sample(&mut self, s: f32) -> f32 {
+        let out = if self.left > 0 {
+            let w = 0.5 - 0.5 * (std::f32::consts::PI * (SPLICE_SAMPLES - self.left) as f32 / SPLICE_SAMPLES as f32).cos();
+            self.left -= 1;
+            s + self.offset * (1.0 - w)
+        } else {
+            s
+        };
+        self.last = out;
+        out
+    }
+}
+
 /// Pushes one full frame into the ring buffer. If the consumer isn't
 /// keeping up and the ring buffer is full, the whole frame is dropped
 /// (never block the realtime capture thread waiting for space) - this is a
@@ -340,6 +379,47 @@ fn push_frame(producer: &mut Producer<f32>, frame: &[f32], counters: &FrameCount
             counters.dropped_frames.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             crate::report_error("[audio-io] mic capture ring buffer full, dropping frame");
             return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tone(i: usize) -> f32 {
+        (i as f32 * 0.05).sin() * 0.5
+    }
+
+    #[test]
+    fn audio_without_a_gap_is_untouched() {
+        let mut g = GapSmoother::default();
+        for i in 0..2000 {
+            assert_eq!(g.sample(tone(i)), tone(i));
+        }
+    }
+
+    #[test]
+    fn the_join_after_a_lost_packet_has_no_jump() {
+        let mut g = GapSmoother::default();
+        let mut out = Vec::new();
+        for i in 0..500 {
+            out.push(g.sample(tone(i)));
+        }
+        // 7.5 ms (360 samples) lost: the next sample is far from the last one.
+        let resume = 860;
+        g.gap(tone(resume));
+        for i in resume..resume + 500 {
+            out.push(g.sample(tone(i)));
+        }
+        let raw_jump = (tone(resume) - tone(499)).abs();
+        let max_step = out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(raw_jump > 0.3, "test needs a real jump, got {raw_jump}");
+        assert!(max_step < 0.04, "a step of {max_step} is still a click");
+        // After the 2 ms join the audio is exactly the device's again.
+        let tail = &out[500 + SPLICE_SAMPLES as usize..];
+        for (k, s) in tail.iter().enumerate() {
+            assert_eq!(*s, tone(resume + SPLICE_SAMPLES as usize + k));
         }
     }
 }
