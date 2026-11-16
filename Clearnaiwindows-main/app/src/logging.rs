@@ -79,6 +79,18 @@ pub fn init_named(dir: &Path, file_name: &str) {
     let _ = LOG_PATH.set(Some(dir.join(file_name)));
 }
 
+/// Local wall-clock time, readable: `2026-11-16 18:20:31.547`.
+#[cfg(windows)]
+fn timestamp() -> String {
+    // SAFETY: GetLocalTime only fills the struct it is given.
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds
+    )
+}
+
+#[cfg(not(windows))]
 fn timestamp() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -147,9 +159,22 @@ fn writer(path: &Path, rx: Receiver<String>, max_bytes: u64) {
             batch.push('\n');
         }
         if size >= max_bytes {
+            // Keep the previous file as `<name>.old` (replacing an older one) so the history before an issue is not
+            // lost; fall back to truncating if the rename fails.
+            drop(file.take());
+            let old = path.with_extension("log.old");
+            let _ = std::fs::remove_file(&old);
+            let kept = std::fs::rename(path, &old).is_ok();
             file = open(true);
             size = 0;
-            batch.insert_str(0, &format!("[{}] (log file exceeded {max_bytes} bytes; truncated)\n", timestamp()));
+            batch.insert_str(
+                0,
+                &format!(
+                    "[{}] (log file reached {max_bytes} bytes; {})\n",
+                    timestamp(),
+                    if kept { "previous part kept as .log.old" } else { "truncated" }
+                ),
+            );
         }
         if let Some(f) = file.as_mut() {
             if f.write_all(batch.as_bytes()).is_ok() {
@@ -233,6 +258,8 @@ mod tests {
         assert!(text.len() < 2500, "file stayed bounded, got {} bytes", text.len());
         assert!(!text.contains('@'), "the old oversized content is gone");
         assert!(text.contains("line 199"), "the newest line is present");
+        let old = std::fs::read_to_string(path.with_extension("log.old")).unwrap();
+        assert!(old.len() < 6000, "only the last part is kept as .old, got {} bytes", old.len());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

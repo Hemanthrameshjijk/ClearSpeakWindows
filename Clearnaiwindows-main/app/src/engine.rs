@@ -1109,6 +1109,7 @@ fn spawn_mic_pipeline(
             let sync_clock = Instant::now();
             let mut last_sync_log = Instant::now();
             let mut last_accent_gaps = 0u32;
+            let mut health = crate::diag::PathHealth::default();
             let mut echo_canceller = aec::NlmsAec::new_default();
             let mut echo_reference = vec![0.0f32; FRAME_SAMPLES];
             loop {
@@ -1133,7 +1134,8 @@ fn spawn_mic_pipeline(
                 }
                 // "Before" meter: raw mic peak, same plain peak-store as `handles.level` below (which is the
                 // post-chain "After" peak).
-                handles.input_level.store(frame.iter().fold(0.0f32, |m, &s| m.max(s.abs())));
+                let in_peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+                handles.input_level.store(in_peak);
 
                 // Deliberate, narrow exception to "no allocation in the
                 // realtime hot path": a preset change is a rare, deliberate
@@ -1210,6 +1212,7 @@ fn spawn_mic_pipeline(
                 if elapsed_ns > DEADLINE_NS {
                     handles.counters.deadline_misses.fetch_add(1, Ordering::Relaxed);
                 }
+                health.frame(elapsed_ns, in_peak, peak);
 
                 // Master mute: unlike the individual Noise/BVC/Studio
                 // toggles above (which only skip their OWN stage, leaving
@@ -1232,7 +1235,26 @@ fn spawn_mic_pipeline(
                 if last_sync_log.elapsed() >= std::time::Duration::from_secs(60) {
                     last_sync_log = Instant::now();
                     let s = drift.take_stats();
-                    let gaps = handles.accent.status().underruns;
+                    let accent = handles.accent.status();
+                    let gaps = accent.underruns;
+                    crate::log_info!(
+                        "[health] mic last 60s: {}",
+                        health.take_line(crate::shared::counters_to_array(&handles.counters))
+                    );
+                    crate::log_info!(
+                        "[health] mic settings: boost +{} dB, hush {}, accent {}",
+                        handles.mic_boost.load(),
+                        match handles.mic_hush_status.as_ref() {
+                            Some(st) if st.is_bypassed() => "BYPASSED (stalled)",
+                            Some(_) => "running",
+                            None => "not loaded",
+                        },
+                        if accent.state == accent_onnx::pipeline::AccentState::Off {
+                            "off".to_string()
+                        } else {
+                            format!("{} (speed {:.2}, cushion {} ms, gaps +{})", accent.line(), accent.rtf, accent.jitter_ms, gaps.saturating_sub(last_accent_gaps))
+                        }
+                    );
                     crate::log_info!(
                         "[clearnairt] mic sync last 60s: ratio {:.4}..{:.4}, behind {:.1} ms, {} restart(s); accent gaps +{}",
                         s.min_ratio,
@@ -1324,9 +1346,12 @@ fn spawn_speaker_pipeline(
             let mut frame = vec![0.0f32; FRAME_SAMPLES];
             let silence = vec![0.0f32; FRAME_SAMPLES];
             let mut last_studio_preset = handles.speaker_studio_preset.load();
+            let mut health = crate::diag::PathHealth::default();
+            let mut last_health_log = Instant::now();
             loop {
                 pull_frame_blocking(&speaker_in, &mut frame, &handles.speaker_counters);
                 let started = Instant::now();
+                let in_peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
 
                 let current_preset = handles.speaker_studio_preset.load();
                 if current_preset != last_studio_preset {
@@ -1345,6 +1370,17 @@ fn spawn_speaker_pipeline(
                 handles.speaker_counters.frames_processed.fetch_add(1, Ordering::Relaxed);
                 if elapsed_ns > DEADLINE_NS {
                     handles.speaker_counters.deadline_misses.fetch_add(1, Ordering::Relaxed);
+                }
+                health.frame(elapsed_ns, in_peak, frame.iter().fold(0.0f32, |m, &s| m.max(s.abs())));
+                if last_health_log.elapsed() >= std::time::Duration::from_secs(60) {
+                    last_health_log = Instant::now();
+                    crate::log_info!(
+                        "[health] caller audio last 60s: {} | noise {}, voices {}, studio {}",
+                        health.take_line(crate::shared::counters_to_array(&handles.speaker_counters)),
+                        if handles.speaker_noise.is_on() { "on" } else { "off" },
+                        if handles.speaker_bvc.is_on() { "on" } else { "off" },
+                        if handles.speaker_studio.is_on() { "on" } else { "off" },
+                    );
                 }
 
                 // Master mute - see `spawn_mic_pipeline`'s matching comment

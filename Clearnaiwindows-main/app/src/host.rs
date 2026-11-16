@@ -258,11 +258,20 @@ impl Host {
         match msg {
             ClientMsg::Toggle { key, on } => {
                 if let Some(t) = h.toggles().get(key as usize) {
+                    if t.is_on() != on {
+                        let name = crate::diag::TOGGLE_NAMES.get(key as usize).copied().unwrap_or("switch");
+                        crate::log_info!("[action] {name}: {}", if on { "on" } else { "off" });
+                    }
                     t.set(on);
                 }
             }
             ClientMsg::Preset { key, val } => {
                 if let Some(p) = h.presets().get(key as usize) {
+                    let old = p.load();
+                    if old != val {
+                        let name = crate::diag::PRESET_NAMES.get(key as usize).copied().unwrap_or("setting");
+                        crate::log_info!("[action] {name}: {old} -> {val}");
+                    }
                     p.store(val);
                 }
             }
@@ -273,9 +282,14 @@ impl Host {
                 if let Err(e) = settings::save(&new) {
                     crate::log_error!("[clearnairt] failed to persist settings: {e:#}");
                 }
-                *self.settings.lock().unwrap() = *new;
+                let mut current = self.settings.lock().unwrap();
+                for change in crate::diag::settings_diff(&current, &new) {
+                    crate::log_info!("[setting] {change}");
+                }
+                *current = *new;
             }
             ClientMsg::SetDevice { role: r, id } => {
+                crate::log_info!("[action] {}: {}", crate::diag::role_name(r), id.as_deref().unwrap_or("(none / Windows default)"));
                 // Opening a device and joining the old worker can take a while: never on the pipe thread.
                 let sw = h.device_switcher.clone();
                 let _ = thread::Builder::new().name("clearnai-device-switch".into()).spawn(move || match r {
@@ -288,6 +302,7 @@ impl Host {
                 });
             }
             ClientMsg::RefreshDevices => {
+                crate::log_info!("[action] refresh devices");
                 let this = self.clone();
                 let writer = writer.clone();
                 let _ = thread::Builder::new().name("clearnai-device-refresh".into()).spawn(move || {
@@ -295,10 +310,22 @@ impl Host {
                     let _ = send(&writer, &ServerMsg::Devices(list));
                 });
             }
-            ClientMsg::AccentVoice(v) => h.accent.set_voice(v),
-            ClientMsg::TranscriptEnabled(on) => h.transcript.set_enabled(on),
-            ClientMsg::TranscriptClear => h.transcript.clear(),
-            ClientMsg::Quit => self.quit(),
+            ClientMsg::AccentVoice(v) => {
+                crate::log_info!("[action] accent voice: {}", if v == 0 { "off".to_string() } else { format!("voice {v}") });
+                h.accent.set_voice(v)
+            }
+            ClientMsg::TranscriptEnabled(on) => {
+                crate::log_info!("[action] live transcript: {}", if on { "on" } else { "off" });
+                h.transcript.set_enabled(on)
+            }
+            ClientMsg::TranscriptClear => {
+                crate::log_info!("[action] transcript cleared");
+                h.transcript.clear()
+            }
+            ClientMsg::Quit => {
+                crate::log_info!("[action] quit");
+                self.quit()
+            }
         }
     }
 
@@ -400,6 +427,7 @@ pub fn run_engine() {
 
     let saved = settings::load();
     let booted = bootstrap(&saved);
+    crate::diag::log_session_header(&booted.settings, &booted.devices);
     if let Err(e) = crate::sysutil::set_autostart(booted.settings.start_with_windows) {
         crate::log_error!("[clearnairt] {e}");
     }
