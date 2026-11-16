@@ -224,6 +224,7 @@ impl Host {
             level: h.level.load(),
             input_level: h.input_level.load(),
             mic_counters: shared::counters_to_array(&h.counters),
+            mic_hands_free: h.counters.hands_free.load(std::sync::atomic::Ordering::Relaxed),
             speaker_counters: shared::counters_to_array(&h.speaker_counters),
             mic_pct: dsp_core::compute_percentiles(h.latency_log.snapshot()).into(),
             speaker_pct: dsp_core::compute_percentiles(h.speaker_latency_log.snapshot()).into(),

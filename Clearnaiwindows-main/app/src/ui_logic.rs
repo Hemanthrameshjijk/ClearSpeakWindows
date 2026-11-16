@@ -186,6 +186,22 @@ pub fn mic_boost_from_name(name: &str) -> Option<u8> {
     MIC_BOOST_NAMES.iter().position(|n| *n == name).map(|i| i as u8)
 }
 
+/// The note under the mic picker while a Bluetooth headset mic is in call mode: what the boost does for it, and what
+/// to try when words still get cut.
+pub fn bluetooth_hint_text(mic_boost: u8) -> String {
+    let boost = dsp_core::mic_boost_db(mic_boost, true);
+    let level = if boost > 0.0 {
+        let who = if mic_boost == 0 { "Mic boost Auto" } else { "Mic boost" };
+        format!("{who} is adding +{boost:.0} dB.")
+    } else {
+        "Mic boost is Off, so your voice may be quiet.".to_string()
+    };
+    format!(
+        "Bluetooth mic: call quality. {level} If words get cut, set Noise reduction to Gentle. Best sound: listen on \
+         the earbuds, talk on the PC or USB mic."
+    )
+}
+
 /// Quick choices next to the sensitivity slider: label and the gain in dB it sets.
 pub const DISTANCE_NAMES: [&str; 3] = ["Close", "Normal", "Far"];
 
@@ -497,6 +513,9 @@ mod tests {
         }
         assert_eq!(mic_boost_name(9), "Auto");
         assert_eq!(mic_boost_from_name("Nope"), None);
+        assert!(bluetooth_hint_text(0).contains("Mic boost Auto is adding +12 dB."));
+        assert!(bluetooth_hint_text(4).contains("Mic boost is adding +18 dB."));
+        assert!(bluetooth_hint_text(1).contains("Mic boost is Off"));
     }
 
     #[test]

@@ -145,6 +145,10 @@ pub struct Status {
     pub transcript: TranscriptWire,
     /// CPU used by the engine process, percent of the whole machine.
     pub cpu: Option<f32>,
+    /// The open microphone is a Bluetooth headset in call mode (detected by the engine from name *and* sample rate;
+    /// the window alone only sees the name, which often lacks "Hands-Free").
+    #[serde(default)]
+    pub mic_hands_free: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

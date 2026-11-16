@@ -218,13 +218,15 @@ fn setting_row<'a>(
 }
 
 /// A Bluetooth headset mic puts the earbuds into call mode (phone quality for the mic *and* what you hear). Shown
-/// under the microphone picker while the mic in use is one.
+/// under the microphone picker while the mic in use is one. The engine's detection (name and 16 kHz rate) is the
+/// reliable one; many earbuds ("Headset (realme Buds T310)") never say "Hands-Free" in their name.
 fn bluetooth_hint(state: &MainState) -> Element<'static, Message> {
     let id = state.settings.physical_mic_device_id.as_deref().or(state.devices.default_capture.as_deref());
     let label = id.and_then(|id| state.devices.capture.iter().find(|d| d.id == id)).map(|d| d.label.as_str());
-    if label.is_some_and(|l| audio_io::follow::is_hands_free(l, 0)) {
+    let engine_says = state.handles.counters.hands_free.load(std::sync::atomic::Ordering::Relaxed);
+    if engine_says || label.is_some_and(|l| audio_io::follow::is_hands_free(l, 0)) {
         let t = style::tokens_for(state.settings.theme_dark);
-        text("Bluetooth mic: call quality. For the best sound, listen on the earbuds and talk on the PC or USB mic.")
+        text(ui_logic::bluetooth_hint_text(state.handles.mic_boost.load()))
             .size(12)
             .color(t.warning)
             .into()

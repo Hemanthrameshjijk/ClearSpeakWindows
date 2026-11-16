@@ -211,6 +211,7 @@ fn apply_observed(handles: &EngineHandles, hush: &Option<Arc<AtomicBool>>, bpo: 
     handles.level.store(st.level);
     handles.input_level.store(st.input_level);
     shared::counters_from_array(&handles.counters, &st.mic_counters);
+    handles.counters.hands_free.store(st.mic_hands_free, std::sync::atomic::Ordering::Relaxed);
     shared::counters_from_array(&handles.speaker_counters, &st.speaker_counters);
     if let Some(live) = &handles.remote {
         *live.mic_pct.lock().unwrap() = (&st.mic_pct).into();
