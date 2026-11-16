@@ -143,14 +143,17 @@ fn connect_with_start(limit: Duration) -> Option<File> {
     if let Ok(f) = ipc::connect() {
         return Some(f);
     }
+    crate::log_info!("[clearnairt] engine not running; starting it");
     start_engine();
     let t0 = Instant::now();
     while t0.elapsed() < limit {
         thread::sleep(Duration::from_millis(250));
         if let Ok(f) = ipc::connect() {
+            crate::log_info!("[startup] engine answered {} ms after it was started", t0.elapsed().as_millis());
             return Some(f);
         }
     }
+    crate::log_error!("[clearnairt] engine did not answer within {} s of being started", limit.as_secs());
     None
 }
 
@@ -550,11 +553,19 @@ pub fn run_window() -> iced::Result {
     crate::logging::init_named(&crate::setup::app_data_dir(), "clearnai-window.log");
     crate::crash::install(&crate::setup::app_data_dir(), "clearnai-window.log");
     start_show_listener();
+    crate::log_info!(
+        "[clearnairt] window starting: ClearNAI {} (build {}), mode {:?}",
+        env!("CARGO_PKG_VERSION"),
+        env!("CLEARNAI_GIT_COMMIT"),
+        launch_mode()
+    );
 
+    let t0 = Instant::now();
     let Some(connected) = connect_and_mirror() else {
-        crate::log_error!("[clearnairt] could not reach the ClearNAI engine");
+        crate::log_error!("[clearnairt] could not reach the ClearNAI engine (gave up after {} s)", t0.elapsed().as_secs());
         return Ok(());
     };
+    crate::log_info!("[startup] window connected to the engine in {} ms", t0.elapsed().as_millis());
     let mut initial = connected.initial;
     // Every launch starts small, by the tray. Clicking the program (Start menu, desktop icon) shows the vertical card;
     // the tray's single click shows the horizontal bar; the tray's "Open full window" shows the card with the password

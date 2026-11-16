@@ -963,6 +963,7 @@ fn update_main(state: &mut MainState, message: Message) {
             }
         }
         Message::SelectProfile(name) => {
+            crate::log_info!("[action] profile: {name}");
             if let Some(p) = crate::ui_logic::profile_by_name(name) {
                 update_main(state, Message::ToggleMicNoise(p.noise));
                 update_main(state, Message::ToggleMicVoiceGate(p.voice_gate));
@@ -1035,14 +1036,21 @@ fn update_main(state: &mut MainState, message: Message) {
             let app_dir = crate::setup::app_data_dir();
             let dest_dir = crate::sysutil::export_dir(&app_dir);
             state.diag_note = Some(match crate::sysutil::export_log(&app_dir.join("clearnai.log"), &dest_dir) {
-                Ok(path) => format!("Log exported to {}", path.display()),
-                Err(e) => e,
+                Ok(path) => {
+                    crate::log_info!("[action] log exported");
+                    format!("Log exported to {}", path.display())
+                }
+                Err(e) => {
+                    crate::log_error!("[clearnairt] log export failed: {e}");
+                    e
+                }
             });
         }
         Message::ResetDefaults => {
             if !state.reset_armed {
                 state.reset_armed = true;
             } else {
+                crate::log_info!("[action] reset all settings to defaults");
                 reset_to_defaults(state);
             }
         }
@@ -1094,13 +1102,16 @@ fn update_main(state: &mut MainState, message: Message) {
                     license::Status::Licensed(p) => format!("Test access on: all features for {} more days.", p.exp.saturating_sub(now_secs()).div_ceil(86_400)),
                     _ => "This test code has already been used for 365 days on this PC.".to_string(),
                 });
+                crate::log_info!("[license] test code entered: {}", crate::diag::license_line(&state.license_status, now_secs()));
                 persist(&state.settings);
             } else if devices.is_empty() {
+                crate::log_info!("[license] paste rejected: PC details not read yet");
                 state.license_note = Some("Still reading this PC's details. Try again in a few seconds.".to_string());
             } else {
                 match license::token::verify(&key, &crate::license_key::PUBLIC_KEY, &devices, now_secs()) {
                     // An older license (a copy kept from before a change) must not replace a newer one.
                     Ok(p) if license::token::verify(&state.license_token, &crate::license_key::PUBLIC_KEY, &devices, now_secs()).is_ok_and(|cur| p.iat < cur.iat) => {
+                        crate::log_info!("[license] paste rejected: license {} is older than the one already here", p.lid);
                         state.license_note = Some("That license is older than the one already on this PC. Use the newest one your admin sent.".to_string());
                     }
                     Ok(p) => {
@@ -1113,13 +1124,23 @@ fn update_main(state: &mut MainState, message: Message) {
                         state.license_note = Some(if replacing { format!("License updated. Licensed to {}.", p.name) } else { format!("License accepted. Licensed to {}.", p.name) });
                         state.license_input.clear();
                         state.license_status = compute_license(&state.license_token);
+                        crate::log_info!(
+                            "[license] {} : {}",
+                            if replacing { "license updated" } else { "license accepted" },
+                            crate::diag::license_line(&state.license_status, now_secs())
+                        );
                         persist(&state.settings);
                     }
-                    Err(e) => state.license_note = Some(e.to_string()),
+                    Err(e) => {
+                        // The reason only (wrong PC, expired, damaged); never the pasted text.
+                        crate::log_info!("[license] paste rejected: {e} ({} characters pasted)", key.len());
+                        state.license_note = Some(e.to_string())
+                    }
                 }
             }
         }
         Message::SignOut => {
+            crate::log_info!("[license] signed out by the user");
             state.settings.license_key.clear();
             state.license_token.clear();
             state.settings.user_name.clear();
@@ -1238,6 +1259,7 @@ fn update_main(state: &mut MainState, message: Message) {
             update_main(state, Message::ToggleEchoCancel(on));
         }
         Message::UseDefaultDevices => {
+            crate::log_info!("[action] use Windows default microphone and speakers");
             state.devices = state.handles.device_switcher.enumerate_devices();
             state.settings.physical_mic_device_id = None;
             state.settings.real_speaker_output_device_id = None;
@@ -1266,6 +1288,7 @@ fn update_main(state: &mut MainState, message: Message) {
             // called" rule. Covers BOTH pipelines - either one can be the
             // actual overload source (see `speaker_status`), and turning
             // off a path the user doesn't currently need is harmless.
+            crate::log_info!("[action] low CPU mode: voices/studio off on both paths");
             if state.handles.mic_bvc_available {
                 state.handles.mic_bvc.set(false);
                 state.settings.mic_bvc_on = false;

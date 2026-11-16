@@ -169,9 +169,144 @@ impl PathHealth {
     }
 }
 
+/// The license state in one line, without the token, name, email or organisation.
+pub fn license_line(status: &license::Status, now: u64) -> String {
+    match status {
+        license::Status::Licensed(p) => format!(
+            "licensed (license {}, features {}, {} day(s) left)",
+            p.lid,
+            if p.feat.is_empty() { "none".to_string() } else { p.feat.join(",") },
+            p.exp.saturating_sub(now) / 86_400
+        ),
+        license::Status::Ended => "license ended (expired, another PC, or clock turned back): processing off".into(),
+        license::Status::SignIn => "not signed in: processing off".into(),
+    }
+}
+
+/// Watches the slower engine states (accent, transcript, Hush watchdog, Bluetooth call mode) and logs each change
+/// with how long the previous state lasted, so "loading took 9 s" or "Hush stalled at 14:02" are in the log. Polled
+/// from a plain thread twice a second, never from an audio thread.
+pub struct StateWatch {
+    accent: Option<(accent_onnx::pipeline::AccentState, std::time::Instant)>,
+    transcript: Option<(asr_onnx::pipeline::TranscriptState, std::time::Instant)>,
+    hush_bypassed: bool,
+    bpo_bypassed: bool,
+    hands_free: bool,
+    gaps_seen: u32,
+    gaps_logged_at: Option<std::time::Instant>,
+}
+
+impl Default for StateWatch {
+    fn default() -> Self {
+        StateWatch {
+            accent: None,
+            transcript: None,
+            hush_bypassed: false,
+            bpo_bypassed: false,
+            hands_free: false,
+            gaps_seen: 0,
+            gaps_logged_at: None,
+        }
+    }
+}
+
+/// At most one "accent gap" line per this window; the line carries how many gaps there were since the last one.
+const GAP_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl StateWatch {
+    pub fn check(&mut self, h: &crate::shared::EngineHandles) {
+        let now = std::time::Instant::now();
+        let acc = h.accent.status();
+        match self.accent {
+            Some((prev, since)) if prev != acc.state => {
+                crate::log_info!(
+                    "[accent] {prev:?} -> {:?} after {:.1} s{}",
+                    acc.state,
+                    now.duration_since(since).as_secs_f32(),
+                    if acc.message.is_empty() { String::new() } else { format!(": {}", acc.message) }
+                );
+                self.accent = Some((acc.state, now));
+            }
+            None => self.accent = Some((acc.state, now)),
+            _ => {}
+        }
+        // Each underrun is a moment the listener may hear a short gap; log when they happen (bounded).
+        if acc.underruns < self.gaps_seen {
+            self.gaps_seen = acc.underruns; // the stage restarted (voice changed)
+        }
+        if acc.underruns > self.gaps_seen && self.gaps_logged_at.is_none_or(|t| now.duration_since(t) >= GAP_LOG_EVERY) {
+            crate::log_info!(
+                "[accent] {} new gap(s) (total {}): speed {:.2}, cushion {} ms, delay {:.0} ms, catch-ups {}, dropped input {}",
+                acc.underruns - self.gaps_seen,
+                acc.underruns,
+                acc.rtf,
+                acc.jitter_ms,
+                acc.latency_ms,
+                acc.catchups,
+                acc.dropped_input
+            );
+            self.gaps_seen = acc.underruns;
+            self.gaps_logged_at = Some(now);
+        }
+        let ts = h.transcript.status();
+        match self.transcript {
+            Some((prev, since)) if prev != ts.state => {
+                crate::log_info!(
+                    "[transcript] {prev:?} -> {:?} after {:.1} s{}",
+                    ts.state,
+                    now.duration_since(since).as_secs_f32(),
+                    if ts.message.is_empty() { String::new() } else { format!(": {}", ts.message) }
+                );
+                self.transcript = Some((ts.state, now));
+            }
+            None => self.transcript = Some((ts.state, now)),
+            _ => {}
+        }
+        let hush = h.mic_hush_status.as_ref().is_some_and(|s| s.is_bypassed());
+        if hush != self.hush_bypassed {
+            crate::log_error!("[hush] mic Hush {}", if hush { "STALLED and is now bypassed (voice passes uncleaned)" } else { "running again" });
+            self.hush_bypassed = hush;
+        }
+        let bpo = h.mic_bpo_v1_status.as_ref().is_some_and(|s| s.is_bypassed());
+        if bpo != self.bpo_bypassed {
+            crate::log_error!("[hush] mic Hush bpo_v1 {}", if bpo { "STALLED and is now bypassed" } else { "running again" });
+            self.bpo_bypassed = bpo;
+        }
+        let hf = h.counters.hands_free.load(std::sync::atomic::Ordering::Relaxed);
+        if hf != self.hands_free {
+            crate::log_info!(
+                "[device] microphone {} Bluetooth call mode",
+                if hf { "entered" } else { "left" }
+            );
+            self.hands_free = hf;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn license_line_never_names_the_person() {
+        let p = license::token::Payload {
+            v: 1,
+            lid: "L42".into(),
+            org: "o1".into(),
+            uid: "u1".into(),
+            name: "Asha Person".into(),
+            email: "asha@example.com".into(),
+            orgname: "Some Org".into(),
+            dev: vec![],
+            min: 0,
+            feat: vec!["nc".into(), "bvc".into()],
+            iat: 0,
+            exp: 10 * 86_400,
+        };
+        let line = license_line(&license::Status::Licensed(p), 86_400);
+        assert_eq!(line, "licensed (license L42, features nc,bvc, 9 day(s) left)");
+        assert!(!line.contains("Asha") && !line.contains("example.com") && !line.contains("Some Org"));
+    }
 
     #[test]
     fn health_line_reports_the_minute_and_resets() {

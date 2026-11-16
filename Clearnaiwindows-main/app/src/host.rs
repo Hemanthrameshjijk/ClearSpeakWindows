@@ -27,7 +27,14 @@ pub struct Booted {
 /// Builds the engine (audio threads, models, devices) from the saved settings. Never fails outright: if the engine
 /// cannot start, inert handles are returned so the window can still say why.
 pub fn bootstrap(settings: &settings::Settings) -> Booted {
+    let t = std::time::Instant::now();
     let devices = engine::enumerate_devices();
+    crate::log_info!(
+        "[startup] listed {} microphone(s) and {} output(s) in {} ms",
+        devices.capture.len(),
+        devices.render.len(),
+        t.elapsed().as_millis()
+    );
 
     // Check the saved device choices against what is installed right now: a wrong or unplugged device falls
     // back to automatic instead of silently misrouting audio (a physical mic saved as the call audio source
@@ -56,7 +63,9 @@ pub fn bootstrap(settings: &settings::Settings) -> Booted {
     // rather than caching/skipping them (see `setup::CompatibilityReport`
     // and `Settings::setup_acknowledged` for why a real failure is never
     // permanently suppressed).
+    let t = std::time::Instant::now();
     let compat = setup::check_system_compatibility();
+    crate::log_info!("[startup] compatibility check in {} ms: {compat:?}", t.elapsed().as_millis());
 
     // Self-extract the embedded BVC DLL + model into %LOCALAPPDATA% *before*
     // `engine::start` tries to load them - this used to be a manual/
@@ -67,6 +76,7 @@ pub fn bootstrap(settings: &settings::Settings) -> Booted {
     // unavailable, same graceful-degradation pattern as a missing DLL
     // always used to be.
     let bvc_dir = setup::assets_dir();
+    let t = std::time::Instant::now();
     // Installed layout (files shipped next to the exe): nothing to extract, and that folder is not writable anyway.
     let bvc_extraction_error = match if bvc_dir == setup::app_data_dir() {
         setup::ensure_bvc_assets_extracted(&bvc_dir).map(|_| ())
@@ -79,6 +89,11 @@ pub fn bootstrap(settings: &settings::Settings) -> Booted {
             Some(format!("{e:#}"))
         }
     };
+    crate::log_info!(
+        "[startup] model files ready in {} ms ({})",
+        t.elapsed().as_millis(),
+        if bvc_dir == setup::app_data_dir() { "extracted to app data" } else { "installed next to the program" }
+    );
 
     match engine::start(
         &bvc_dir,
@@ -448,16 +463,25 @@ pub fn run_engine() {
     {
         let host = host.clone();
         crate::device_id::start_reading();
-        let _ = thread::Builder::new().name("clearnai-license-gate".into()).spawn(move || loop {
-            thread::sleep(Duration::from_secs(5));
-            let devices = crate::device_id::texts();
-            if devices.is_empty() {
-                continue; // still reading this PC's identity
+        let _ = thread::Builder::new().name("clearnai-license-gate".into()).spawn(move || {
+            let mut last_logged = String::new();
+            loop {
+                thread::sleep(Duration::from_secs(5));
+                let devices = crate::device_id::texts();
+                if devices.is_empty() {
+                    continue; // still reading this PC's identity
+                }
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let settings = host.settings.lock().unwrap().clone();
+                let status = crate::license_gate::status_for(&settings, &devices, now, crate::clock_guard::registry_mark());
+                // Logged once per change (never the token, name or email): explains "why did noise removal switch off".
+                let line = crate::diag::license_line(&status, now);
+                if line != last_logged {
+                    crate::log_info!("[license] {line}");
+                    last_logged = line;
+                }
+                crate::license_gate::enforce(&host.handles, crate::license_gate::allowed(&status));
             }
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            let settings = host.settings.lock().unwrap().clone();
-            let status = crate::license_gate::status_for(&settings, &devices, now, crate::clock_guard::registry_mark());
-            crate::license_gate::enforce(&host.handles, crate::license_gate::allowed(&status));
         });
     }
 
@@ -468,6 +492,8 @@ pub fn run_engine() {
         let _ = thread::Builder::new().name("clearnai-engine-ui-events".into()).spawn(move || {
             let mut cpu = crate::sysutil::CpuSampler::new();
             let mut ticks = 0u32;
+            let mut watch = crate::diag::StateWatch::default();
+            let (mut cpu_sum, mut cpu_max, mut cpu_n) = (0.0f32, 0.0f32, 0u32);
             loop {
                 thread::sleep(Duration::from_millis(100));
                 for action in crate::tray::take_actions() {
@@ -482,10 +508,24 @@ pub fn run_engine() {
                     toggle_mute(&host);
                 }
                 ticks += 1;
+                if ticks % 5 == 0 {
+                    watch.check(&host.handles);
+                }
                 if ticks % 10 == 0 {
                     if let Some(p) = cpu.sample() {
                         host.cpu_tenths.store((p * 10.0) as u32, Ordering::Relaxed);
+                        cpu_sum += p;
+                        cpu_max = cpu_max.max(p);
+                        cpu_n += 1;
                     }
+                }
+                if ticks % 600 == 0 && cpu_n > 0 {
+                    crate::log_info!(
+                        "[health] engine CPU last 60s: avg {:.1}% / worst {:.1}% of the whole PC",
+                        cpu_sum / cpu_n as f32,
+                        cpu_max
+                    );
+                    (cpu_sum, cpu_max, cpu_n) = (0.0, 0.0, 0);
                 }
             }
         });

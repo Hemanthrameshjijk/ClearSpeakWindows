@@ -152,6 +152,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
     /// thread never sees a spurious "gone" gap wider than the time it takes
     /// WASAPI to open the new device.
     fn set_physical_mic(&self, device_id: Option<String>) {
+        let t = Instant::now();
         let (producer, consumer) = make_ring_buffer(2.0);
         let started = match device_id.as_deref() {
             Some(id) => MicCapture::start_on_device_id(id, producer, self.counters.clone()),
@@ -161,6 +162,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
             Ok(capture) => {
                 *self.mic_in_swap.lock().unwrap() = Some(consumer);
                 Self::stop_and_replace_mic(&self.physical_mic, Some(capture));
+                log_switch("microphone", device_id.as_deref(), t);
             }
             Err(e) => {
                 crate::log_error!(
@@ -177,6 +179,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
     /// target selected" at boot) - the mic pipeline thread keeps running
     /// (e.g. for the monitor path) but has nowhere configured to forward to.
     fn set_virtual_mic_target(&self, device_id: Option<String>) {
+        let t = Instant::now();
         match device_id {
             Some(id) => {
                 let (producer, consumer) = make_ring_buffer(2.0);
@@ -184,6 +187,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
                     Ok(render) => {
                         *self.mic_out_swap.lock().unwrap() = Some(producer);
                         Self::stop_and_replace_render(&self.virtual_mic_render, Some(render));
+                        log_switch("cleaned-mic output", Some(&id), t);
                     }
                     Err(e) => {
                         crate::log_error!(
@@ -196,6 +200,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
             None => {
                 *self.mic_out_swap.lock().unwrap() = None;
                 Self::stop_and_replace_render(&self.virtual_mic_render, None);
+                crate::log_info!("[device] cleaned-mic output stopped");
             }
         }
     }
@@ -206,6 +211,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
     /// selected" at boot) - the speaker pipeline thread keeps running but
     /// has nothing to read from.
     fn set_virtual_speaker_source(&self, device_id: Option<String>) {
+        let t = Instant::now();
         match device_id {
             Some(id) => {
                 let (producer, consumer) = make_ring_buffer(2.0);
@@ -213,6 +219,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
                     Ok(capture) => {
                         *self.speaker_in_swap.lock().unwrap() = Some(consumer);
                         Self::stop_and_replace_mic(&self.speaker_capture, Some(capture));
+                        log_switch("call audio source", Some(&id), t);
                         if self.speaker_render.lock().unwrap().is_none() {
                             let output = self.real_speaker_output_id.lock().unwrap().clone();
                             self.set_real_speaker_output(output);
@@ -231,6 +238,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
                 Self::stop_and_replace_mic(&self.speaker_capture, None);
                 *self.speaker_out_swap.lock().unwrap() = None;
                 Self::stop_and_replace_render(&self.speaker_render, None);
+                crate::log_info!("[device] call audio path stopped");
             }
         }
     }
@@ -248,6 +256,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
         if self.speaker_capture.lock().unwrap().is_none() {
             return;
         }
+        let t = Instant::now();
         let (producer, consumer) = make_ring_buffer(2.0);
         let started = match device_id.as_deref() {
             Some(id) => HardwareRender::start_on_device_id(id, consumer, self.speaker_counters.clone()),
@@ -257,6 +266,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
             Ok(render) => {
                 *self.speaker_out_swap.lock().unwrap() = Some(producer);
                 Self::stop_and_replace_render(&self.speaker_render, Some(render));
+                log_switch("call audio output", device_id.as_deref(), t);
             }
             Err(e) => {
                 crate::log_error!(
@@ -271,6 +281,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
     /// thread's monitor output to a fresh ring buffer. `None` tears the
     /// monitor render device down entirely.
     fn set_monitor_device(&self, device_id: Option<String>) {
+        let t = Instant::now();
         match device_id {
             Some(id) => {
                 let (producer, consumer) = make_ring_buffer(2.0);
@@ -278,6 +289,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
                     Ok(render) => {
                         *self.monitor_out_swap.lock().unwrap() = Some(producer);
                         Self::stop_and_replace_render(&self.monitor_render, Some(render));
+                        log_switch("monitor", Some(&id), t);
                     }
                     Err(e) => {
                         crate::log_error!(
@@ -290,6 +302,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
             None => {
                 *self.monitor_out_swap.lock().unwrap() = None;
                 Self::stop_and_replace_render(&self.monitor_render, None);
+                crate::log_info!("[device] monitor stopped");
             }
         }
     }
@@ -376,6 +389,28 @@ pub fn default_virtual_mic_target(list: &DeviceList) -> Option<String> {
 /// means the system default output device, NOT "disabled" (unlike the two
 /// virtual-cable ids above, there's always a sensible real device to fall
 /// back to).
+/// Runs one model/stage load and logs how long it took and whether it worked: slow PCs and broken installs show up
+/// in the log as a slow or failed line here.
+fn timed_load<T, E: std::fmt::Display>(what: &str, load: impl FnOnce() -> std::result::Result<T, E>) -> std::result::Result<T, E> {
+    let t = Instant::now();
+    let r = load();
+    let ms = t.elapsed().as_millis();
+    match &r {
+        Ok(_) => crate::log_info!("[startup] {what} loaded in {ms} ms"),
+        Err(e) => crate::log_error!("[startup] {what} failed to load after {ms} ms: {e:#}"),
+    }
+    r
+}
+
+/// The result of a live device switch, with how long opening the new device took.
+fn log_switch(role: &str, id: Option<&str>, t: Instant) {
+    crate::log_info!(
+        "[device] {role} now on {} (opened in {} ms)",
+        id.unwrap_or("the Windows default"),
+        t.elapsed().as_millis()
+    );
+}
+
 pub fn start(
     bvc_assets_dir: &Path,
     settings: &Settings,
@@ -384,6 +419,7 @@ pub fn start(
     virtual_speaker_source_id: Option<&str>,
     real_speaker_output_id: Option<&str>,
 ) -> Result<BootstrapOutcome> {
+    let engine_started = Instant::now();
     let mut warnings = Vec::new();
 
     // --- BVC: one real load attempt per independent pipeline instance. ---
@@ -400,7 +436,7 @@ pub fn start(
     // Noise reduction strength of the mic path: shared with the window (the pick list), read by both mic Hush
     // stages once per frame. Wired into `handles` below.
     let mic_nr_strength = dsp_core::SharedPreset::new(settings.mic_nr_strength);
-    let mic_bvc_load = bvc_hush::HushBvcStage::try_load(bvc_assets_dir);
+    let mic_bvc_load = timed_load("mic Hush (BVC)", || bvc_hush::HushBvcStage::try_load(bvc_assets_dir));
     let (mic_bvc_available, mic_bvc_unavailable_reason) = match &mic_bvc_load {
         Ok(_) => (true, None),
         Err(e) => (false, Some(e.to_string())),
@@ -475,7 +511,7 @@ pub fn start(
     // follows the exact same "construct once at startup, honest fallback,
     // never crash the app over an optional backend" pattern as Hush above.
     let (mic_deep_filter_available, mic_deep_filter_unavailable_reason, mic_deep_filter_stage): (bool, Option<String>, Box<dyn Stage>) =
-        match noise_engine::load_bundled_deep_filter() {
+        match timed_load("mic DeepFilterNet", noise_engine::load_bundled_deep_filter) {
             Ok(engine) => (
                 true,
                 None,
@@ -506,11 +542,13 @@ pub fn start(
     // the BVC router dispatches to exactly one of them per frame, on the
     // one mic pipeline thread. Added alongside, never replacing, the
     // default `Hush` option above - both independently selectable.
-    let mic_hush_bpo_v1_load = bvc_hush::HushBvcStage::try_load_with_model(
-        bvc_assets_dir,
-        bvc_hush::DLL_FILE_NAME,
-        bvc_hush::BPO_V1_MODEL_BUNDLE_FILE_NAME,
-    );
+    let mic_hush_bpo_v1_load = timed_load("mic Hush bpo_v1", || {
+        bvc_hush::HushBvcStage::try_load_with_model(
+            bvc_assets_dir,
+            bvc_hush::DLL_FILE_NAME,
+            bvc_hush::BPO_V1_MODEL_BUNDLE_FILE_NAME,
+        )
+    });
     let (mic_bpo_v1_available, mic_bpo_v1_unavailable_reason) = match &mic_hush_bpo_v1_load {
         Ok(_) => (true, None),
         Err(e) => (false, Some(e.to_string())),
@@ -542,7 +580,9 @@ pub fn start(
     // for this), DeepFilterNet via a second `load_bundled_deep_filter()`
     // call (a fresh parse, no shared global state) - so a failure or a
     // wedged call on one path never affects the other.
-    let speaker_bvc_load = bvc_hush::HushBvcStage::try_load_named(bvc_assets_dir, bvc_hush::SPEAKER_DLL_FILE_NAME);
+    let speaker_bvc_load = timed_load("caller Hush (BVC)", || {
+        bvc_hush::HushBvcStage::try_load_named(bvc_assets_dir, bvc_hush::SPEAKER_DLL_FILE_NAME)
+    });
     let (speaker_bvc_available, speaker_bvc_unavailable_reason) = match &speaker_bvc_load {
         Ok(_) => (true, None),
         Err(e) => (false, Some(e.to_string())),
@@ -562,7 +602,7 @@ pub fn start(
         bool,
         Option<String>,
         Box<dyn Stage>,
-    ) = match noise_engine::load_bundled_deep_filter() {
+    ) = match timed_load("caller DeepFilterNet", noise_engine::load_bundled_deep_filter) {
         Ok(engine) => (
             true,
             None,
@@ -605,10 +645,10 @@ pub fn start(
     // --- Noise: RNNoise for both paths, each its own independent instance
     // (no shared state between the mic and speaker paths' stages). ---
     let mic_noise_stage: Box<dyn Stage> =
-        noise_engine::build(noise_engine::NoiseEngineKind::RnNoise, None)
+        timed_load("mic RNNoise", || noise_engine::build(noise_engine::NoiseEngineKind::RnNoise, None))
             .context("constructing mic-path RNNoise stage")?;
     let speaker_noise_stage: Box<dyn Stage> =
-        noise_engine::build(noise_engine::NoiseEngineKind::RnNoise, None)
+        timed_load("caller RNNoise", || noise_engine::build(noise_engine::NoiseEngineKind::RnNoise, None))
             .context("constructing speaker-path RNNoise stage")?;
 
     // --- Voice Gate: cheap, real-time volume-based background-voice
@@ -939,6 +979,7 @@ pub fn start(
 
     handles.warnings = std::sync::Arc::new(warnings);
 
+    crate::log_info!("[startup] audio engine (models + devices + threads) ready in {} ms", engine_started.elapsed().as_millis());
     Ok(BootstrapOutcome {
         handles,
         devices: devices_list,
