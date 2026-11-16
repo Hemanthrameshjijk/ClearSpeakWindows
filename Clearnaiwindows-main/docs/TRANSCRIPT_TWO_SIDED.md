@@ -40,8 +40,9 @@ Real mic ─► echo removal → gate → boost → Hush ─┬─► accent →
    - Agent: after Hush, before accent. The text is what the agent actually said, cleaned. This is today's tap.
    - Caller: after the caller-side cleanup, in `spawn_speaker_pipeline`, before render. A second `TranscriptStage`
      there only copies frames into its own ring and never changes the audio.
-4. **One clock.** Both stages stamp frames with a shared engine clock (`dsp_core::clock`), so lines from both sides
-   interleave correctly: `[00:12] Agent: …` / `[00:15] Caller: …`.
+4. **One clock.** Both stages stamp frames from one shared `Instant` taken when the engine starts. This is new:
+   `dsp_core::clock` only has the per-frame `FrameDeadline`. Lines from both sides then interleave correctly:
+   `[00:12] Agent: …` / `[00:15] Caller: …`.
 5. **One file per call.**
    - A call starts when caller audio becomes non-silent.
    - It ends after 2 minutes of silence on both sides, when call audio stops, or when the transcript is switched off.
