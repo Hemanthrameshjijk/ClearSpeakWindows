@@ -341,6 +341,7 @@ fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<(Vec
         silent_packets: counters.capture_silent_packets.load(Relaxed),
         hands_free: counters.hands_free.load(Relaxed),
         device: counters.capture_device.lock().map(|d| d.clone()).unwrap_or_default(),
+        boost_db: dsp_core::mic_boost_effective(settings.mic_boost_on, settings.mic_boost_db) as f64,
     };
     crate::log_info!(
         "[voice-test] capture: {} gap(s), {} silent packet(s){}",

@@ -1523,7 +1523,9 @@ fn spawn_speaker_pipeline(
                     shocks_seen = 0;
                     let t = exposure.totals();
                     crate::log_info!(
-                        "[health] caller audio last 60s: {} | noise {}, voices {}, studio {} | loud-sound protection {}:                          {shock_events} blocked, deepest cut {deepest_cut:.0} dB | exposure today {:.0}%, avg {:.0} dB                          over {:.0} min",
+                        "[health] caller audio last 60s: {} | noise {}, voices {}, studio {} | loud-sound protection {}: \
+                         {shock_events} blocked, deepest cut {deepest_cut:.0} dB | exposure today {:.0}%, avg {:.0} dB \
+                         over {:.0} min",
                         health.take_line(crate::shared::counters_to_array(&handles.speaker_counters)),
                         if handles.speaker_noise.is_on() { "on" } else { "off" },
                         if handles.speaker_bvc.is_on() { "on" } else { "off" },

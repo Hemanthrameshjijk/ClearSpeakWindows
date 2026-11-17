@@ -43,6 +43,8 @@ pub struct CaptureInfo {
     /// Bluetooth headset in call (Hands-Free) mode.
     pub hands_free: bool,
     pub device: String,
+    /// Mic boost (dB) the live mic path adds before everything else; the voice level is judged after it.
+    pub boost_db: f64,
 }
 
 const WIN: usize = 960; // 20 ms at 48 kHz
@@ -107,11 +109,17 @@ pub fn analyse(rec: &[f32], sample_rate: usize, info: &CaptureInfo) -> Vec<Check
     let mut out = Vec::new();
     let secs = rec.len() as f64 / sample_rate as f64;
 
-    let speech = speech_level_db(rec);
+    // Judged as the live path hears it: after Mic boost (earbud mics are often quiet and rely on it).
+    let speech = speech_level_db(rec) + info.boost_db;
+    let quiet_tip = if info.boost_db > 0.0 {
+        "Your voice is quiet even with Mic boost. Move the microphone closer to your mouth or turn Mic boost up."
+    } else {
+        "Your voice is quiet. Move the microphone closer to your mouth or turn on Mic boost."
+    };
     let (v, tip) = if speech < -40.0 {
         (Verdict::Fail, "We could not hear you. Check that the right microphone is chosen and not muted, then speak normally.")
     } else if speech < -30.0 {
-        (Verdict::Warn, "Your voice is quiet. Move the microphone closer to your mouth or turn on Mic boost.")
+        (Verdict::Warn, quiet_tip)
     } else if speech > -6.0 {
         (Verdict::Fail, "Your voice is far too loud. Move the microphone away from your mouth or lower the mic level in Windows.")
     } else if speech > -12.0 {
@@ -122,7 +130,7 @@ pub fn analyse(rec: &[f32], sample_rate: usize, info: &CaptureInfo) -> Vec<Check
     out.push(check("speech", "Voice level", format!("{speech:.0} dB"), v, tip));
 
     // Judged against the voice, not on its own: mic gain differs a lot between headsets, laptops and USB mics.
-    let floor = noise_floor_db(rec);
+    let floor = noise_floor_db(rec) + info.boost_db;
     let snr = speech - floor;
     let (v, tip) = if snr < 15.0 {
         (Verdict::Fail, "The background is almost as loud as your voice. Move away from fans, speakers and other people, or use a headset mic close to your mouth.")
@@ -248,6 +256,16 @@ mod tests {
         let cs = analyse(&rec, SR, &info);
         assert_eq!(verdict(&cs, "dropouts"), Verdict::Fail);
         assert_eq!(verdict(&cs, "bluetooth"), Verdict::Warn);
+    }
+
+    #[test]
+    fn mic_boost_counts_toward_the_voice_level() {
+        let rec = speechy(0.012, 10.0); // about -41 dBFS raw: a quiet earbud
+        assert_eq!(verdict(&analyse(&rec, SR, &CaptureInfo::default()), "speech"), Verdict::Fail);
+        let boosted = CaptureInfo { boost_db: 18.0, ..Default::default() };
+        let cs = analyse(&rec, SR, &boosted);
+        assert_eq!(verdict(&cs, "speech"), Verdict::Pass, "{cs:#?}");
+        assert_eq!(verdict(&cs, "noise"), verdict(&analyse(&rec, SR, &CaptureInfo::default()), "noise"));
     }
 
     #[test]

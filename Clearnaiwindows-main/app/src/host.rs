@@ -430,10 +430,6 @@ fn toggle_mute(host: &Host) {
     m.set(!m.is_on());
 }
 
-/// Entry point of `clearnai-engine.exe`. Never returns.
-/// The engine side of the listening-exposure meter: restores the shift at start-up, feeds the speaker pipeline the
-/// current ear offset (headset rating + Windows volume) once a second, saves every minute and starts a new shift
-/// after a long break.
 /// Low-end PC mode, once a second: feed the governor what the audio paths and the accent report, apply its step.
 fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor) {
     use dsp_core::{classify_status, compute_percentiles, RealtimeStatus};
@@ -459,6 +455,9 @@ fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor) {
     }
 }
 
+/// The engine side of the listening-exposure meter: restores the shift at start-up, feeds the speaker pipeline the
+/// current ear offset (headset rating + Windows volume) once a second, saves every minute and starts a new shift
+/// after a long break.
 struct ExposureTick {
     last_volume: Option<audio_io::volume::OutputVolume>,
 }
@@ -527,6 +526,7 @@ impl ExposureTick {
     }
 }
 
+/// Entry point of `clearnai-engine.exe`. Never returns.
 pub fn run_engine() {
     if another_instance_running("Local\\ClearNAI-engine") {
         return;
