@@ -313,15 +313,7 @@ impl Host {
             ClientMsg::SetDevice { role: r, id } => {
                 crate::log_info!("[action] {}: {}", crate::diag::role_name(r), id.as_deref().unwrap_or("(none / Windows default)"));
                 // Opening a device and joining the old worker can take a while: never on the pipe thread.
-                let sw = h.device_switcher.clone();
-                let _ = thread::Builder::new().name("clearspeak-device-switch".into()).spawn(move || match r {
-                    role::PHYSICAL_MIC => sw.set_physical_mic(id),
-                    role::VIRTUAL_MIC_TARGET => sw.set_virtual_mic_target(id),
-                    role::VIRTUAL_SPEAKER_SOURCE => sw.set_virtual_speaker_source(id),
-                    role::REAL_SPEAKER_OUTPUT => sw.set_real_speaker_output(id),
-                    role::MONITOR => sw.set_monitor_device(id),
-                    _ => {}
-                });
+                queue_device_switch(h.device_switcher.clone(), r, id);
             }
             ClientMsg::RefreshDevices => {
                 crate::log_info!("[action] refresh devices");
@@ -431,6 +423,32 @@ fn toggle_mute(host: &Host) {
 }
 
 /// Low-end PC mode, once a second: feed the governor what the audio paths and the accent report, apply its step.
+type SwitchJob = (Arc<dyn crate::shared::LiveDeviceSwitcher>, u8, Option<String>);
+
+/// Device switches run one at a time, in the order they were asked for, on one worker thread. A thread per switch
+/// let two quick clicks interleave (ring from one switch, device from the other), leaving the mic or the virtual mic
+/// silent until the next switch.
+fn queue_device_switch(sw: Arc<dyn crate::shared::LiveDeviceSwitcher>, r: u8, id: Option<String>) {
+    static QUEUE: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<SwitchJob>>> = std::sync::OnceLock::new();
+    let tx = QUEUE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<SwitchJob>();
+        let _ = thread::Builder::new().name("clearspeak-device-switch".into()).spawn(move || {
+            while let Ok((sw, r, id)) = rx.recv() {
+                match r {
+                    role::PHYSICAL_MIC => sw.set_physical_mic(id),
+                    role::VIRTUAL_MIC_TARGET => sw.set_virtual_mic_target(id),
+                    role::VIRTUAL_SPEAKER_SOURCE => sw.set_virtual_speaker_source(id),
+                    role::REAL_SPEAKER_OUTPUT => sw.set_real_speaker_output(id),
+                    role::MONITOR => sw.set_monitor_device(id),
+                    _ => {}
+                }
+            }
+        });
+        Mutex::new(tx)
+    });
+    let _ = tx.lock().unwrap().send((sw, r, id));
+}
+
 /// `last` = each path's processed-frame count a second ago (mic, call audio).
 fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor, last: &mut [u64; 2]) {
     use dsp_core::{classify_status, compute_percentiles, RealtimeStatus};
