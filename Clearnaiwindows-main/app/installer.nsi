@@ -256,7 +256,7 @@ SectionEnd
 
 ; ClearSpeak virtual microphone driver (separate project: ClearnaiWindows-Diver). TEST-SIGNED, so this installer only COPIES
 ; the package and its helper scripts to "$INSTDIR\driver"; it never installs the driver, trusts the test certificate or changes
-; any Windows security setting. To use it, run Install-ClearNAI-Driver.ps1 from an elevated PowerShell on a test PC (see
+; any Windows security setting. To use it, run Install-ClearSpeak-Driver.ps1 from an elevated PowerShell on a test PC (see
 ; driver\README.txt). `/nonfatal`: the folder is not part of this repo, so a build without it (CI) still succeeds.
 Section "ClearSpeak driver package (copied, not installed)"
   SetOutPath "$INSTDIR\driver"
