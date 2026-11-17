@@ -918,6 +918,9 @@ fn update_main(state: &mut MainState, message: Message) {
     match message {
         Message::Tick => {
             poll_voice_test(&mut state.voice_test);
+            if let Some(list) = state.handles.device_switcher.take_devices() {
+                state.devices = list;
+            }
             // Judge the license now, before the alerts and the feature check below read it: reading last tick's
             // result (worked out before this PC's identity was read) switched the accent off at every start.
             state.license_status = if state.clock_wrong { license::Status::Ended } else { compute_license(&state.license_token) };
@@ -925,10 +928,14 @@ fn update_main(state: &mut MainState, message: Message) {
             // What the license does not allow is shown off (the engine switches it off too, see `license_gate`).
             // Only once this PC's identity has been read: until then every license looks invalid, and switching
             // the accent off (and saving that) in that first second turned it off at every start.
+            // Only the live switch is turned off; the saved choice is kept, so the accent comes back by itself once
+            // the license allows it again (saving "off" here left it off after every renewal or clock fix).
             if license_ready() {
                 let a = crate::license_gate::allowed(&state.license_status);
-                if !a.accent && state.settings.accent_on {
-                    update_main(state, Message::ToggleAccent(false));
+                if !a.accent && state.handles.accent.voice() != 0 {
+                    state.handles.accent.set_voice(0);
+                } else if a.accent && state.settings.accent_on && state.handles.accent.voice() == 0 {
+                    state.handles.accent.set_voice(state.settings.accent_effective_voice());
                 }
             }
             // The window mirrors the engine: latency percentiles are computed there and sent over.
@@ -998,8 +1005,9 @@ fn update_main(state: &mut MainState, message: Message) {
             state.tab = tab;
             state.reset_armed = false;
             // Fresh device list on every page change, so the pickers never offer a headset that was unplugged
-            // since the window opened (picking one played to nothing).
-            state.devices = state.handles.device_switcher.enumerate_devices();
+            // since the window opened (picking one played to nothing). Asked for without waiting (waiting froze the
+            // window for up to 5 s when the engine was busy or away); the Tick picks the answer up.
+            state.handles.device_switcher.request_devices();
         }
         Message::ToggleMute => {
             let on = state.handles.mic_master_enabled.is_on();
@@ -1417,8 +1425,10 @@ fn update_main(state: &mut MainState, message: Message) {
                     BvcBackend::DeepFilter => state.handles.mic_deep_filter_available,
                     BvcBackend::HushBpoV1 => state.handles.mic_bpo_v1_available,
                 };
+                // The license decides whether it runs; the choice itself is still remembered for when it allows it.
+                let licensed = crate::license_gate::allowed(&state.license_status).bvc;
                 state.handles.bvc_backend.store(index);
-                state.handles.mic_bvc.set(wants_on && available);
+                state.handles.mic_bvc.set(wants_on && available && licensed);
                 state.settings.mic_bvc_backend = index;
                 state.settings.mic_bvc_on = wants_on;
                 persist(&state.settings);
@@ -1474,8 +1484,9 @@ fn update_main(state: &mut MainState, message: Message) {
                     tse_engine::SpeakerBvcBackend::Hush => state.handles.speaker_bvc_available,
                     tse_engine::SpeakerBvcBackend::DeepFilter => state.handles.speaker_deep_filter_available,
                 };
+                let licensed = crate::license_gate::allowed(&state.license_status).bvc;
                 state.handles.speaker_bvc_backend.store(index);
-                state.handles.speaker_bvc.set(wants_on && available);
+                state.handles.speaker_bvc.set(wants_on && available && licensed);
                 state.settings.speaker_bvc_backend = index;
                 state.settings.speaker_bvc_on = wants_on;
                 persist(&state.settings);

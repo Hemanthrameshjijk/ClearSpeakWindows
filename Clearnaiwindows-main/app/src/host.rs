@@ -607,6 +607,8 @@ pub fn run_engine() {
         crate::device_id::start_reading();
         let _ = thread::Builder::new().name("clearspeak-license-gate".into()).spawn(move || {
             let mut last_logged = String::new();
+            // What the license allowed at the previous check; a feature allowed again is restored from the settings.
+            let mut before: Option<crate::license_gate::Allowed> = None;
             loop {
                 thread::sleep(Duration::from_secs(5));
                 let devices = crate::device_id::texts();
@@ -622,7 +624,12 @@ pub fn run_engine() {
                     crate::log_info!("[license] {line}");
                     last_logged = line;
                 }
-                crate::license_gate::enforce(&host.handles, crate::license_gate::allowed(&status));
+                let allowed = crate::license_gate::allowed(&status);
+                crate::license_gate::enforce(&host.handles, allowed);
+                if let Some(prev) = before {
+                    crate::license_gate::restore(&host.handles, prev, allowed, &settings);
+                }
+                before = Some(allowed);
             }
         });
     }

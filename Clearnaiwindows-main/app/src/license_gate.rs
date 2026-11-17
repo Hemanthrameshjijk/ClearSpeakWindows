@@ -39,6 +39,34 @@ pub fn status_for(settings: &Settings, devices: &[String], now: u64, registry_ma
     license::status(&token, &crate::license_key::PUBLIC_KEY, devices, now)
 }
 
+/// A feature the license allows again (renewed, clock fixed, back on the right PC) comes back as the user had it:
+/// the saved settings were never changed by the gate, so they still say what the user wants.
+pub fn restore(h: &crate::shared::EngineHandles, before: Allowed, now: Allowed, s: &crate::settings::Settings) {
+    use tse_engine::{BvcBackend, SpeakerBvcBackend};
+    if now.nc && !before.nc {
+        h.mic_noise.set(s.mic_noise_on);
+        h.speaker_noise.set(s.speaker_noise_on);
+    }
+    if now.bvc && !before.bvc {
+        let mic_ok = match BvcBackend::from_index(s.mic_bvc_backend) {
+            BvcBackend::Off => false,
+            BvcBackend::Hush => h.mic_bvc_available,
+            BvcBackend::DeepFilter => h.mic_deep_filter_available,
+            BvcBackend::HushBpoV1 => h.mic_bpo_v1_available,
+        };
+        h.mic_bvc.set(s.mic_bvc_on && mic_ok);
+        let spk_ok = match SpeakerBvcBackend::from_index(s.speaker_bvc_backend) {
+            SpeakerBvcBackend::Off => false,
+            SpeakerBvcBackend::Hush => h.speaker_bvc_available,
+            SpeakerBvcBackend::DeepFilter => h.speaker_deep_filter_available,
+        };
+        h.speaker_bvc.set(s.speaker_bvc_on && spk_ok);
+    }
+    if now.accent && !before.accent {
+        h.accent.set_voice(s.accent_effective_voice());
+    }
+}
+
 /// Switches off whatever the license does not allow. Only ever turns things off.
 pub fn enforce(h: &crate::shared::EngineHandles, a: Allowed) {
     if !a.nc {
@@ -95,5 +123,26 @@ mod tests {
         assert_eq!(status_for(&s, &[], 10_000_000 + 60, 0), Status::SignIn, "a right clock and no license: sign in");
         let reg_only = Settings::default();
         assert_eq!(status_for(&reg_only, &[], 10_000_000 - 2 * 86_400, 10_000_000), Status::Ended, "the registry mark counts too");
+    }
+
+    #[test]
+    fn features_come_back_as_the_user_had_them_when_the_license_allows_again() {
+        let mut s = crate::settings::Settings::default();
+        s.mic_noise_on = true;
+        s.mic_bvc_on = true;
+        s.accent_on = true;
+        let h = crate::shared::EngineHandles::new_from_settings(
+            &s, true, None, true, None, true, None, vec![], true, None, true, None,
+        );
+        let all = Allowed { nc: true, bvc: true, accent: true };
+        enforce(&h, Allowed::NONE);
+        assert!(!h.mic_noise.is_on() && !h.mic_bvc.is_on());
+        restore(&h, Allowed::NONE, all, &s);
+        assert!(h.mic_noise.is_on() && h.mic_bvc.is_on(), "back on after renewal");
+        assert_eq!(h.accent.voice(), s.accent_effective_voice());
+        // Still allowed: nothing is touched (a feature the user switched off stays off).
+        h.mic_noise.set(false);
+        restore(&h, all, all, &s);
+        assert!(!h.mic_noise.is_on());
     }
 }

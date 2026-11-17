@@ -179,6 +179,14 @@ pub trait LiveDeviceSwitcher: Send + Sync {
     /// restart - selecting one still goes through the ordinary
     /// `set_*`/`Settings` live-switch path above.
     fn enumerate_devices(&self) -> DeviceList;
+
+    /// Ask for a fresh list without waiting (the window's UI thread must never block on the engine);
+    /// `take_devices` returns it once it has arrived.
+    fn request_devices(&self) {}
+
+    fn take_devices(&self) -> Option<DeviceList> {
+        None
+    }
 }
 
 /// The non-Windows (and startup-failure) stand-in: every call is a no-op.

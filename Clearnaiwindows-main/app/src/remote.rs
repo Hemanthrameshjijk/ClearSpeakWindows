@@ -112,6 +112,22 @@ impl LiveDeviceSwitcher for RemoteSwitcher {
     fn set_monitor_device(&self, id: Option<String>) {
         self.set(role::MONITOR, id);
     }
+    fn request_devices(&self) {
+        send(ClientMsg::RefreshDevices); // dropped silently while disconnected: then the last list stays
+    }
+
+    fn take_devices(&self) -> Option<DeviceList> {
+        let rx = self.devices_rx.lock().unwrap();
+        let mut newest = None;
+        while let Ok(list) = rx.try_recv() {
+            newest = Some(list);
+        }
+        if let Some(list) = &newest {
+            *self.last.lock().unwrap() = list.clone();
+        }
+        newest
+    }
+
     fn enumerate_devices(&self) -> DeviceList {
         let rx = self.devices_rx.lock().unwrap();
         while rx.try_recv().is_ok() {} // drop any stale answer
