@@ -60,14 +60,14 @@ pub fn cable_input_target(devices: &DeviceList) -> Option<DeviceOption> {
 }
 
 /// "Send cleaned audio to" choices with friendlier names: the ClearNAI driver's render end ("Speakers (ClearNAI
-/// Virtual Audio Device)") is shown as "ClearNAI Microphone input", since sending there is what feeds the ClearNAI
+/// Virtual Audio Device)") is shown as "ClearSpeak Microphone input", since sending there is what feeds the ClearNAI
 /// Microphone. Only the label changes; the id (what is saved and used) stays the same.
 pub fn virtual_target_choices(render: &[DeviceOption]) -> Vec<DeviceOption> {
     only_virtual(render, true)
         .into_iter()
         .map(|mut d| {
             if d.label.to_ascii_lowercase().contains("clearnai virtual audio device") {
-                d.label = "ClearNAI Microphone input".to_string();
+                d.label = "ClearSpeak Microphone input".to_string();
             }
             d
         })
@@ -86,7 +86,7 @@ pub fn meeting_mic_label(devices: &DeviceList, mic_target_id: &str) -> Option<St
     found.next().is_none().then(|| only.label.clone())
 }
 
-/// Where the Default profile sends the cleaned voice: the ClearNAI driver ("ClearNAI Microphone input") when it is
+/// Where the Default profile sends the cleaned voice: the ClearNAI driver ("ClearSpeak Microphone input") when it is
 /// installed, otherwise the single VB-CABLE input.
 pub fn preferred_mic_target(devices: &DeviceList) -> Option<DeviceOption> {
     devices
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(meeting_mic_label(&l, "missing"), None);
         let choices = virtual_target_choices(&l.render);
         let ours = choices.iter().find(|d| d.id == "clearnai-out").unwrap();
-        assert_eq!(ours.label, "ClearNAI Microphone input", "renamed for the picker, same id");
+        assert_eq!(ours.label, "ClearSpeak Microphone input", "renamed for the picker, same id");
         assert!(choices.iter().any(|d| d.label == "CABLE Input (VB-Audio Virtual Cable)"));
         assert_eq!(preferred_mic_target(&l).map(|d| d.id).as_deref(), Some("clearnai-out"), "ClearNAI driver first");
         assert_eq!(preferred_mic_target(&list()).map(|d| d.id).as_deref(), Some("cable-in"), "else VB-CABLE");

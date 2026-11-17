@@ -43,7 +43,7 @@ fn status_in(enabled: bool, token: &str, now: u64) -> Option<license::Status> {
         uid: "dev".into(),
         name: "Developer (test build)".into(),
         email: String::new(),
-        orgname: "ClearNAI test".into(),
+        orgname: "ClearSpeak test".into(),
         dev: Vec::new(),
         min: 0,
         feat: vec!["nc".into(), "bvc".into(), "accent".into()],

@@ -68,9 +68,9 @@ impl TokenError {
 impl std::fmt::Display for TokenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TokenError::Malformed => write!(f, "That is not a ClearNAI license."),
+            TokenError::Malformed => write!(f, "That is not a ClearSpeak license."),
             TokenError::BadSignature => write!(f, "This license is not valid."),
-            TokenError::UnsupportedVersion => write!(f, "This license is from a newer version of ClearNAI. Update the app."),
+            TokenError::UnsupportedVersion => write!(f, "This license is from a newer version of ClearSpeak. Update the app."),
             TokenError::NotYetValid => write!(f, "This license is not valid yet. Check that this PC's date and time are right."),
             TokenError::Expired(p) => write!(f, "This license expired (it was issued to {}). Ask your admin for a new one.", p.name),
             TokenError::WrongDevice => write!(f, "This license is for a different computer. Ask your admin for one for this PC."),

@@ -708,7 +708,7 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
     if matches!(message, Message::ImportLicenseFile) {
         return iced::Task::perform(
             async {
-                let file = rfd::AsyncFileDialog::new().set_title("Choose your ClearNAI license file").add_filter("ClearNAI license", &["lic", "txt"]).pick_file().await?;
+                let file = rfd::AsyncFileDialog::new().set_title("Choose your ClearSpeak license file").add_filter("ClearSpeak license", &["lic", "txt"]).pick_file().await?;
                 let bytes = file.read().await;
                 // A license is a few hundred characters; anything big is not one.
                 if bytes.len() > 4096 {
@@ -1560,7 +1560,7 @@ fn poll_voice_test(vt: &mut VoiceTestUi) {
     // 4 ticks a second: 20 s without the helper ever starting to record.
     if vt.running && vt.stalled_ticks > 80 {
         vt.running = false;
-        vt.error = Some("The voice test did not start. Close ClearNAI from the tray, open it again and retry.".to_string());
+        vt.error = Some("The voice test did not start. Close ClearSpeak from the tray, open it again and retry.".to_string());
         crate::log_error!("[voice-test] the helper never reported progress");
     }
 }
@@ -1806,7 +1806,7 @@ pub fn run(initial: Initial) -> iced::Result {
         update,
         view,
     )
-    .title("ClearNAI")
+    .title("ClearSpeak")
     .subscription(subscription)
     .theme(theme)
     .exit_on_close_request(false)

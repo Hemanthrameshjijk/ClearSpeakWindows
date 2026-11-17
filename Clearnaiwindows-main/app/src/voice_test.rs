@@ -459,7 +459,7 @@ fn process(
     boost.set_db(dsp_core::mic_boost_effective(settings.mic_boost_on, settings.mic_boost_db) as f32);
     let pre = run_frames(rec, &mut [&mut boost]);
 
-    let mut versions: Vec<(String, String, Vec<f32>)> = vec![("original".into(), "Original (no ClearNAI)".into(), pre.clone())];
+    let mut versions: Vec<(String, String, Vec<f32>)> = vec![("original".into(), "Original (no ClearSpeak)".into(), pre.clone())];
 
     if allowed.nc {
         step(p, "Removing noise...");

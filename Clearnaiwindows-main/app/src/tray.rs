@@ -160,7 +160,7 @@ mod win {
                     TrayIconBuilder::new()
                         .with_menu(Box::new(menu))
                         .with_menu_on_left_click(false)
-                        .with_tooltip("ClearNAI")
+                        .with_tooltip("ClearSpeak")
                         .with_icon(icon)
                         .build()
                         .map_err(|e| e.to_string())

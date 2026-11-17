@@ -69,7 +69,7 @@ pub fn tokens(theme: &Theme) -> Tokens {
 pub fn theme(dark: bool) -> Theme {
     let t = tokens_for(dark);
     Theme::custom(
-        if dark { "ClearNAI Dark" } else { "ClearNAI Light" },
+        if dark { "ClearSpeak Dark" } else { "ClearSpeak Light" },
         iced::theme::Palette { background: t.page, text: t.text, primary: t.primary, success: t.success, warning: t.warning, danger: t.danger },
     )
 }

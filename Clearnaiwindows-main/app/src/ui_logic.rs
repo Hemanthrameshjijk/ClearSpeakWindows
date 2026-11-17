@@ -417,16 +417,16 @@ pub fn alerts(i: &AlertInput) -> Vec<Alert> {
         out.push(Alert { key: "clock", text: "The date and time on this PC look wrong, so the license cannot be checked. Set the correct date and time.".into() });
     }
     if i.license_needed {
-        out.push(Alert { key: "license", text: "You are not signed in, or your license has ended. Open ClearNAI and sign in with the license from your admin.".into() });
+        out.push(Alert { key: "license", text: "You are not signed in, or your license has ended. Open ClearSpeak and sign in with the license from your admin.".into() });
     }
     if i.engine_disconnected {
-        out.push(Alert { key: "engine-disconnected", text: "Lost contact with the ClearNAI background engine. Reconnecting; audio keeps running if the engine is still alive.".into() });
+        out.push(Alert { key: "engine-disconnected", text: "Lost contact with the ClearSpeak background engine. Reconnecting; audio keeps running if the engine is still alive.".into() });
     }
     if i.bvc_unavailable {
         out.push(Alert { key: "bvc-unavailable", text: "Background voice removal could not start, so other voices are not being removed.".into() });
     }
     if i.bvc_stopped {
-        out.push(Alert { key: "bvc-stopped", text: "Background voice removal stopped responding and is off for this session. Restart ClearNAI to fix it.".into() });
+        out.push(Alert { key: "bvc-stopped", text: "Background voice removal stopped responding and is off for this session. Restart ClearSpeak to fix it.".into() });
     }
     if let Some(rtf) = i.accent_paused_rtf {
         out.push(Alert {

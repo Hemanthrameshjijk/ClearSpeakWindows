@@ -391,7 +391,7 @@ fn connect_and_mirror() -> Option<Connected> {
     })?;
     if hello.version != ipc::PROTOCOL_VERSION {
         crate::log_error!(
-            "[clearnairt] engine speaks protocol {} but this window speaks {}; reinstall ClearNAI",
+            "[clearnairt] engine speaks protocol {} but this window speaks {}; reinstall ClearSpeak",
             hello.version,
             ipc::PROTOCOL_VERSION
         );
@@ -560,7 +560,7 @@ pub fn run_window() -> iced::Result {
     crate::crash::install(&crate::setup::app_data_dir(), "clearnai-window.log");
     start_show_listener();
     crate::log_info!(
-        "[clearnairt] window starting: ClearNAI {} (build {}), mode {:?}",
+        "[clearnairt] window starting: ClearSpeak {} (build {}), mode {:?}",
         env!("CARGO_PKG_VERSION"),
         env!("CLEARNAI_GIT_COMMIT"),
         launch_mode()

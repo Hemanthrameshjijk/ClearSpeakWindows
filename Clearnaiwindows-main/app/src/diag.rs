@@ -101,7 +101,7 @@ fn windows_version() -> String {
 /// The start-up header: what is running, on what, set how, with which devices.
 pub fn log_session_header(settings: &Settings, devices: &DeviceList) {
     crate::log_info!(
-        "[session] ClearNAI {} (build {}{}), {}, {} logical cores",
+        "[session] ClearSpeak {} (build {}{}), {}, {} logical cores",
         env!("CARGO_PKG_VERSION"),
         env!("CLEARNAI_GIT_COMMIT"),
         if cfg!(feature = "dev-code") { ", test build" } else { "" },

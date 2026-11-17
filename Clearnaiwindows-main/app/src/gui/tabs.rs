@@ -450,9 +450,9 @@ fn page_text(tab: Tab) -> (&'static str, &'static str, &'static str) {
         Tab::Microphone => ("MICROPHONE", "Shape what others hear.", "Clean up your voice before it reaches your meeting or call."),
         Tab::CallAudio => ("CALL AUDIO", "Make the caller easier to hear.", "Control incoming audio cleanup separately from your microphone."),
         Tab::Transcript => ("TRANSCRIPT", "Keep the conversation in view.", "Search and save a live transcript from your calls."),
-        Tab::Devices => ("DEVICES", "Route your audio clearly.", "Choose which devices ClearNAI should listen to and play through."),
+        Tab::Devices => ("DEVICES", "Route your audio clearly.", "Choose which devices ClearSpeak should listen to and play through."),
         Tab::Advanced => ("ADVANCED", "Fine-tune your workspace.", "Choose the models, shortcuts, and system behavior that fit your setup."),
-        Tab::Profile => ("PROFILE", "Who is using ClearNAI.", "Your name and license. They stay on this PC."),
+        Tab::Profile => ("PROFILE", "Who is using ClearSpeak.", "Your name and license. They stay on this PC."),
     }
 }
 
@@ -464,7 +464,7 @@ fn nav_hint(tab: Tab) -> &'static str {
         Tab::CallAudio => "Incoming sound",
         Tab::Transcript => "Live captions",
         Tab::Devices => "Audio routing",
-        Tab::Advanced => "Fine-tune ClearNAI",
+        Tab::Advanced => "Fine-tune ClearSpeak",
         Tab::Profile => "Your account",
     }
 }
@@ -547,10 +547,10 @@ fn sign_in_form(state: &MainState, small: bool) -> Element<'_, Message> {
     let t = style::tokens_for(dark);
     let status = license_status(state);
     let (title, lead) = if state.clock_wrong {
-        ("Check this PC's clock", "The date on this PC is earlier than when ClearNAI last ran. Correct the date and time, then try again.")
+        ("Check this PC's clock", "The date on this PC is earlier than when ClearSpeak last ran. Correct the date and time, then try again.")
     } else if matches!(status, license::Status::SignIn) {
         (
-            "Sign in to ClearNAI",
+            "Sign in to ClearSpeak",
             if small {
                 "Send the Device Code to your admin, then paste the license they send you."
             } else {
@@ -1137,7 +1137,7 @@ pub fn view_bar(state: &MainState) -> Element<'_, Message> {
     });
 
     let bar = row![
-        tip(logo_mark(dark, 24.0), "ClearNAI", dark),
+        tip(logo_mark(dark, 24.0), "ClearSpeak", dark),
         divider(),
         tip(with_dot(icons::MIC, mic_dot), format!("Microphone: {}", current_chip(state).label()), dark),
         tip(
@@ -1174,7 +1174,7 @@ pub fn view_bar(state: &MainState) -> Element<'_, Message> {
         },
         tip(mute.into(), "Mute or unmute the microphone (Ctrl+Shift+M)", dark),
         tip(plain(icons::EXPAND, Message::ToggleCompact), "Open the full window", dark),
-        tip(plain(icons::CLOSE, Message::WindowClosed), "Close (ClearNAI keeps running in the tray)", dark),
+        tip(plain(icons::CLOSE, Message::WindowClosed), "Close (ClearSpeak keeps running in the tray)", dark),
     ]
     .spacing(4)
     .align_y(iced::Alignment::Center);
@@ -1815,7 +1815,7 @@ fn bvc_note(state: &MainState, technical: bool) -> Option<Element<'_, Message>> 
         ),
         // The backend's own watchdog gave up on it after repeated stalls (see `EngineHandles::mic_hush_status`).
         BvcBackend::Hush if state.handles.mic_hush_status.as_ref().is_some_and(|s| s.is_bypassed()) => Some(
-            text("Background voice removal stopped responding and was switched off for this session. Restart ClearNAI to try again.")
+            text("Background voice removal stopped responding and was switched off for this session. Restart ClearSpeak to try again.")
             .size(12)
             .style(text::danger)
             .into(),
@@ -1853,7 +1853,7 @@ fn bvc_note(state: &MainState, technical: bool) -> Option<Element<'_, Message>> 
             .into(),
         ),
         BvcBackend::HushBpoV1 if state.handles.mic_bpo_v1_status.as_ref().is_some_and(|s| s.is_bypassed()) => Some(
-            text("Background voice removal stopped responding and was switched off for this session. Restart ClearNAI to try again.")
+            text("Background voice removal stopped responding and was switched off for this session. Restart ClearSpeak to try again.")
             .size(12)
             .style(text::danger)
             .into(),
@@ -2252,7 +2252,7 @@ fn devices_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
                 style::Accent::Purple,
                 "Virtual microphone",
                 None,
-                "Where ClearNAI sends your cleaned voice",
+                "Where ClearSpeak sends your cleaned voice",
                 Some(toggler(state.handles.virtual_mic.is_on()).on_toggle(Message::ToggleVirtualMic).size(24).style(style::toggle).into()),
             ),
             select_row(
@@ -2349,10 +2349,10 @@ fn advanced_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
     }
 
     let behavior = column![
-        card_head(state, icons::SHIELD, style::Accent::Blue, "App behavior", None, "Keep ClearNAI ready when you need it.", None),
-        setting_row(state, "Start with computer", Some("Open ClearNAI when you sign in."), state.settings.start_with_windows, Message::ToggleStartWithWindows),
+        card_head(state, icons::SHIELD, style::Accent::Blue, "App behavior", None, "Keep ClearSpeak ready when you need it.", None),
+        setting_row(state, "Start with computer", Some("Open ClearSpeak when you sign in."), state.settings.start_with_windows, Message::ToggleStartWithWindows),
         disabled_setting_row(state, "Show notifications", "Get feedback when audio changes.", false),
-        disabled_setting_row(state, "Share diagnostics", "Help improve ClearNAI with anonymous data.", false),
+        disabled_setting_row(state, "Share diagnostics", "Help improve ClearSpeak with anonymous data.", false),
     ]
     .spacing(22);
 
@@ -2401,7 +2401,7 @@ fn advanced_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         diag_row("Accent speed / added delay", accent_line),
         diag_row("Call audio underruns", sio.output_underruns.to_string()),
         diag_row("CPU (this app, all cores)", cpu_line),
-        diag_row("ClearNAI version", env!("CARGO_PKG_VERSION").to_string()),
+        diag_row("ClearSpeak version", env!("CARGO_PKG_VERSION").to_string()),
         row![
             btn(text("Export logs").size(13)).padding([9, 14]).on_press(Message::ExportLogs).style(style::outline),
             btn(text(if state.reset_armed { "Click again to reset everything" } else { "Reset to defaults" }).size(13))

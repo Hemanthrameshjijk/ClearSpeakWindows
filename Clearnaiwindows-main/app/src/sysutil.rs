@@ -94,7 +94,7 @@ pub fn export_log(src: &Path, dir: &Path) -> Result<PathBuf, String> {
     if !src.is_file() {
         return Err(format!("no log file yet at {}", src.display()));
     }
-    let dest = dir.join(format!("ClearNAI-log-{}.txt", unix_now()));
+    let dest = dir.join(format!("ClearSpeak-log-{}.txt", unix_now()));
     std::fs::copy(src, &dest).map_err(|e| format!("could not copy the log to {}: {e}", dest.display()))?;
     Ok(dest)
 }
@@ -236,13 +236,13 @@ mod win {
                 Ok(exe) => {
                     let value = wide(&super::run_value(&exe));
                     let rc = unsafe { RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, value.as_ptr() as *const u8, (value.len() * 2) as u32) };
-                    if rc == 0 { Ok(()) } else { Err(format!("could not register ClearNAI to start with Windows (error {rc})")) }
+                    if rc == 0 { Ok(()) } else { Err(format!("could not register ClearSpeak to start with Windows (error {rc})")) }
                 }
-                Err(e) => Err(format!("could not find the ClearNAI exe path: {e}")),
+                Err(e) => Err(format!("could not find the ClearSpeak exe path: {e}")),
             }
         } else {
             let rc = unsafe { RegDeleteValueW(key, name.as_ptr()) };
-            if rc == 0 || rc == ERROR_FILE_NOT_FOUND { Ok(()) } else { Err(format!("could not remove ClearNAI from Windows startup (error {rc})")) }
+            if rc == 0 || rc == ERROR_FILE_NOT_FOUND { Ok(()) } else { Err(format!("could not remove ClearSpeak from Windows startup (error {rc})")) }
         };
         unsafe { RegCloseKey(key) };
         result

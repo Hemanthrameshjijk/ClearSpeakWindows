@@ -16,8 +16,8 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/clearnai.ico");
-        res.set("ProductName", "ClearNAI");
-        res.set("FileDescription", "ClearNAI");
+        res.set("ProductName", "ClearSpeak");
+        res.set("FileDescription", "ClearSpeak");
         if let Err(e) = res.compile() {
             println!("cargo:warning=could not embed the app icon: {e}");
         }

@@ -21,13 +21,16 @@
 ; from the repo root's `app` directory, after `cargo build --release` has
 ; already produced target\release\clearnairt.exe two directories up.
 
-!define APP_NAME "ClearNAI"
+!define APP_NAME "ClearSpeak"
+; Earlier name. Kept for what an existing install already has: the uninstall entry, the Start-with-Windows value,
+; the install folder and %LOCALAPPDATA%\ClearNAI (settings, license, logs), so an update keeps all of them.
+!define OLD_NAME "ClearNAI"
 ; Two programs (see app/src/lib.rs): the window and the background engine that keeps the audio running.
 !define APP_EXE "clearnai.exe"
 !define ENGINE_EXE "clearnai-engine.exe"
-!define APP_PUBLISHER "ClearNAI"
+!define APP_PUBLISHER "ClearSpeak"
 !define APP_VERSION "0.1.0"
-!define UNINSTALL_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
+!define UNINSTALL_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${OLD_NAME}"
 
 ; Third-party VB-Audio VB-CABLE driver installer, bundled here ONLY for
 ; this personal, non-commercial build (see the "VB-CABLE Virtual Audio
@@ -60,7 +63,7 @@ Icon "assets\clearnai.ico"
 UninstallIcon "assets\clearnai.ico"
 
 Name "${APP_NAME}"
-OutFile "..\target\release\ClearNAI-Setup.exe"
+OutFile "..\target\release\ClearSpeak-Setup.exe"
 InstallDir "$PROGRAMFILES64\ClearNAI"
 ; Installs to C:\Program Files\ClearNAI (one admin prompt). Managed PCs often block programs and DLLs under
 ; %LOCALAPPDATA% ("restrictions in effect on this computer"); Program Files is normally allowed. Settings, logs and
@@ -70,11 +73,11 @@ RequestExecutionLevel admin
 
 Function .onInit
   ${IfNot} ${RunningX64}
-    MessageBox MB_OK|MB_ICONSTOP "ClearNAI needs 64-bit Windows 10 or 11."
+    MessageBox MB_OK|MB_ICONSTOP "${APP_NAME} needs 64-bit Windows 10 or 11."
     Abort
   ${EndIf}
   ${IfNot} ${AtLeastWin10}
-    MessageBox MB_OK|MB_ICONSTOP "ClearNAI needs Windows 10 or later."
+    MessageBox MB_OK|MB_ICONSTOP "${APP_NAME} needs Windows 10 or later."
     Abort
   ${EndIf}
 FunctionEnd
@@ -144,6 +147,10 @@ Section "Install"
   File /nonfatal "assets\asr_models\vocab.txt"
   SetOutPath "$INSTDIR"
 
+  ; Shortcuts from before the rename.
+  Delete "$SMPROGRAMS\${OLD_NAME}\*.*"
+  RMDir "$SMPROGRAMS\${OLD_NAME}"
+  Delete "$DESKTOP\${OLD_NAME}.lnk"
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
@@ -234,7 +241,7 @@ Section "VB-CABLE Virtual Audio Driver"
     ; VB-Audio's own documentation recommends a reboot for the driver to
     ; register reliably - ask, never force a silent unexpected reboot.
     MessageBox MB_YESNO|MB_ICONQUESTION \
-      "VB-CABLE setup has finished.$\r$\n$\r$\nA system restart is recommended before using the virtual cable with ClearNAI. Restart now?" \
+      "VB-CABLE setup has finished.$\r$\n$\r$\nA system restart is recommended before using the virtual cable with ${APP_NAME}. Restart now?" \
       IDNO skip_reboot
     Reboot
     skip_reboot:
@@ -245,7 +252,7 @@ SectionEnd
 ; the package and its helper scripts to "$INSTDIR\driver"; it never installs the driver, trusts the test certificate or changes
 ; any Windows security setting. To use it, run Install-ClearNAI-Driver.ps1 from an elevated PowerShell on a test PC (see
 ; driver\README.txt). `/nonfatal`: the folder is not part of this repo, so a build without it (CI) still succeeds.
-Section "ClearNAI driver package (copied, not installed)"
+Section "ClearSpeak driver package (copied, not installed)"
   SetOutPath "$INSTDIR\driver"
   File /nonfatal "..\..\ClearnaiWindows-Diver\dist\driver\*.*"
 SectionEnd
@@ -280,7 +287,10 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${APP_NAME}\Get VB-CABLE A+B (call audio).url"
 
   ; The app's optional "Start with Windows" setting writes this value (HKCU Run).
-  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${OLD_NAME}"
+  Delete "$SMPROGRAMS\${OLD_NAME}\*.*"
+  RMDir "$SMPROGRAMS\${OLD_NAME}"
+  Delete "$DESKTOP\${OLD_NAME}.lnk"
 
   DeleteRegKey HKLM "${UNINSTALL_REG_KEY}"
 SectionEnd
