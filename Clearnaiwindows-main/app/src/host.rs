@@ -431,14 +431,25 @@ fn toggle_mute(host: &Host) {
 }
 
 /// Low-end PC mode, once a second: feed the governor what the audio paths and the accent report, apply its step.
-fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor) {
+/// `last` = each path's processed-frame count a second ago (mic, call audio).
+fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor, last: &mut [u64; 2]) {
     use dsp_core::{classify_status, compute_percentiles, RealtimeStatus};
     const DEADLINE_NS: u64 = (dsp_core::FRAME_SAMPLES as u64 * 1_000_000_000) / dsp_core::SAMPLE_RATE_HZ as u64;
     let change = if h.perf_auto.is_on() {
+        // Only a path that processed audio in the last second counts: a stopped path (call audio switched off)
+        // keeps its last timings, and they kept saying "overloaded" forever.
+        let now = [
+            h.counters.frames_processed.load(Ordering::Relaxed),
+            h.speaker_counters.frames_processed.load(Ordering::Relaxed),
+        ];
+        let running = [now[0] > last[0], now[1] > last[1]];
+        *last = now;
         let over = |log: &dsp_core::LatencyLog| {
             classify_status(&compute_percentiles(log.snapshot()), DEADLINE_NS, false) == RealtimeStatus::Overloaded
         };
-        g.tick(crate::perf_governor::Signals { overloaded: over(&h.latency_log) || over(&h.speaker_latency_log) })
+        g.tick(crate::perf_governor::Signals {
+            overloaded: (running[0] && over(&h.latency_log)) || (running[1] && over(&h.speaker_latency_log)),
+        })
     } else {
         g.reset()
     };
@@ -625,6 +636,7 @@ pub fn run_engine() {
             let mut ticks = 0u32;
             let mut exposure = ExposureTick::start(&host.handles);
             let mut governor = crate::perf_governor::Governor::new();
+            let mut perf_frames = [0u64; 2];
             let mut sys_cpu_prev = crate::sysutil::system_cpu_times_100ns();
             let mut calls = crate::call_log::CallTracker::default();
             let mut watch = crate::diag::StateWatch::default();
@@ -654,7 +666,7 @@ pub fn run_engine() {
                 if ticks % 10 == 0 {
                     let settings = host.settings.lock().unwrap().clone();
                     exposure.second(&host.handles, &settings, ticks % 600 == 0);
-                    perf_second(&host.handles, &mut governor);
+                    perf_second(&host.handles, &mut governor, &mut perf_frames);
                     let apps = crate::call_log::mic_users();
                     for line in calls.tick(&apps, call_features(&host.handles), &call_stats(&host.handles)) {
                         crate::log_info!("{line}");

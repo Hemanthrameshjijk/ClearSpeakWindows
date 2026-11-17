@@ -81,6 +81,9 @@ impl TranscriptConfig {
 #[derive(Default)]
 struct Data {
     lines: Vec<TranscriptLine>,
+    /// Lines added since the last clear. Keeps counting after `lines` is capped at `MAX_LINES`, so whoever sends new
+    /// lines on (the engine to the window) can still tell how many are new.
+    total: usize,
     partial: String,
     message: String,
     save_path: Option<PathBuf>,
@@ -127,7 +130,7 @@ impl TranscriptHandle {
             S_UNAVAILABLE => TranscriptState::Unavailable,
             _ => TranscriptState::Off,
         };
-        TranscriptStatus { state, message: d.message.clone(), rtf: self.0.rtf_milli.load(Relaxed) as f32 / 1000.0, line_count: d.lines.len() }
+        TranscriptStatus { state, message: d.message.clone(), rtf: self.0.rtf_milli.load(Relaxed) as f32 / 1000.0, line_count: d.total }
     }
 
     /// Last `max` finished lines plus the in-progress (partial) text.
@@ -156,8 +159,12 @@ impl TranscriptHandle {
         let changed = reset || !new_lines.is_empty() || d.partial != partial;
         if reset {
             d.lines.clear();
+            d.total = 0;
         }
+        d.total += new_lines.len();
         d.lines.extend(new_lines);
+        let over = d.lines.len().saturating_sub(MAX_LINES);
+        d.lines.drain(..over);
         d.partial = partial.to_string();
         d.message = message.to_string();
         if changed {
@@ -169,6 +176,7 @@ impl TranscriptHandle {
         self.0.clear_requested.store(true, Relaxed);
         let mut d = self.0.data.lock().unwrap();
         d.lines.clear();
+        d.total = 0;
         d.partial.clear();
         self.0.version.fetch_add(1, Relaxed);
     }
@@ -258,6 +266,7 @@ fn publish_line(sh: &Shared, text: String, save_dir: &Option<PathBuf>, session_s
         }
     }
     d.lines.push(TranscriptLine { at_secs: at, text });
+    d.total += 1;
     if d.lines.len() > MAX_LINES {
         d.lines.remove(0);
     }
@@ -375,5 +384,23 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: TranscriptConfig) {
                 Err(e) => sh.data.lock().unwrap().message = e,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod line_count_tests {
+    use super::*;
+
+    #[test]
+    fn new_lines_are_still_seen_after_the_500_line_cap() {
+        let h = TranscriptHandle(Arc::new(new_shared(false)));
+        for i in 0..MAX_LINES + 100 {
+            publish_line(&h.0, format!("line {i}"), &None, 0);
+        }
+        assert_eq!(h.status().line_count, MAX_LINES + 100, "the count keeps going past the cap");
+        let sent = MAX_LINES + 97;
+        let (new, _) = h.snapshot(h.status().line_count - sent);
+        let texts: Vec<_> = new.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["line 597", "line 598", "line 599"], "only the 3 new lines");
     }
 }
