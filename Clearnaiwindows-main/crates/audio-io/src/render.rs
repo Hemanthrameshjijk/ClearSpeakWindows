@@ -279,6 +279,10 @@ fn render_loop(
     // log the first one and then a summary at most every 30 s instead of a line per second.
     let mut last_underrun_log: Option<std::time::Instant> = None;
     let mut underruns_since_log: u64 = 0;
+    // Output delay control: see `LatencyTrim`.
+    let mut trim = LatencyTrim::default();
+    let mut trims_since_log = 0u32;
+    let mut last_trim_log: Option<std::time::Instant> = None;
     let mut last_follow_check = std::time::Instant::now();
     // Playing into the same Bluetooth headset that is the microphone in call mode (the Monitor on the earbuds) can
     // make the headset glitch. The user wants to hear themselves, so it keeps playing; the log only notes it, which
@@ -318,10 +322,33 @@ fn render_loop(
         // we have enough samples to fill the available device buffer space,
         // padding the tail with silence on underrun so WASAPI never sees a
         // short write.
+        // The ring only grows when the producer was late (the late audio still plays after the silence that covered
+        // it), so without this every hiccup added delay for the rest of the call.
+        let dropped = trim.check(consumer.slots(), std::time::Instant::now());
+        if dropped > 0 {
+            for _ in 0..dropped {
+                let _ = consumer.pop();
+            }
+            trims_since_log += 1;
+            if last_trim_log.map_or(true, |t: std::time::Instant| t.elapsed() >= std::time::Duration::from_secs(60)) {
+                crate::report_error(&format!(
+                    "[audio-io] INFO: '{name}' output delay trimmed back to {} ms ({trims_since_log} trim(s) since the last note)",
+                    TRIM_TO_SAMPLES / 48
+                ));
+                last_trim_log = Some(std::time::Instant::now());
+                trims_since_log = 0;
+            }
+        }
+
         while pending.len() < available as usize {
             let start = pending.len();
             pending.resize(start + FRAME_SAMPLES, 0.0);
             let got = pull_frame(consumer, &mut pending[start..]);
+            if got == FRAME_SAMPLES && std::mem::take(&mut trim.fade_in) {
+                for (i, v) in pending[start..start + TRIM_FADE].iter_mut().enumerate() {
+                    *v *= i as f32 / TRIM_FADE as f32;
+                }
+            }
             if got < FRAME_SAMPLES {
                 counters.output_underruns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 underruns_since_log += 1;
@@ -358,7 +385,45 @@ fn render_loop(
 /// Pulls up to `out.len()` samples from `consumer` into `out`, returning how
 /// many real samples were copied. Any remaining tail of `out` is left as
 /// whatever it already was (callers pre-zero it), i.e. silence on underrun.
+/// Above this many queued samples (80 ms) for `TRIM_AFTER`, the output delay is trimmed back to `TRIM_TO_SAMPLES`.
+const TRIM_ABOVE_SAMPLES: usize = FRAME_SAMPLES * 8;
+const TRIM_TO_SAMPLES: usize = FRAME_SAMPLES * 3;
+const TRIM_AFTER: std::time::Duration = std::time::Duration::from_millis(500);
+/// Fade-in (2 ms) on the first frame after a trim, so the cut does not click.
+const TRIM_FADE: usize = 96;
+
+/// Keeps the output delay bounded. Normal level swings (bursty device wake-ups) stay well under 80 ms; only a level
+/// that stays above it for half a second is trimmed, in whole frames, back to 30 ms.
+#[derive(Default)]
+struct LatencyTrim {
+    over_since: Option<std::time::Instant>,
+    /// Fade the next full frame in (set after a trim).
+    fade_in: bool,
+}
+
+impl LatencyTrim {
+    /// How many samples to drop now (a whole number of frames), given the queued level.
+    fn check(&mut self, level: usize, now: std::time::Instant) -> usize {
+        if level <= TRIM_ABOVE_SAMPLES {
+            self.over_since = None;
+            return 0;
+        }
+        let since = *self.over_since.get_or_insert(now);
+        if now.duration_since(since) < TRIM_AFTER {
+            return 0;
+        }
+        self.over_since = None;
+        self.fade_in = true;
+        (level - TRIM_TO_SAMPLES) / FRAME_SAMPLES * FRAME_SAMPLES
+    }
+}
+
+/// Takes one whole frame, or nothing: a frame still being written by the pipeline thread is left for the next
+/// wake-up instead of playing its first half, a hole of silence, and the second half later.
 fn pull_frame(consumer: &mut Consumer<f32>, out: &mut [f32]) -> usize {
+    if consumer.slots() < out.len() {
+        return 0;
+    }
     let mut n = 0;
     for slot in out.iter_mut() {
         match consumer.pop() {
@@ -376,6 +441,38 @@ fn pull_frame(consumer: &mut Consumer<f32>, out: &mut [f32]) -> usize {
 mod tests {
     use super::*;
     use dsp_core::RingBuffer;
+
+    #[test]
+    fn a_half_written_frame_is_not_split() {
+        let (mut producer, mut consumer) = RingBuffer::<f32>::new(FRAME_SAMPLES * 4);
+        for _ in 0..FRAME_SAMPLES / 2 {
+            producer.push(0.5).unwrap();
+        }
+        let mut out = vec![0.0f32; FRAME_SAMPLES];
+        assert_eq!(pull_frame(&mut consumer, &mut out), 0, "half a frame stays queued");
+        for _ in 0..FRAME_SAMPLES / 2 {
+            producer.push(0.5).unwrap();
+        }
+        assert_eq!(pull_frame(&mut consumer, &mut out), FRAME_SAMPLES);
+        assert!(out.iter().all(|&v| v == 0.5), "played as one piece");
+    }
+
+    #[test]
+    fn output_delay_is_trimmed_only_when_it_stays_high() {
+        let t0 = std::time::Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        let mut trim = LatencyTrim::default();
+        let high = FRAME_SAMPLES * 20; // 200 ms queued after a hiccup
+        assert_eq!(trim.check(high, ms(0)), 0);
+        assert_eq!(trim.check(FRAME_SAMPLES * 2, ms(100)), 0, "a brief swing resets the timer");
+        assert_eq!(trim.check(high, ms(200)), 0);
+        assert_eq!(trim.check(high, ms(600)), 0, "not yet half a second");
+        let dropped = trim.check(high, ms(700));
+        assert_eq!(high - dropped, TRIM_TO_SAMPLES, "back to 30 ms");
+        assert_eq!(dropped % FRAME_SAMPLES, 0, "whole frames only");
+        assert!(trim.fade_in);
+        assert_eq!(trim.check(FRAME_SAMPLES * 5, ms(800)), 0, "normal level never trimmed");
+    }
 
     #[test]
     fn backoff_wait_empties_a_full_ring() {
