@@ -543,6 +543,12 @@ fn now_secs() -> u64 {
 }
 
 /// What the stored token (if any) means for this PC right now.
+/// The license can be judged: this PC's identity has been read (it takes a moment after start), or the token is a
+/// dev code that does not need it.
+fn license_ready() -> bool {
+    crate::device_id::code().is_some()
+}
+
 fn compute_license(token: &str) -> license::Status {
     if let Some(s) = crate::dev_code::status(token, now_secs()) {
         return s;
@@ -869,7 +875,8 @@ fn refresh_alerts(state: &mut MainState) {
     if state.settings.exposure_meter_on && state.settings.call_audio_on {
         input.exposure_pct = Some(h.exposure.dose_pct.load());
     }
-    input.license_needed = matches!(state.license_status, license::Status::Ended | license::Status::SignIn) && !state.clock_wrong;
+    input.license_needed =
+        license_ready() && matches!(state.license_status, license::Status::Ended | license::Status::SignIn) && !state.clock_wrong;
     input.clock_wrong = state.clock_wrong;
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
     let alerts = crate::ui_logic::alerts(&input);
@@ -913,7 +920,9 @@ fn update_main(state: &mut MainState, message: Message) {
             poll_voice_test(&mut state.voice_test);
             refresh_alerts(state);
             // What the license does not allow is shown off (the engine switches it off too, see `license_gate`).
-            {
+            // Only once this PC's identity has been read: until then every license looks invalid, and switching
+            // the accent off (and saving that) in that first second turned it off at every start.
+            if license_ready() {
                 let a = crate::license_gate::allowed(&state.license_status);
                 if !a.accent && state.settings.accent_on {
                     update_main(state, Message::ToggleAccent(false));
