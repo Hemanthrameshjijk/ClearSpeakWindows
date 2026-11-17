@@ -58,14 +58,24 @@ pub fn mic_boost_effective(on: bool, db: u8) -> u8 {
     }
 }
 
+/// The boost never drives the voice's recent peak above this (-6 dBFS), well under the soft-limit knee.
+const HEADROOM: f32 = 0.5;
+/// How fast the peak memory fades (per 10 ms frame): about 3 s, so the gain does not pump between words.
+const PEAK_RELEASE_PER_FRAME: f32 = 0.996_672; // exp(-10 ms / 3000 ms)
+
+/// Mic boost: lifts a quiet mic (Bluetooth call mode, far-away laptop mic) by the slider amount, but backs off by
+/// itself when the voice is already loud. A fixed +12 dB on a mic that already peaks near full scale pushed whole
+/// sentences into the soft limiter, and the noise removal and accent then turned that distortion into garbled words.
 pub struct PreGainStage {
     current: f32,
     target: f32,
+    /// Recent input peak: instant attack, slow release.
+    env: f32,
 }
 
 impl PreGainStage {
     pub fn new() -> Self {
-        Self { current: 1.0, target: 1.0 }
+        Self { current: 1.0, target: 1.0, env: 0.0 }
     }
 
     /// Set the gain for the next frame. Cheap (no allocation); the change is ramped across the frame so it never clicks.
@@ -86,16 +96,21 @@ impl Stage for PreGainStage {
     }
 
     fn process(&mut self, frame: &mut [f32]) {
-        if self.current == 1.0 && self.target == 1.0 {
-            return; // Close: exactly untouched
+        let frame_peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        self.env = frame_peak.max(self.env * PEAK_RELEASE_PER_FRAME);
+        // Only as much boost as keeps the recent peak at HEADROOM, and never below unity (it only ever lifts).
+        let allowed = if self.env > 0.0 { HEADROOM / self.env } else { f32::INFINITY };
+        let target = self.target.min(allowed).max(1.0);
+        if self.current == 1.0 && target == 1.0 {
+            return; // no boost: exactly untouched
         }
-        let step = (self.target - self.current) / FRAME_SAMPLES as f32;
+        let step = (target - self.current) / FRAME_SAMPLES as f32;
         let mut g = self.current;
         for s in frame.iter_mut() {
             g += step;
             *s = soft_limit(*s * g);
         }
-        self.current = self.target;
+        self.current = target;
     }
 }
 
@@ -179,5 +194,32 @@ mod tests {
         assert_eq!(agc_max_gain_for_db(0), 8.0);
         assert_eq!(agc_max_gain_for_db(9), 8.0, "no extra post-noise boost");
         assert_eq!(agc_max_gain_for_db(30), 8.0);
+    }
+
+    #[test]
+    fn boost_backs_off_on_a_voice_that_is_already_loud() {
+        // An earbud that already peaks near full scale: +12 dB must not drive it into the limiter.
+        let mut stage = PreGainStage::new();
+        stage.set_db(12.0);
+        let mut first = tone(0.6);
+        stage.process(&mut first);
+        for _ in 0..20 {
+            let mut frame = tone(0.6);
+            stage.process(&mut frame);
+            assert!(peak(&frame) <= 0.6 + 1e-4, "no boost on a loud voice, got peak {}", peak(&frame));
+        }
+    }
+
+    #[test]
+    fn boost_lifts_a_quiet_voice_but_keeps_headroom() {
+        let mut stage = PreGainStage::new();
+        stage.set_db(24.0); // x15.8
+        for _ in 0..5 {
+            let mut frame = tone(0.1);
+            stage.process(&mut frame);
+        }
+        let mut frame = tone(0.1);
+        stage.process(&mut frame);
+        assert!((peak(&frame) - HEADROOM).abs() < 0.01, "lifted to the headroom, got {}", peak(&frame));
     }
 }
