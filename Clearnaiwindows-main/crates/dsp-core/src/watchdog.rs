@@ -84,8 +84,10 @@ impl WatchdogStatus {
 
 pub struct WatchdogStage {
     name: &'static str,
-    to_worker: Sender<Vec<f32>>,
-    from_worker: Receiver<Vec<f32>>,
+    to_worker: Sender<(u64, Vec<f32>)>,
+    from_worker: Receiver<(u64, Vec<f32>)>,
+    /// Number of the frame last sent; a reply with another number is a late answer to an earlier frame.
+    seq: u64,
     timeout: Duration,
     bypassed: Arc<AtomicBool>,
     consecutive_timeouts: u32,
@@ -112,8 +114,8 @@ impl WatchdogStage {
         // exists to avoid. `MAX_CONSECUTIVE_TIMEOUTS` already caps how many
         // frames a wedged worker can ever be sent before this stage
         // bypasses itself, so unbounded growth here is not a real concern.
-        let (to_worker, worker_rx) = channel::<Vec<f32>>();
-        let (worker_tx, from_worker) = sync_channel::<Vec<f32>>(1);
+        let (to_worker, worker_rx) = channel::<(u64, Vec<f32>)>();
+        let (worker_tx, from_worker) = sync_channel::<(u64, Vec<f32>)>(1);
 
         thread::Builder::new()
             .name(format!("dsp-watchdog-{name}"))
@@ -121,9 +123,9 @@ impl WatchdogStage {
                 // Held for the whole worker loop below; dropped (reverting
                 // any elevation it represents) only when this thread exits.
                 let _keepalive = on_worker_start();
-                while let Ok(mut frame) = worker_rx.recv() {
+                while let Ok((seq, mut frame)) = worker_rx.recv() {
                     inner.process(&mut frame);
-                    if worker_tx.send(frame).is_err() {
+                    if worker_tx.send((seq, frame)).is_err() {
                         break;
                     }
                 }
@@ -138,6 +140,7 @@ impl WatchdogStage {
             bypassed: Arc::new(AtomicBool::new(false)),
             consecutive_timeouts: 0,
             log: Box::new(log),
+            seq: 0,
         }
     }
 
@@ -163,7 +166,8 @@ impl Stage for WatchdogStage {
             return;
         }
 
-        if self.to_worker.send(frame.to_vec()).is_err() {
+        self.seq += 1;
+        if self.to_worker.send((self.seq, frame.to_vec())).is_err() {
             self.bypassed.store(true, Ordering::Relaxed);
             (self.log)(&format!(
                 "[dsp-core] {} worker thread is gone; bypassing it for the rest of this session",
@@ -172,8 +176,18 @@ impl Stage for WatchdogStage {
             return;
         }
 
-        match self.from_worker.recv_timeout(self.timeout) {
-            Ok(processed) => {
+        // Wait for the reply to THIS frame. A late reply to an earlier, timed-out frame is thrown away: using it
+        // played that frame twice (raw, then processed) and left every later frame one frame behind.
+        let deadline = std::time::Instant::now() + self.timeout;
+        let result = loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.from_worker.recv_timeout(left) {
+                Ok((seq, _)) if seq != self.seq => continue,
+                other => break other,
+            }
+        };
+        match result {
+            Ok((_, processed)) => {
                 frame.copy_from_slice(&processed);
                 self.consecutive_timeouts = 0;
             }
@@ -331,5 +345,46 @@ mod tests {
         );
         // A second, independently cloned handle must agree too.
         assert!(status.clone().is_bypassed());
+    }
+
+    /// Slow only on its second frame; adds the frame's own marker so each output can be traced to its input.
+    struct SlowOnce(u32);
+    impl Stage for SlowOnce {
+        fn name(&self) -> &'static str {
+            "slow-once"
+        }
+        fn process(&mut self, frame: &mut [f32]) {
+            self.0 += 1;
+            if self.0 == 2 {
+                thread::sleep(Duration::from_millis(80));
+            }
+            for s in frame.iter_mut() {
+                *s += 100.0;
+            }
+        }
+    }
+
+    #[test]
+    fn a_late_reply_is_never_played_for_a_later_frame() {
+        let mut stage = WatchdogStage::new(
+            "slow-once",
+            Box::new(SlowOnce(0)),
+            Duration::from_millis(30),
+            |_| {},
+            || Box::new(()),
+        );
+        let mut outs = Vec::new();
+        for n in 1..=6 {
+            let mut frame = [n as f32];
+            stage.process(&mut frame);
+            outs.push(frame[0]);
+        }
+        // Frame 2 times out and goes out raw; no frame repeats and nothing stays a frame behind.
+        assert_eq!(outs[0], 101.0);
+        assert_eq!(outs[1], 2.0, "timed-out frame passes through raw");
+        for (i, v) in outs.iter().enumerate().skip(3) {
+            let n = (i + 1) as f32;
+            assert_eq!(*v, n + 100.0, "frame {} came out as {v}", i + 1);
+        }
     }
 }

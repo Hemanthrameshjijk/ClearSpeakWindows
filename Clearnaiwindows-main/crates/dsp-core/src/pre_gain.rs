@@ -104,6 +104,11 @@ impl Stage for PreGainStage {
         if self.current == 1.0 && target == 1.0 {
             return; // no boost: exactly untouched
         }
+        // Going down happens at once (this frame is already the loud one: sliding down across it overdrove the start
+        // of the first word after a pause); going up is ramped across the frame so it never clicks.
+        if target < self.current {
+            self.current = target;
+        }
         let step = (target - self.current) / FRAME_SAMPLES as f32;
         let mut g = self.current;
         for s in frame.iter_mut() {
@@ -221,5 +226,20 @@ mod tests {
         let mut frame = tone(0.1);
         stage.process(&mut frame);
         assert!((peak(&frame) - HEADROOM).abs() < 0.01, "lifted to the headroom, got {}", peak(&frame));
+    }
+
+    #[test]
+    fn the_first_word_after_a_pause_is_not_overdriven() {
+        let mut stage = PreGainStage::new();
+        stage.set_db(12.0);
+        // A long pause: the peak memory fades and the boost climbs back to the full +12 dB.
+        for _ in 0..2000 {
+            let mut frame = tone(0.001);
+            stage.process(&mut frame);
+        }
+        // The first frame of a loud word must already be at the backed-off gain.
+        let mut frame = tone(0.6);
+        stage.process(&mut frame);
+        assert!(peak(&frame) <= 0.6 + 1e-4, "first loud frame boosted to {}", peak(&frame));
     }
 }
