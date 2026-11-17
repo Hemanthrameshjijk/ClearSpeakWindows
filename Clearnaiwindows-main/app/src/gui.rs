@@ -918,6 +918,9 @@ fn update_main(state: &mut MainState, message: Message) {
     match message {
         Message::Tick => {
             poll_voice_test(&mut state.voice_test);
+            // Judge the license now, before the alerts and the feature check below read it: reading last tick's
+            // result (worked out before this PC's identity was read) switched the accent off at every start.
+            state.license_status = if state.clock_wrong { license::Status::Ended } else { compute_license(&state.license_token) };
             refresh_alerts(state);
             // What the license does not allow is shown off (the engine switches it off too, see `license_gate`).
             // Only once this PC's identity has been read: until then every license looks invalid, and switching
@@ -1594,6 +1597,14 @@ fn reset_to_defaults(state: &mut MainState) {
     fresh.compact_mode = keep.compact_mode;
     fresh.minimize_to_tray = keep.minimize_to_tray;
     fresh.theme_dark = keep.theme_dark;
+    // Who the user is and how the app starts are not "processing options": a reset must not sign the user out
+    // (the engine would switch noise, voices and accent off) or remove the start-with-Windows entry.
+    fresh.license_key = keep.license_key;
+    fresh.user_name = keep.user_name;
+    fresh.user_email = keep.user_email;
+    fresh.start_with_windows = keep.start_with_windows;
+    fresh.last_seen_at = keep.last_seen_at;
+    fresh.first_run_at = keep.first_run_at;
     state.settings = fresh;
     state.handles.mic_master_enabled.set(true);
     state.handles.speaker_master_enabled.set(true);
@@ -1843,4 +1854,36 @@ pub fn run(initial: Initial) -> iced::Result {
         ..Default::default()
     })
     .run()
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+
+    fn state(settings: Settings) -> MainState {
+        let h = EngineHandles::new_from_settings(
+            &settings, false, None, false, None, false, None, vec![], false, None, false, None,
+        );
+        MainState::new(settings, h, DeviceList::default(), vec![], None)
+    }
+
+    #[test]
+    fn reset_to_defaults_keeps_the_user_signed_in_and_autostart() {
+        let mut s = Settings::default();
+        s.license_key = "token".into();
+        s.user_name = "A".into();
+        s.user_email = "a@b.c".into();
+        s.start_with_windows = true;
+        s.last_seen_at = 1234;
+        s.first_run_at = 99;
+        s.accent_on = !Settings::default().accent_on;
+        let mut st = state(s);
+        reset_to_defaults(&mut st);
+        let r = &st.settings;
+        assert_eq!(r.license_key, "token");
+        assert_eq!((r.user_name.as_str(), r.user_email.as_str()), ("A", "a@b.c"));
+        assert!(r.start_with_windows);
+        assert_eq!((r.last_seen_at, r.first_run_at), (1234, 99));
+        assert_eq!(r.accent_on, Settings::default().accent_on, "processing options do reset");
+    }
 }
