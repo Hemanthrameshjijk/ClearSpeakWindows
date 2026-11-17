@@ -371,6 +371,12 @@ pub enum Message {
     ToggleSpeakerNoise(bool),
     ToggleSpeakerStudio(bool),
     SelectSpeakerStudioPreset(&'static str),
+    /// Loud-sound protection on the call audio (`dsp_core::ShockGuard`).
+    ToggleShockGuard(bool),
+    /// Show the listening-exposure line and alerts.
+    ToggleExposureMeter(bool),
+    /// Headset loudness for the exposure estimate (label from `ui_logic::HEADSET_DB_NAMES`).
+    SelectHeadsetDb(&'static str),
     SelectSpeakerBvcBackend(&'static str),
     SelectSpeakerSource(DeviceOption),
     SelectRealSpeakerOutput(DeviceOption),
@@ -858,6 +864,9 @@ fn refresh_alerts(state: &mut MainState) {
         }
     }
     input.cpu_struggling = state.show_low_cpu_suggestion;
+    if state.settings.exposure_meter_on && state.settings.call_audio_on {
+        input.exposure_pct = Some(h.exposure.dose_pct.load());
+    }
     input.license_needed = matches!(state.license_status, license::Status::Ended | license::Status::SignIn) && !state.clock_wrong;
     input.clock_wrong = state.clock_wrong;
     input.engine_disconnected = h.remote.as_ref().is_some_and(|r| !r.connected.load(Ordering::Relaxed));
@@ -1408,6 +1417,21 @@ fn update_main(state: &mut MainState, message: Message) {
             state.settings.speaker_studio_on = on;
             persist(&state.settings);
         }
+        Message::ToggleShockGuard(on) => {
+            state.handles.speaker_shock_guard.set(on);
+            state.settings.speaker_shock_guard_on = on;
+            persist(&state.settings);
+        }
+        Message::ToggleExposureMeter(on) => {
+            state.settings.exposure_meter_on = on;
+            persist(&state.settings);
+        }
+        Message::SelectHeadsetDb(name) => {
+            if let Some(db) = crate::ui_logic::headset_db_from_name(name) {
+                state.settings.headset_db_spl = db;
+                persist(&state.settings);
+            }
+        }
         Message::SelectSpeakerStudioPreset(name) => {
             if let Some(preset) = crate::shared::studio_preset_from_name(name) {
                 let index = studio_preset_to_index(preset);
@@ -1565,6 +1589,9 @@ fn reset_to_defaults(state: &mut MainState) {
     update_main(state, Message::ToggleSpeakerNoise(d.speaker_noise_on));
     update_main(state, Message::ToggleSpeakerStudio(d.speaker_studio_on));
     update_main(state, Message::SelectSpeakerStudioPreset(preset(d.speaker_studio_preset)));
+    update_main(state, Message::ToggleShockGuard(d.speaker_shock_guard_on));
+    update_main(state, Message::ToggleExposureMeter(d.exposure_meter_on));
+    update_main(state, Message::SelectHeadsetDb(crate::ui_logic::headset_db_name(d.headset_db_spl)));
     update_main(
         state,
         Message::SelectSpeakerBvcBackend(tse_engine::SpeakerBvcBackend::from_index(d.speaker_bvc_backend).name()),

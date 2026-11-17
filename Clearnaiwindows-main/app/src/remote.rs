@@ -216,6 +216,12 @@ fn apply_observed(handles: &EngineHandles, hush: &Option<Arc<AtomicBool>>, bpo: 
     shared::counters_from_array(&handles.counters, &st.mic_counters);
     handles.counters.hands_free.store(st.mic_hands_free, std::sync::atomic::Ordering::Relaxed);
     shared::counters_from_array(&handles.speaker_counters, &st.speaker_counters);
+    let ex = &handles.exposure;
+    ex.dose_pct.store(st.exposure.dose_pct);
+    ex.avg_db.store(st.exposure.avg_db);
+    ex.now_db.store(st.exposure.now_db);
+    ex.shocks.store(st.exposure.shocks, Ordering::Relaxed);
+    ex.volume_known.store(st.exposure.volume_known, Ordering::Relaxed);
     if let Some(live) = &handles.remote {
         *live.mic_pct.lock().unwrap() = (&st.mic_pct).into();
         *live.speaker_pct.lock().unwrap() = (&st.speaker_pct).into();

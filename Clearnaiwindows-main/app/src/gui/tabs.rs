@@ -202,6 +202,25 @@ fn card_head<'a>(
 }
 
 /// One setting: title and description at the left, a pill switch at the right.
+/// "Ears today: 42% ..." coloured by how close the agent is to the daily limit; says when it is only an estimate.
+fn exposure_text(state: &MainState, size: f32) -> Element<'static, Message> {
+    let t = style::tokens_for(state.settings.theme_dark);
+    let ex = &state.handles.exposure;
+    let pct = ex.dose_pct.load();
+    let color = if pct >= ui_logic::EXPOSURE_LIMIT_PCT {
+        t.danger
+    } else if pct >= ui_logic::EXPOSURE_WARN_PCT {
+        t.warning
+    } else {
+        t.muted
+    };
+    let mut line = ui_logic::exposure_line(pct, ex.shocks.load(std::sync::atomic::Ordering::Relaxed));
+    if !ex.volume_known.load(std::sync::atomic::Ordering::Relaxed) {
+        line.push_str(" (estimate, volume unknown)");
+    }
+    text(line).size(size).color(color).into()
+}
+
 fn setting_row<'a>(
     state: &MainState,
     title: &'a str,
@@ -1342,7 +1361,11 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
             .on_press(Message::OpenVoiceTest)
             .style(style::outline);
 
-            column![profile_row, voice, test_voice, refresh].spacing(12).into()
+            let mut body = column![profile_row, voice, test_voice, refresh].spacing(12);
+            if state.settings.exposure_meter_on && state.settings.call_audio_on {
+                body = body.push(exposure_text(state, 12.0));
+            }
+            body.into()
         }
     };
 
@@ -1941,6 +1964,41 @@ fn call_audio_tab(state: &MainState) -> Element<'_, Message> {
             .style(style::select)
             .into(),
         ));
+    col = col
+        .push(setting_row(
+            state,
+            "Loud-sound protection",
+            Some(if ready {
+                "Caps screeches, tones and sudden loud sounds before they reach your ears"
+            } else {
+                "Turn on Call audio to protect your ears"
+            }),
+            h.speaker_shock_guard.is_on(),
+            Message::ToggleShockGuard,
+        ))
+        .push(setting_row(
+            state,
+            "Listening exposure",
+            Some("Shows how much of today's safe listening limit you have used, and warns at 80%"),
+            state.settings.exposure_meter_on,
+            Message::ToggleExposureMeter,
+        ))
+        .push(select_row(
+            state,
+            "Headset loudness",
+            pick_list(
+                &ui_logic::HEADSET_DB_NAMES[..],
+                Some(ui_logic::headset_db_name(state.settings.headset_db_spl)),
+                Message::SelectHeadsetDb,
+            )
+            .padding([9, 12])
+            .text_size(13)
+            .style(style::select)
+            .into(),
+        ));
+    if state.settings.exposure_meter_on && ready {
+        col = col.push(exposure_text(state, 13.0));
+    }
     if !ready {
         col = col.push(btn(text("Set up call audio").size(14).font(bold())).padding([12, 20]).on_press(Message::SelectTab(Tab::Devices)).style(style::primary));
     }

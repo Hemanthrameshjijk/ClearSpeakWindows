@@ -21,7 +21,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Order of the on/off switches in [`Status::toggles`] and [`ClientMsg::Toggle::key`]
 /// (see `EngineHandles::toggles`).
-pub const TOGGLE_COUNT: usize = 12;
+pub const TOGGLE_COUNT: usize = 13;
 /// Order of the small-number selectors in [`Status::presets`] and [`ClientMsg::Preset::key`]
 /// (see `EngineHandles::presets`).
 pub const PRESET_COUNT: usize = 6;
@@ -149,6 +149,19 @@ pub struct Status {
     /// the window alone only sees the name, which often lacks "Hands-Free").
     #[serde(default)]
     pub mic_hands_free: bool,
+    /// Listening exposure today (see `shared::ExposureShared`).
+    #[serde(default)]
+    pub exposure: ExposureWire,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ExposureWire {
+    pub dose_pct: f32,
+    pub avg_db: f32,
+    pub now_db: f32,
+    pub shocks: u64,
+    /// The output volume could be read (false: the estimate uses the headset setting at full volume).
+    pub volume_known: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

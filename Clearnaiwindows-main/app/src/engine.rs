@@ -1371,6 +1371,58 @@ fn spawn_mic_pipeline(
 /// this project's mic-input-gain problem to fix), no driver-transport
 /// write, and no second "monitor" fan-out (exactly one
 /// render target, the real speaker output).
+/// Adds one played frame to the exposure meter, using the ear offset the tick thread keeps up to date.
+fn exposure_meter_frame(
+    handles: &EngineHandles,
+    meter: &mut dsp_core::ExposureMeter,
+    frame: &[f32],
+    second_energy: &mut f64,
+    second_frames: &mut u32,
+) {
+    let offset = handles.exposure.ear_offset_db.load();
+    meter.add_frame(frame, (!offset.is_nan()).then_some(offset));
+    let l = meter.last_level_db();
+    if l > 0.0 {
+        *second_energy += 10f64.powf(l as f64 / 10.0);
+    }
+    *second_frames += 1;
+}
+
+/// Once a second: take any totals the tick thread asked to start from, publish the totals and the levels.
+/// Only `try_lock`, so the audio thread never waits.
+fn exposure_publish(
+    handles: &EngineHandles,
+    meter: &mut dsp_core::ExposureMeter,
+    second_energy: &mut f64,
+    second_frames: &mut u32,
+) {
+    let ex = &handles.exposure;
+    if let Ok(mut r) = ex.replace.try_lock() {
+        if let Some(t) = r.take() {
+            meter.set_totals(t);
+        }
+    }
+    let now_db = if *second_frames > 0 && *second_energy > 0.0 {
+        10.0 * (*second_energy / *second_frames as f64).log10()
+    } else {
+        0.0
+    };
+    (*second_energy, *second_frames) = (0.0, 0);
+    ex.now_db.store(now_db as f32);
+    if now_db > 0.0 {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        ex.last_heard.store(secs, Ordering::Relaxed);
+    }
+    let t = meter.totals();
+    ex.dose_pct.store((t.dose * 100.0) as f32);
+    ex.avg_db.store(t.avg_db() as f32);
+    if let Ok(mut slot) = ex.totals.try_lock() {
+        *slot = t;
+    }
+}
+
 fn spawn_speaker_pipeline(
     speaker_in: SwapConsumer,
     speaker_out: SwapProducer,
@@ -1389,6 +1441,13 @@ fn spawn_speaker_pipeline(
             let mut last_studio_preset = handles.speaker_studio_preset.load();
             let mut health = crate::diag::PathHealth::default();
             let mut last_health_log = Instant::now();
+            // Hearing protection: shock guard + final ceiling, then the exposure meter on exactly what is played.
+            let mut shock = dsp_core::ShockGuard::new();
+            let mut ceiling = dsp_core::OutputLimiter::new();
+            let mut shocks_seen = 0u64;
+            let mut exposure = dsp_core::ExposureMeter::new();
+            let mut exposure_frames = 0u32;
+            let (mut second_energy, mut second_frames) = (0.0f64, 0u32);
             loop {
                 pull_frame_blocking(&speaker_in, &mut frame, &handles.speaker_counters);
                 let started = Instant::now();
@@ -1405,6 +1464,27 @@ fn spawn_speaker_pipeline(
                 run_if_enabled(noise_stage.as_mut(), &handles.speaker_noise, &mut frame);
                 run_if_enabled(bvc_stage.as_mut(), &handles.speaker_bvc, &mut frame);
                 run_if_enabled(studio_stage.as_mut(), &handles.speaker_studio, &mut frame);
+                if handles.speaker_shock_guard.is_on() {
+                    shock.process(&mut frame);
+                    ceiling.process(&mut frame);
+                    let ev = shock.events();
+                    if ev > shocks_seen {
+                        handles.exposure.shocks.fetch_add(ev - shocks_seen, Ordering::Relaxed);
+                        shocks_seen = ev;
+                        crate::log_info!(
+                            "[shock] loud sound on the call audio blocked (input peak {:.1} dBFS)",
+                            20.0 * in_peak.max(1e-6).log10()
+                        );
+                    }
+                }
+                if handles.speaker_master_enabled.is_on() {
+                    exposure_meter_frame(&handles, &mut exposure, &frame, &mut second_energy, &mut second_frames);
+                }
+                exposure_frames += 1;
+                if exposure_frames >= 100 {
+                    exposure_frames = 0;
+                    exposure_publish(&handles, &mut exposure, &mut second_energy, &mut second_frames);
+                }
 
                 let elapsed_ns = started.elapsed().as_nanos() as u64;
                 handles.speaker_latency_log.record_ns(elapsed_ns);
@@ -1415,12 +1495,19 @@ fn spawn_speaker_pipeline(
                 health.frame(elapsed_ns, in_peak, frame.iter().fold(0.0f32, |m, &s| m.max(s.abs())));
                 if last_health_log.elapsed() >= std::time::Duration::from_secs(60) {
                     last_health_log = Instant::now();
+                    let (shock_events, deepest_cut) = shock.take_stats();
+                    shocks_seen = 0;
+                    let t = exposure.totals();
                     crate::log_info!(
-                        "[health] caller audio last 60s: {} | noise {}, voices {}, studio {}",
+                        "[health] caller audio last 60s: {} | noise {}, voices {}, studio {} | loud-sound protection {}:                          {shock_events} blocked, deepest cut {deepest_cut:.0} dB | exposure today {:.0}%, avg {:.0} dB                          over {:.0} min",
                         health.take_line(crate::shared::counters_to_array(&handles.speaker_counters)),
                         if handles.speaker_noise.is_on() { "on" } else { "off" },
                         if handles.speaker_bvc.is_on() { "on" } else { "off" },
                         if handles.speaker_studio.is_on() { "on" } else { "off" },
+                        if handles.speaker_shock_guard.is_on() { "on" } else { "off" },
+                        t.dose * 100.0,
+                        t.avg_db(),
+                        t.listen_secs / 60.0,
                     );
                 }
 

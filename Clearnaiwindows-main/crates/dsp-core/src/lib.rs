@@ -13,14 +13,18 @@ pub use rtrb::{Consumer, Producer, RingBuffer};
 mod agc;
 mod clock;
 mod drift;
+mod exposure;
 mod metrics;
 mod output_limiter;
 mod pre_gain;
+mod shock_guard;
 mod voice_gate;
 mod watchdog;
 
 pub use agc::AutoGainStage;
 pub use output_limiter::OutputLimiter;
+pub use exposure::{dose_for, ExposureMeter, ExposureTotals, DEFAULT_HEADSET_DB_SPL};
+pub use shock_guard::ShockGuard;
 pub use drift::{DriftCompensator, DriftStats};
 pub use pre_gain::{
     agc_max_gain_for_db, distance_gain_db, mic_boost_effective, PreGainStage, DISTANCE_GAIN_DB, MAX_GAIN_DB,

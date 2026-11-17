@@ -3,8 +3,9 @@
 //! touches an OS audio API, so it compiles and its tests run natively on
 //! Linux as well as when cross-checked for Windows.
 
-use dsp_core::{FrameCounters, LatencyLog, SharedPreset, Stage, StageToggle, WatchdogStatus};
-use std::sync::atomic::{AtomicU32, Ordering};
+use dsp_core::{ExposureTotals, FrameCounters, LatencyLog, SharedPreset, Stage, StageToggle, WatchdogStatus};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::sync::Arc;
 
 /// Maps `studio_dsp::StudioPreset` to/from the plain `u8` index
@@ -68,6 +69,49 @@ impl LevelMeter {
     #[inline(always)]
     pub fn load(&self) -> f32 {
         f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+}
+
+/// Listening exposure, shared between the speaker pipeline (which measures), the engine tick thread (which supplies
+/// the volume, saves the totals and resets them after a long break) and the window (which shows them).
+///
+/// The audio thread only ever uses `try_lock` on the mutexes, once a second, so it never waits on them.
+pub struct ExposureShared {
+    /// Level at the ear for a 0 dBFS signal (headset dB SPL + Windows volume dB); NaN when muted or unknown.
+    pub ear_offset_db: LevelMeter,
+    /// Today's dose in percent (100 = the daily limit).
+    pub dose_pct: LevelMeter,
+    /// Average level at the ear over today's listening, dB.
+    pub avg_db: LevelMeter,
+    /// Level at the ear over the last second, dB (0 = silence).
+    pub now_db: LevelMeter,
+    /// Loud sounds the shock guard blocked today.
+    pub shocks: AtomicU64,
+    /// Seconds since the epoch when call audio was last heard (0 = never).
+    pub last_heard: AtomicU64,
+    /// The Windows output volume could be read; when not, the estimate assumes full volume (errs on the safe side).
+    pub volume_known: std::sync::atomic::AtomicBool,
+    /// Totals published by the speaker pipeline, for saving.
+    pub totals: Mutex<ExposureTotals>,
+    /// Totals the speaker pipeline should start from (set at start-up and on reset).
+    pub replace: Mutex<Option<ExposureTotals>>,
+}
+
+impl Default for ExposureShared {
+    fn default() -> Self {
+        let ear = LevelMeter::new();
+        ear.store(f32::NAN);
+        Self {
+            ear_offset_db: ear,
+            dose_pct: LevelMeter::new(),
+            avg_db: LevelMeter::new(),
+            now_db: LevelMeter::new(),
+            shocks: AtomicU64::new(0),
+            last_heard: AtomicU64::new(0),
+            volume_known: std::sync::atomic::AtomicBool::new(false),
+            totals: Mutex::new(ExposureTotals::default()),
+            replace: Mutex::new(None),
+        }
     }
 }
 
@@ -194,6 +238,10 @@ pub struct EngineHandles {
     pub speaker_bvc: StageToggle,
     pub speaker_studio: StageToggle,
     pub speaker_studio_preset: SharedPreset,
+    /// Loud-sound protection on the caller path (`dsp_core::ShockGuard`).
+    pub speaker_shock_guard: StageToggle,
+    /// Listening exposure: written by the speaker pipeline and the engine's tick thread, mirrored to the window.
+    pub exposure: Arc<ExposureShared>,
 
     /// Master mute for the WHOLE mic pipeline - unlike `mic_noise`/
     /// `mic_bvc`/`mic_studio` (which only gate whether their OWN stage's
@@ -370,6 +418,8 @@ impl EngineHandles {
             speaker_bvc: StageToggle::new(settings.speaker_bvc_on && (speaker_bvc_available || speaker_deep_filter_available)),
             speaker_studio: StageToggle::new(settings.speaker_studio_on),
             speaker_studio_preset: SharedPreset::new(settings.speaker_studio_preset),
+            speaker_shock_guard: StageToggle::new(settings.speaker_shock_guard_on),
+            exposure: Arc::new(ExposureShared::default()),
             mic_master_enabled: StageToggle::new(true),
             speaker_master_enabled: StageToggle::new(true),
             monitor: StageToggle::new(settings.monitor_enabled),
@@ -421,6 +471,7 @@ impl EngineHandles {
             &self.speaker_master_enabled,
             &self.monitor,
             &self.virtual_mic,
+            &self.speaker_shock_guard,
         ]
     }
 

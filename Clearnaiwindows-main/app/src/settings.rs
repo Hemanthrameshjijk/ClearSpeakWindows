@@ -94,6 +94,18 @@ pub struct Settings {
     /// Speaker-path Studio preset index - independent of `mic_studio_preset`.
     #[serde(default = "default_studio_preset")]
     pub speaker_studio_preset: u8,
+    /// Loud-sound (acoustic shock) protection on the call audio the agent hears (`dsp_core::ShockGuard`). Default ON,
+    /// and profiles leave it alone: it is hearing protection, not a sound preference.
+    #[serde(default = "default_true")]
+    pub speaker_shock_guard_on: bool,
+    /// Show today's listening exposure on the card and warn at 80% / 100% (`dsp_core::ExposureMeter`). The meter
+    /// itself always runs; this only controls what is shown.
+    #[serde(default = "default_true")]
+    pub exposure_meter_on: bool,
+    /// Headset loudness for the exposure estimate: dB SPL at the ear for a full-scale signal with the Windows volume
+    /// at maximum. 100 suits most call-centre headsets.
+    #[serde(default = "default_headset_db_spl")]
+    pub headset_db_spl: u8,
     /// "Speaker Tap (inbound, read-only)" - removed along with AEC (see
     /// `aec_on`'s doc comment); kept only so an old `settings.json` still
     /// deserializes.
@@ -239,6 +251,10 @@ fn default_mic_boost_db() -> u8 {
     dsp_core::MIC_BOOST_DEFAULT_DB
 }
 
+fn default_headset_db_spl() -> u8 {
+    dsp_core::DEFAULT_HEADSET_DB_SPL as u8
+}
+
 fn default_studio_preset() -> u8 {
     1 // Natural
 }
@@ -275,6 +291,9 @@ impl Default for Settings {
             speaker_bvc_on: false,
             speaker_studio_on: false,
             speaker_studio_preset: default_studio_preset(),
+            speaker_shock_guard_on: true,
+            exposure_meter_on: true,
+            headset_db_spl: default_headset_db_spl(),
             speaker_tap_on: true,
             virtual_mic_target_id: None,
             virtual_speaker_source_id: None,

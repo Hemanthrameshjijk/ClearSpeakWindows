@@ -18,6 +18,7 @@ pub mod follow;
 pub mod loopback;
 pub mod mmcss;
 pub mod render;
+pub mod volume;
 
 use std::sync::OnceLock;
 

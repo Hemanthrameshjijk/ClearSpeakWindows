@@ -21,6 +21,7 @@ pub const TOGGLE_NAMES: [&str; crate::ipc::TOGGLE_COUNT] = [
     "caller master",
     "monitor",
     "virtual microphone",
+    "loud-sound protection",
 ];
 
 /// Names of `EngineHandles::presets`, in the same order (`ipc::PRESET_COUNT`).

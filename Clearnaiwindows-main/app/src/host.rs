@@ -265,6 +265,13 @@ impl Host {
             },
             transcript,
             cpu: (cpu != u32::MAX).then(|| cpu as f32 / 10.0),
+            exposure: ipc::ExposureWire {
+                dose_pct: h.exposure.dose_pct.load(),
+                avg_db: h.exposure.avg_db.load(),
+                now_db: h.exposure.now_db.load(),
+                shocks: h.exposure.shocks.load(Ordering::Relaxed),
+                volume_known: h.exposure.volume_known.load(Ordering::Relaxed),
+            },
         }
     }
 
@@ -424,6 +431,77 @@ fn toggle_mute(host: &Host) {
 }
 
 /// Entry point of `clearnai-engine.exe`. Never returns.
+/// The engine side of the listening-exposure meter: restores the shift at start-up, feeds the speaker pipeline the
+/// current ear offset (headset rating + Windows volume) once a second, saves every minute and starts a new shift
+/// after a long break.
+struct ExposureTick {
+    last_volume: Option<audio_io::volume::OutputVolume>,
+}
+
+impl ExposureTick {
+    fn start(h: &EngineHandles) -> Self {
+        use crate::exposure_store as store;
+        let saved = store::carry_over(store::load(), store::now_secs());
+        let ex = &h.exposure;
+        ex.shocks.store(saved.shocks, Ordering::Relaxed);
+        ex.last_heard.store(saved.last_heard, Ordering::Relaxed);
+        ex.dose_pct.store((saved.dose * 100.0) as f32);
+        ex.avg_db.store(saved.totals().avg_db() as f32);
+        *ex.totals.lock().unwrap() = saved.totals();
+        *ex.replace.lock().unwrap() = Some(saved.totals());
+        crate::log_info!(
+            "[exposure] shift so far: {:.0}% of the daily limit, {:.0} min of call audio, {} loud sounds blocked",
+            saved.dose * 100.0,
+            saved.listen_secs / 60.0,
+            saved.shocks
+        );
+        Self { last_volume: None }
+    }
+
+    fn second(&mut self, h: &EngineHandles, settings: &Settings, save_now: bool) {
+        use crate::exposure_store as store;
+        let ex = &h.exposure;
+        let volume = audio_io::volume::output_volume(settings.real_speaker_output_device_id.as_deref());
+        let key = |v: Option<audio_io::volume::OutputVolume>| v.map(|v| (v.db.round() as i32, v.muted));
+        if key(volume) != key(self.last_volume) {
+            match volume {
+                Some(v) => crate::log_info!(
+                    "[exposure] output volume {:.0} dB{}",
+                    v.db,
+                    if v.muted { " (muted)" } else { "" }
+                ),
+                None => crate::log_info!("[exposure] output volume unknown; assuming full volume"),
+            }
+        }
+        self.last_volume = volume;
+        ex.volume_known.store(volume.is_some(), Ordering::Relaxed);
+        ex.ear_offset_db.store(store::ear_offset(settings.headset_db_spl, volume).unwrap_or(f32::NAN));
+
+        let now = store::now_secs();
+        let last_heard = ex.last_heard.load(Ordering::Relaxed);
+        if last_heard > 0 && store::is_new_shift(last_heard, now) {
+            crate::log_info!("[exposure] {} h with no call audio: starting a new shift", store::BREAK_RESET_SECS / 3600);
+            *ex.replace.lock().unwrap() = Some(dsp_core::ExposureTotals::default());
+            ex.shocks.store(0, Ordering::Relaxed);
+            ex.last_heard.store(0, Ordering::Relaxed);
+            ex.dose_pct.store(0.0);
+            ex.avg_db.store(0.0);
+            store::save(&store::Saved::default());
+            return;
+        }
+        if save_now && last_heard > 0 {
+            let t = *ex.totals.lock().unwrap();
+            store::save(&store::Saved {
+                dose: t.dose,
+                listen_secs: t.listen_secs,
+                energy: t.energy,
+                shocks: ex.shocks.load(Ordering::Relaxed),
+                last_heard,
+            });
+        }
+    }
+}
+
 pub fn run_engine() {
     if another_instance_running("Local\\ClearNAI-engine") {
         return;
@@ -492,6 +570,7 @@ pub fn run_engine() {
         let _ = thread::Builder::new().name("clearnai-engine-ui-events".into()).spawn(move || {
             let mut cpu = crate::sysutil::CpuSampler::new();
             let mut ticks = 0u32;
+            let mut exposure = ExposureTick::start(&host.handles);
             let mut watch = crate::diag::StateWatch::default();
             let (mut cpu_sum, mut cpu_max, mut cpu_n) = (0.0f32, 0.0f32, 0u32);
             loop {
@@ -510,6 +589,10 @@ pub fn run_engine() {
                 ticks += 1;
                 if ticks % 5 == 0 {
                     watch.check(&host.handles);
+                }
+                if ticks % 10 == 0 {
+                    let settings = host.settings.lock().unwrap().clone();
+                    exposure.second(&host.handles, &settings, ticks % 600 == 0);
                 }
                 if ticks % 10 == 0 {
                     if let Some(p) = cpu.sample() {

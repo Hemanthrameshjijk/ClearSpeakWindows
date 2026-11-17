@@ -294,7 +294,36 @@ pub struct AlertInput {
     pub license_needed: bool,
     /// The PC's clock is far behind the latest time ClearNAI has seen.
     pub clock_wrong: bool,
+    /// Today's listening exposure in percent of the daily limit, when the exposure meter is shown.
+    pub exposure_pct: Option<f32>,
 }
+
+/// Headset loudness choices (dB SPL at full scale and full volume) for the exposure estimate.
+pub const HEADSET_DB_NAMES: [&str; 5] = ["90 dB (quiet)", "95 dB", "100 dB (typical)", "105 dB", "110 dB (loud)"];
+pub const HEADSET_DB_VALUES: [u8; 5] = [90, 95, 100, 105, 110];
+
+pub fn headset_db_name(db: u8) -> &'static str {
+    let i = HEADSET_DB_VALUES.iter().position(|&v| v >= db).unwrap_or(HEADSET_DB_VALUES.len() - 1);
+    HEADSET_DB_NAMES[i]
+}
+
+pub fn headset_db_from_name(name: &str) -> Option<u8> {
+    HEADSET_DB_NAMES.iter().position(|&n| n == name).map(|i| HEADSET_DB_VALUES[i])
+}
+
+/// How loud today has been, for the card: share of the daily limit and the loud sounds blocked.
+pub fn exposure_line(dose_pct: f32, shocks: u64) -> String {
+    let pct = dose_pct.max(0.0).round() as u32;
+    match shocks {
+        0 => format!("Ears today: {pct}% of the safe daily limit"),
+        1 => format!("Ears today: {pct}% of the safe daily limit \u{00B7} 1 loud sound blocked"),
+        n => format!("Ears today: {pct}% of the safe daily limit \u{00B7} {n} loud sounds blocked"),
+    }
+}
+
+/// Exposure levels the card colours and alerts by.
+pub const EXPOSURE_WARN_PCT: f32 = 80.0;
+pub const EXPOSURE_LIMIT_PCT: f32 = 100.0;
 
 /// Ticks (250 ms each) of mic input looked at before deciding the mic is too quiet for the accent.
 pub const QUIET_WINDOW_TICKS: u32 = 40;
@@ -407,6 +436,19 @@ pub fn alerts(i: &AlertInput) -> Vec<Alert> {
     }
     if let Some(reason) = &i.accent_unavailable {
         out.push(Alert { key: "accent-unavailable", text: format!("Accent could not start: {reason}") });
+    }
+    if let Some(pct) = i.exposure_pct {
+        if pct >= EXPOSURE_LIMIT_PCT {
+            out.push(Alert {
+                key: "exposure-limit",
+                text: format!("Your ears have reached today's safe listening limit ({pct:.0}%). Lower the volume now and take a break from the headset when you can."),
+            });
+        } else if pct >= EXPOSURE_WARN_PCT {
+            out.push(Alert {
+                key: "exposure-warn",
+                text: format!("You have used {pct:.0}% of today's safe listening limit. Lower the volume a little, or take a short break."),
+            });
+        }
     }
     if i.cpu_struggling {
         out.push(Alert { key: "cpu", text: "This PC is struggling; audio may crackle. Try the Low CPU option in Advanced.".into() });
@@ -709,5 +751,22 @@ mod tests {
         let (t, r) = split_warning("plain warning");
         assert_eq!((t, r.as_str()), (None, "Plain warning"));
         assert_eq!(split_warning("").1, "");
+    }
+
+    #[test]
+    fn exposure_alerts_start_at_80_and_change_at_100() {
+        assert!(alerts(&AlertInput { exposure_pct: Some(79.0), ..Default::default() }).is_empty());
+        assert_eq!(alerts(&AlertInput { exposure_pct: Some(80.0), ..Default::default() })[0].key, "exposure-warn");
+        assert_eq!(alerts(&AlertInput { exposure_pct: Some(130.0), ..Default::default() })[0].key, "exposure-limit");
+        assert!(alerts(&AlertInput { exposure_pct: None, ..Default::default() }).is_empty());
+    }
+
+    #[test]
+    fn exposure_line_and_headset_names() {
+        assert_eq!(exposure_line(42.4, 0), "Ears today: 42% of the safe daily limit");
+        assert!(exposure_line(10.0, 3).ends_with("3 loud sounds blocked"));
+        assert_eq!(headset_db_name(100), "100 dB (typical)");
+        assert_eq!(headset_db_name(97), "100 dB (typical)");
+        assert_eq!(headset_db_from_name("95 dB"), Some(95));
     }
 }
