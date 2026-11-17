@@ -60,8 +60,12 @@ pub fn mic_boost_effective(on: bool, db: u8) -> u8 {
 
 /// The boost never drives the voice's recent peak above this (-6 dBFS), well under the soft-limit knee.
 const HEADROOM: f32 = 0.5;
-/// How fast the peak memory fades (per 10 ms frame): about 3 s, so the gain does not pump between words.
-const PEAK_RELEASE_PER_FRAME: f32 = 0.996_672; // exp(-10 ms / 3000 ms)
+/// How fast the level memory fades (per 10 ms frame): about 1 s, so the gain does not pump between words but a
+/// single knock or cough does not hold the boost down for long.
+const PEAK_RELEASE_PER_FRAME: f32 = 0.990_050; // exp(-10 ms / 1000 ms)
+/// Speech peaks sit about this far above the 10 ms RMS: the level is judged on RMS x this, so a click lasting a few
+/// milliseconds counts far less than real loud speech.
+const CREST: f32 = 3.0;
 
 /// Mic boost: lifts a quiet mic (Bluetooth call mode, far-away laptop mic) by the slider amount, but backs off by
 /// itself when the voice is already loud. A fixed +12 dB on a mic that already peaks near full scale pushed whole
@@ -69,13 +73,15 @@ const PEAK_RELEASE_PER_FRAME: f32 = 0.996_672; // exp(-10 ms / 3000 ms)
 pub struct PreGainStage {
     current: f32,
     target: f32,
-    /// Recent input peak: instant attack, slow release.
+    /// Remembered speech level: only levels lasting two frames (20 ms) go in, then it fades over about 1 s.
     env: f32,
+    /// Level of the previous frame.
+    prev: f32,
 }
 
 impl PreGainStage {
     pub fn new() -> Self {
-        Self { current: 1.0, target: 1.0, env: 0.0 }
+        Self { current: 1.0, target: 1.0, env: 0.0, prev: 0.0 }
     }
 
     /// Set the gain for the next frame. Cheap (no allocation); the change is ramped across the frame so it never clicks.
@@ -96,10 +102,14 @@ impl Stage for PreGainStage {
     }
 
     fn process(&mut self, frame: &mut [f32]) {
-        let frame_peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
-        self.env = frame_peak.max(self.env * PEAK_RELEASE_PER_FRAME);
-        // Only as much boost as keeps the recent peak at HEADROOM, and never below unity (it only ever lifts).
-        let allowed = if self.env > 0.0 { HEADROOM / self.env } else { f32::INFINITY };
+        let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len().max(1) as f32).sqrt();
+        let level = rms * CREST;
+        // This frame is always protected; only a level that lasted two frames (speech, not a knock) is remembered.
+        self.env = level.min(self.prev).max(self.env * PEAK_RELEASE_PER_FRAME);
+        self.prev = level;
+        let judged = self.env.max(level);
+        // Only as much boost as keeps the speech peak at HEADROOM, and never below unity (it only ever lifts).
+        let allowed = if judged > 0.0 { HEADROOM / judged } else { f32::INFINITY };
         let target = self.target.min(allowed).max(1.0);
         if self.current == 1.0 && target == 1.0 {
             return; // no boost: exactly untouched
@@ -225,7 +235,8 @@ mod tests {
         }
         let mut frame = tone(0.1);
         stage.process(&mut frame);
-        assert!((peak(&frame) - HEADROOM).abs() < 0.01, "lifted to the headroom, got {}", peak(&frame));
+        // A steady tone has a lower crest than speech, so it lands under the headroom, still boosted well above 0.1.
+        assert!(peak(&frame) > 0.2 && peak(&frame) <= HEADROOM, "lifted but under the headroom, got {}", peak(&frame));
     }
 
     #[test]
@@ -241,5 +252,29 @@ mod tests {
         let mut frame = tone(0.6);
         stage.process(&mut frame);
         assert!(peak(&frame) <= 0.6 + 1e-4, "first loud frame boosted to {}", peak(&frame));
+    }
+
+    #[test]
+    fn a_knock_does_not_hold_the_boost_down() {
+        let mut stage = PreGainStage::new();
+        stage.set_db(24.0);
+        for _ in 0..100 {
+            let mut frame = tone(0.01);
+            stage.process(&mut frame);
+        }
+        // A desk knock: 2 ms at 0.9 in an otherwise quiet frame.
+        let mut knock = tone(0.01);
+        for s in knock.iter_mut().take(96) {
+            *s = 0.9;
+        }
+        stage.process(&mut knock);
+        // 2 s later the quiet voice is boosted again (it used to take about 10 s).
+        for _ in 0..200 {
+            let mut frame = tone(0.01);
+            stage.process(&mut frame);
+        }
+        let mut frame = tone(0.01);
+        stage.process(&mut frame);
+        assert!(peak(&frame) > 0.01 * 10.0, "boost is back, got peak {}", peak(&frame));
     }
 }
