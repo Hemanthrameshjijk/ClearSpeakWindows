@@ -172,7 +172,7 @@ pub trait LiveDeviceSwitcher: Send + Sync {
     /// Re-enumerates render/capture devices right now. Real hardware
     /// finding: devices are only enumerated once, at process startup
     /// (`main.rs`), so a virtual-cable app (e.g. VoiceMeter/VB-Cable)
-    /// started *after* ClearNAI never appears in the device pickers and its
+    /// started *after* ClearSpeak never appears in the device pickers and its
     /// role silently processes nothing (looks exactly like "NC/BVC isn't
     /// working") until the whole app is restarted. A GUI "Refresh devices"
     /// button calls this to pick up newly-available devices without a
@@ -272,7 +272,7 @@ pub struct EngineHandles {
     /// render thread itself is never torn down/rebuilt on a toggle flip,
     /// matching every other `StageToggle` in this struct).
     pub monitor: StageToggle,
-    /// Virtual microphone on/off (Devices page). Off: silence goes to the virtual mic target and the ClearNAI
+    /// Virtual microphone on/off (Devices page). Off: silence goes to the virtual mic target and the ClearSpeak
     /// Microphone driver instead of the cleaned voice.
     pub virtual_mic: StageToggle,
 

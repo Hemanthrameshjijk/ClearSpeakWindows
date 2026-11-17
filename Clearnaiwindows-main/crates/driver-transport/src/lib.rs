@@ -1,4 +1,4 @@
-//! User-mode side of the ClearNAI engine <-> virtual-audio-driver transport.
+//! User-mode side of the ClearSpeak engine <-> virtual-audio-driver transport.
 //!
 //! # What this is
 //!
@@ -96,7 +96,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// currently proves, not yet the real driver-facing name (see
 /// `docs/DRIVER_PLAN.md` - that will need `Global\` and a security
 /// descriptor granting the driver's access, neither of which exists yet).
-pub const MIC_OUTPUT_SECTION_NAME: &str = "Local\\ClearNAI_MicOutput_v1";
+pub const MIC_OUTPUT_SECTION_NAME: &str = "Local\\ClearSpeak_MicOutput_v1";
 
 /// 200 frames = 2 seconds of headroom at the standard 10ms frame period -
 /// matches every in-process ring buffer already used elsewhere in this
@@ -106,9 +106,9 @@ pub const MIC_OUTPUT_SECTION_NAME: &str = "Local\\ClearNAI_MicOutput_v1";
 /// climbs, same honesty as everywhere else in this project).
 pub const DEFAULT_CAPACITY_FRAMES: u32 = 200;
 
-/// Identifies a valid ClearNAI shared-memory transport section, distinct
+/// Identifies a valid ClearSpeak shared-memory transport section, distinct
 /// from any other named section that might coincidentally share a name.
-/// ASCII "CNAG" (ClearNAI Audio) read as a little-endian u32.
+/// ASCII "CNAG" (ClearSpeak Audio) read as a little-endian u32.
 pub const PROTOCOL_MAGIC: u32 = 0x47414E43;
 
 /// Bump this - not the byte layout of `RingHeader` in place - if the wire
@@ -468,7 +468,7 @@ mod windows_impl {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            format!("Local\\ClearNAITransportTest_{tag}_{nonce}_{}", std::process::id())
+            format!("Local\\ClearSpeakTransportTest_{tag}_{nonce}_{}", std::process::id())
         }
 
         #[test]

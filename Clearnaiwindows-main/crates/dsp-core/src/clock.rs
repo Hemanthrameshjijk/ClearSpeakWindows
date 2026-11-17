@@ -4,7 +4,7 @@
 //! does no allocation, so it is safe to call from the audio callback.
 //!
 //! Ported from the reference Linux project's
-//! `clearnai-core/src/clock.rs` (`FrameDeadline`, `FrameConfig`). The
+//! `clearspeak-core/src/clock.rs` (`FrameDeadline`, `FrameConfig`). The
 //! reference computed `frame_samples()`/`frame_duration()` purely from
 //! `sample_rate_hz`/`frame_ms` — nothing PipeWire-specific — so this port is
 //! a direct, faithful copy with no adaptation needed.

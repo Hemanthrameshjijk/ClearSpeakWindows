@@ -36,8 +36,8 @@ pub struct Snapshot<'a> {
 /// default would be the real speakers.
 pub fn choose(target: &Target, snap: &Snapshot, allow_fallback: bool) -> Option<Choice> {
     // For the real microphone (`allow_fallback`), the Windows default may itself be a virtual device: call apps are
-    // set to "ClearNAI Microphone" or "CABLE Output", which is often the default too. Recording that would make
-    // ClearNAI listen to its own output (seen live: a feedback loop, input backlog trimmed every 1-2 s, cut words), so
+    // set to "ClearSpeak Microphone" or "CABLE Output", which is often the default too. Recording that would make
+    // ClearSpeak listen to its own output (seen live: a feedback loop, input backlog trimmed every 1-2 s, cut words), so
     // the first real microphone is used instead.
     let default_for_mic = || -> Option<String> {
         let def = snap.default_id?;
@@ -74,10 +74,10 @@ pub fn is_hands_free(name: &str, sample_rate: u32) -> bool {
     n.contains("hands-free") || n.contains("handsfree") || (sample_rate > 0 && sample_rate <= 16_000)
 }
 
-/// A virtual endpoint (ClearNAI's own device, VB-CABLE and similar), never a real microphone.
+/// A virtual endpoint (ClearSpeak's own device, VB-CABLE and similar), never a real microphone.
 pub fn is_virtual_device(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
-    l.contains("clearnai") || l.contains("cable") || l.contains("vb-audio") || l.contains("virtual")
+    l.contains("clearspeak") || l.contains("clearnai") || l.contains("cable") || l.contains("vb-audio") || l.contains("virtual")
 }
 
 /// Two endpoints of the same physical device: Windows names them "Headset (realme Buds T310)" and
@@ -192,12 +192,12 @@ mod tests {
     #[test]
     fn the_real_mic_never_falls_back_to_a_virtual_default() {
         let active = vec![
-            ("clearnai".to_string(), "ClearNAI Microphone (ClearNAI Virtual Audio Device)".to_string()),
+            ("clearspeak".to_string(), "ClearSpeak Microphone (ClearSpeak Virtual Audio Device)".to_string()),
             ("cable".to_string(), "CABLE Output (VB-Audio Virtual Cable)".to_string()),
             ("laptop".to_string(), "Microphone Array (Realtek(R) Audio)".to_string()),
         ];
-        let snap = Snapshot { active: &active, default_id: Some("clearnai"), saved_name: Some("Headset (realme Buds T310)") };
-        // Saved earbuds gone, default is ClearNAI's own mic: use the real laptop mic, not a feedback loop.
+        let snap = Snapshot { active: &active, default_id: Some("clearspeak"), saved_name: Some("Headset (realme Buds T310)") };
+        // Saved earbuds gone, default is ClearSpeak's own mic: use the real laptop mic, not a feedback loop.
         let c = choose(&Target::Id("buds".into()), &snap, true).unwrap();
         assert_eq!((c.id.as_str(), c.fallback), ("laptop", true));
         // Following the default: same rule.
@@ -205,10 +205,10 @@ mod tests {
         // A virtual device the user picked on purpose is still used.
         assert_eq!(choose(&Target::Id("cable".into()), &snap, true).unwrap().id, "cable");
         // Call-audio capture (no fallback) keeps following a virtual default.
-        assert_eq!(choose(&Target::Default, &snap, false).unwrap().id, "clearnai");
+        assert_eq!(choose(&Target::Default, &snap, false).unwrap().id, "clearspeak");
         // Only virtual devices connected: nothing real to record.
         let only_virtual = vec![active[0].clone()];
-        let snap = Snapshot { active: &only_virtual, default_id: Some("clearnai"), saved_name: None };
+        let snap = Snapshot { active: &only_virtual, default_id: Some("clearspeak"), saved_name: None };
         assert!(choose(&Target::Default, &snap, true).is_none());
     }
 

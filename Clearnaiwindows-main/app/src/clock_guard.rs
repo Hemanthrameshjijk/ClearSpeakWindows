@@ -35,11 +35,16 @@ mod imp {
     use windows::Win32::System::Registry::{RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_QWORD, RRF_RT_REG_QWORD};
 
     pub fn read() -> u64 {
+        // The key from before the rename still counts, so the rename cannot be used to wind the clock back.
+        read_key(w!("Software\\ClearSpeak")).max(read_key(w!("Software\\ClearNAI")))
+    }
+
+    fn read_key(key: windows::core::PCWSTR) -> u64 {
         let mut value = 0u64;
         let mut size = 8u32;
         // SAFETY: `value` is an 8-byte buffer and `size` says so.
         let ok = unsafe {
-            RegGetValueW(HKEY_CURRENT_USER, w!("Software\\ClearNAI"), w!("ls"), RRF_RT_REG_QWORD, None, Some(&mut value as *mut u64 as *mut _), Some(&mut size)).is_ok()
+            RegGetValueW(HKEY_CURRENT_USER, key, w!("ls"), RRF_RT_REG_QWORD, None, Some(&mut value as *mut u64 as *mut _), Some(&mut size)).is_ok()
         };
         if ok {
             value
@@ -51,7 +56,7 @@ mod imp {
     pub fn write(ts: u64) {
         // SAFETY: the data pointer and length describe the 8 bytes of `ts`.
         unsafe {
-            let _ = RegSetKeyValueW(HKEY_CURRENT_USER, w!("Software\\ClearNAI"), w!("ls"), REG_QWORD.0, Some(&ts as *const u64 as *const _), 8);
+            let _ = RegSetKeyValueW(HKEY_CURRENT_USER, w!("Software\\ClearSpeak"), w!("ls"), REG_QWORD.0, Some(&ts as *const u64 as *const _), 8);
         }
     }
 }
@@ -87,9 +92,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_registry_mark_round_trips() {
+        // Above anything already there: the mark from before the rename (`Software\ClearNAI`) also counts.
         let before = registry_mark();
-        write_registry_mark(12_345_678);
-        assert_eq!(registry_mark(), 12_345_678);
+        write_registry_mark(before + 12_345_678);
+        assert_eq!(registry_mark(), before + 12_345_678);
         write_registry_mark(before); // put back whatever was there
     }
 }

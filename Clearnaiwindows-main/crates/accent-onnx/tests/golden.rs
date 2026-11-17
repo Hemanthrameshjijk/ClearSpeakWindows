@@ -1,6 +1,6 @@
 //! Golden tests: the Rust port must reproduce the reference engine (tools/make_golden.py) on a 5 s clip.
 //!
-//! Needs the model bundle (`ACCENT_MODELS_DIR`, or app_models next to the exe / in %LOCALAPPDATA%\ClearNAI) and
+//! Needs the model bundle (`ACCENT_MODELS_DIR`, or app_models next to the exe / in %LOCALAPPDATA%\ClearSpeak) and
 //! `onnxruntime.dll` (`ORT_DLL`, default app/assets/onnxruntime.dll). Without the models the tests print a
 //! SKIPPED line and pass, so a checkout without the 270 MB bundle still builds green.
 

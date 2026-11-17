@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(string_at(buf, 99), None);
     }
 
-    /// Reads the real PC: `cargo test -p clearnai-app --lib device_id -- --ignored --nocapture`.
+    /// Reads the real PC: `cargo test -p clearspeak-app --lib device_id -- --ignored --nocapture`.
     #[cfg(windows)]
     #[test]
     #[ignore]

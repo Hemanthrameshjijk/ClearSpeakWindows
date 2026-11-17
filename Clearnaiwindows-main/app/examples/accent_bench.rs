@@ -1,14 +1,14 @@
 //! Accent conversion benchmark on this PC (step 7 of the accent task).
 //!
-//!   cargo run --release -p clearnai-app --example accent_bench -- rtf  [models_dir]
+//!   cargo run --release -p clearspeak-app --example accent_bench -- rtf  [models_dir]
 //!       converter / vocoder real-time factor for 50/100/200 ms pushes x 1/2/4 ORT threads
-//!   cargo run --release -p clearnai-app --example accent_bench -- live [models_dir] [threads] [seconds]
+//!   cargo run --release -p clearspeak-app --example accent_bench -- live [models_dir] [threads] [seconds]
 //!       the real mic-path chain (voice gate off) BVC (Hush, if extracted) -> Accent -> AutoGain fed at wall-clock
 //!       pace in 10 ms frames: total process CPU %, mic-thread cost per frame, underruns, RTF, and the measured
 //!       end-to-end delay added by Accent (BVC+Accent vs BVC only, by speech-envelope cross-correlation)
 //!
-//! Needs the accent model bundle (arg, `ACCENT_MODELS_DIR`, or %LOCALAPPDATA%\ClearNAI\app_models) and, for `live`,
-//! the Hush assets the app extracts into %LOCALAPPDATA%\ClearNAI.
+//! Needs the accent model bundle (arg, `ACCENT_MODELS_DIR`, or %LOCALAPPDATA%\ClearSpeak\app_models) and, for `live`,
+//! the Hush assets the app extracts into %LOCALAPPDATA%\ClearSpeak.
 
 use accent_onnx::pipeline::{start, AccentConfig, AccentState};
 use accent_onnx::{find_models_dir, init_runtime, AccentStream};
@@ -39,7 +39,7 @@ mod cpu {
 }
 
 fn dll() -> PathBuf {
-    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default().join("ClearNAI").join("onnxruntime.dll");
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default().join("ClearSpeak").join("onnxruntime.dll");
     if local.exists() {
         local
     } else {
@@ -157,7 +157,7 @@ fn run_chain(
 }
 
 fn live(dir: &Path, threads: usize, seconds: usize) {
-    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default().join("ClearNAI");
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default().join("ClearSpeak");
     let mut bvc: Option<Box<dyn Stage>> = match bvc_hush::HushBvcStage::try_load(&local) {
         Ok(s) => Some(Box::new(s)),
         Err(e) => {

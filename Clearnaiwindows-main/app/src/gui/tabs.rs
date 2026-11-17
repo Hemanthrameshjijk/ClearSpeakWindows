@@ -34,7 +34,7 @@ static MARK_HANDLE: std::sync::OnceLock<image::Handle> = std::sync::OnceLock::ne
 static WORD_LIGHT_HANDLE: std::sync::OnceLock<image::Handle> = std::sync::OnceLock::new();
 static WORD_DARK_HANDLE: std::sync::OnceLock<image::Handle> = std::sync::OnceLock::new();
 
-/// The ClearNAI mark (the C with the sound bars).
+/// The ClearSpeak mark (the C with the sound bars).
 pub fn logo_mark<'a>(_dark: bool, size: f32) -> Element<'a, Message> {
     image(MARK_HANDLE.get_or_init(|| image::Handle::from_bytes(LOGO_MARK_PNG)).clone()).width(size).height(size).into()
 }
@@ -1213,7 +1213,7 @@ pub fn view_bar(state: &MainState) -> Element<'_, Message> {
 
 /// The card shown when the program is clicked: your voice (level, device, Cancel noise, accent), the live transcript, a
 /// Refresh that puts the devices back to the defaults, and a big Mute button. Problems show right under the header.
-/// The gear opens the full window, after the settings password. Undecorated and draggable; Escape or the X hides it (ClearNAI keeps running in the tray).
+/// The gear opens the full window, after the settings password. Undecorated and draggable; Escape or the X hides it (ClearSpeak keeps running in the tray).
 pub fn view_card(state: &MainState) -> Element<'_, Message> {
     use super::icons;
     let dark = state.settings.theme_dark;

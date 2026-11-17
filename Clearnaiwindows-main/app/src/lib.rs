@@ -1,9 +1,9 @@
-//! ClearNAI for Windows: one library, two programs.
+//! ClearSpeak for Windows: one library, two programs.
 //!
-//! * `clearnai-engine.exe` (`bin/clearnai-engine.rs` -> [`host`]): the background engine. Runs the audio pipelines,
+//! * `clearspeak-engine.exe` (`bin/clearspeak-engine.rs` -> [`host`]): the background engine. Runs the audio pipelines,
 //!   the tray icon, the mute hotkey and autostart, owns `settings.json`, and serves the pipe described in [`ipc`].
 //!   It has no window, so closing the window never interrupts the audio.
-//! * `clearnai.exe` (`bin/clearnai.rs` -> [`remote`] + [`gui`]): the window. It connects to the engine (starting it if
+//! * `clearspeak.exe` (`bin/clearspeak.rs` -> [`remote`] + [`gui`]): the window. It connects to the engine (starting it if
 //!   needed), shows what the engine reports and sends it commands.
 //!
 //! See `docs/VIRTUAL_DEVICES.md` for the virtual audio cable setup the audio path needs, and `engine.rs` / `gui.rs`
@@ -14,6 +14,7 @@
 //! `settings`, `status_ui`, `shared`, `ui_logic`, `ipc` (the messages) and `gui` are ordinary portable Rust and build
 //! and test anywhere. `engine`, `host` and the pipe halves of `ipc`/`remote` only exist on Windows.
 
+pub mod call_log;
 pub mod clock_guard;
 pub mod crash;
 pub mod dev_code;

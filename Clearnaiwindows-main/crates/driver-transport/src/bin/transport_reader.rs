@@ -1,6 +1,6 @@
-//! Standalone verification tool - NOT part of the ClearNAI product.
+//! Standalone verification tool - NOT part of the ClearSpeak product.
 //!
-//! Opens the same named shared-memory section `clearnairt.exe`'s mic
+//! Opens the same named shared-memory section `clearspeakrt.exe`'s mic
 //! pipeline writes into (`driver_transport::MIC_OUTPUT_SECTION_NAME`) from
 //! a completely separate process, and dumps whatever it reads to a real
 //! WAV file. This is the only way to actually prove the cross-process
@@ -9,7 +9,7 @@
 //!
 //! # What this proves
 //!
-//! "ClearNAI's processed mic audio really does reach a separate OS
+//! "ClearSpeak's processed mic audio really does reach a separate OS
 //! process, correctly, in real time." That's it.
 //!
 //! # What this does NOT prove or provide
@@ -23,7 +23,7 @@
 //!
 //! # Usage
 //!
-//! Run `clearnairt.exe` first (it creates the section at startup and keeps
+//! Run `clearspeakrt.exe` first (it creates the section at startup and keeps
 //! writing to it every 10ms regardless of whether anything reads it), then
 //! in a separate terminal:
 //!
@@ -54,11 +54,11 @@ fn main() -> anyhow::Result<()> {
     }
 
     println!("Opening shared section '{MIC_OUTPUT_SECTION_NAME}'...");
-    println!("(Make sure clearnairt.exe is already running - it creates this section at startup.)");
+    println!("(Make sure clearspeakrt.exe is already running - it creates this section at startup.)");
     let reader = SharedRingReader::open(MIC_OUTPUT_SECTION_NAME)
-        .context("failed to open the shared section - is clearnairt.exe running?")?;
+        .context("failed to open the shared section - is clearspeakrt.exe running?")?;
     println!("Opened successfully. Capturing {seconds:.1}s of audio into '{out_path}'...");
-    println!("(Talk into your mic now, in the ClearNAI-running window, so there's something to hear.)");
+    println!("(Talk into your mic now, in the ClearSpeak-running window, so there's something to hear.)");
 
     let spec = hound::WavSpec {
         channels: 1,
@@ -83,14 +83,14 @@ fn main() -> anyhow::Result<()> {
             empty_polls = 0;
         } else {
             // The section is empty right now (writer hasn't produced a new
-            // frame yet, or clearnairt isn't actually running) - a short
+            // frame yet, or clearspeakrt isn't actually running) - a short
             // sleep here is fine, this is a plain diagnostic-tool loop, not
             // the realtime audio thread.
             std::thread::sleep(Duration::from_millis(2));
             empty_polls += 1;
             if empty_polls == 1000 {
                 println!(
-                    "WARNING: nothing has arrived in 2s of polling - is clearnairt.exe actually \
+                    "WARNING: nothing has arrived in 2s of polling - is clearspeakrt.exe actually \
                      running and is its mic pipeline actually processing (not just idle)?"
                 );
             }

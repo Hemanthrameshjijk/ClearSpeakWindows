@@ -154,13 +154,13 @@ pub(crate) fn engine_wave_format() -> wasapi::WaveFormat {
 ///
 /// # Why this is requested explicitly instead of using `get_device_period()`
 ///
-/// The reference Linux port (`clearnai-pipewire`) hit a real, measured bug
+/// The reference Linux port (`clearspeak-pipewire`) hit a real, measured bug
 /// on PipeWire: without an explicit buffer-size parameter sent at
 /// stream-connect time, the OS silently handed the stream a fixed 256ms
 /// (12288-sample) buffer regardless of what any consumer requested — a
 /// `node.latency` *property* string alone did nothing; only an explicit
 /// `SPA_PARAM_Buffers` object at connect time actually constrained it (see
-/// `clearnai-pipewire/src/format.rs::fixed_buffer_size_param` and
+/// `clearspeak-pipewire/src/format.rs::fixed_buffer_size_param` and
 /// `virtual_mic.rs`'s "LATENCY FIX" comment for the measured before/after).
 ///
 /// `capture.rs`/`render.rs`/`loopback.rs` previously used whatever

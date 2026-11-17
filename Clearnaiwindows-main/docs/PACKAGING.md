@@ -9,10 +9,10 @@ recipe for that step; it has not been run.
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc   # if not already present
-cargo build --release --target x86_64-pc-windows-msvc -p clearnai-app
+cargo build --release --target x86_64-pc-windows-msvc -p clearspeak-app
 ```
 
-This produces `target\x86_64-pc-windows-msvc\release\clearnairt.exe`.
+This produces `target\x86_64-pc-windows-msvc\release\clearspeakrt.exe`.
 
 Note: everything in this repo was cross-checked (and, for the GNU target
 only, actually built and linked) against `x86_64-pc-windows-gnu` from Linux,
@@ -28,22 +28,22 @@ success carries over from the GNU result.
 
 ## 2. Build the installer (recommended) or use the portable exe
 
-`clearnairt.exe` is fully self-contained for BVC purposes: `weya_nc.dll`
+`clearspeakrt.exe` is fully self-contained for BVC purposes: `weya_nc.dll`
 and the ONNX model bundle (`advanced_dfnet16k_model_best_onnx.tar.gz`) are
 embedded directly into the binary at build time via `include_bytes!` (see
 `app/assets/` and `app/src/setup.rs::ensure_bvc_assets_extracted`) and are
-self-extracted into `%LOCALAPPDATA%\ClearNAI` the first time the app runs
+self-extracted into `%LOCALAPPDATA%\ClearSpeak` the first time the app runs
 (and re-extracted automatically if either ever goes missing or comes back a
 different size — e.g. after an app update that bundles a newer version).
 There is nothing to copy alongside the exe for BVC to work.
 
-### Option A: real installer (`ClearNAI-Setup.exe`)
+### Option A: real installer (`ClearSpeak-Setup.exe`)
 
 `app/installer.nsi` is an [NSIS](https://nsis.sourceforge.io/) script that
 builds a proper per-user installer — Start Menu + Desktop shortcuts, a real
 entry in Windows' "Apps & Features" with a working Uninstall button (backed
 by an NSIS-auto-generated `Uninstall.exe`), no admin/UAC prompt required. It
-installs into `%LOCALAPPDATA%\ClearNAI` — the same directory the app already
+installs into `%LOCALAPPDATA%\ClearSpeak` — the same directory the app already
 self-extracts its BVC assets into — so uninstalling is just removing that
 one directory (see the script's own comments for exactly what it does and
 deliberately does *not* touch, i.e. any VB-Cable/VoiceMeeter driver install).
@@ -54,8 +54,8 @@ cd app
 makensis installer.nsi
 ```
 
-This produces `target\release\ClearNAI-Setup.exe`. This is also exactly
-what `.github/workflows/windows.yml` does in CI — see its `ClearNAI-Setup`
+This produces `target\release\ClearSpeak-Setup.exe`. This is also exactly
+what `.github/workflows/windows.yml` does in CI — see its `ClearSpeak-Setup`
 artifact for a build already produced on a real Windows runner.
 
 ### Option B: portable exe, no installer
@@ -63,27 +63,27 @@ artifact for a build already produced on a real Windows runner.
 For a no-install, single-file distribution, just copy the exe on its own:
 
 ```powershell
-$dist = "dist\ClearNAI"
+$dist = "dist\ClearSpeak"
 New-Item -ItemType Directory -Force -Path $dist
-Copy-Item target\x86_64-pc-windows-msvc\release\clearnairt.exe $dist\
+Copy-Item target\x86_64-pc-windows-msvc\release\clearspeakrt.exe $dist\
 
 # rustc/cargo will have already statically linked everything else this
 # project depends on (nnnoiseless, deep_filter/tract, wasapi, iced/wgpu) —
-# confirm by running `dumpbin /dependents clearnairt.exe` (or `ldd`-equivalent,
+# confirm by running `dumpbin /dependents clearspeakrt.exe` (or `ldd`-equivalent,
 # e.g. "Dependencies" GUI tool) on the real Windows build and copying any
 # non-system DLL it reports that isn't already in $dist. This has not been
 # done here since no MSVC-built exe exists yet to inspect.
 ```
 
 There is no dedicated uninstaller for this option (there's nothing to
-uninstall beyond deleting the exe and, if you want, `%LOCALAPPDATA%\ClearNAI`
+uninstall beyond deleting the exe and, if you want, `%LOCALAPPDATA%\ClearSpeak`
 by hand) — use Option A if you want a real uninstall entry.
 
 ## 3. Driver / virtual-device install step (separate from the app folder)
 
 This does **not** ship inside the app folder and is **not** a one-click
 step — it is a privileged, one-time setup the end user (or an installer
-script you write separately) must do before ClearNAI's virtual devices are
+script you write separately) must do before ClearSpeak's virtual devices are
 selectable in other apps:
 
 1. Install **two independent VB-Audio Virtual Cable instances** (see
@@ -94,7 +94,7 @@ selectable in other apps:
    reboot or a driver-signature prompt. This is entirely outside this
    project's code — we only consume the resulting WASAPI endpoints once
    installed.
-3. Launch `clearnairt.exe`, and in its GUI use the "Virtual mic target" /
+3. Launch `clearspeakrt.exe`, and in its GUI use the "Virtual mic target" /
    "Virtual speaker source" device pickers to assign each cable's correct
    endpoint (see `docs/VIRTUAL_DEVICES.md`).
 

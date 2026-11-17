@@ -1,4 +1,4 @@
-# ClearNAI Virtual Audio Driver — Build Plan (NOT built, NOT tested)
+# ClearSpeak Virtual Audio Driver — Build Plan (NOT built, NOT tested)
 
 **Status: SOURCE-VERIFIED plan + INF skeleton only. No .cpp/.h miniport code
 is included here — see "Why no C++ is included" below.**
@@ -6,7 +6,7 @@ is included here — see "Why no C++ is included" below.**
 ## What this document is
 
 A concrete starting point for someone with WDK/kernel driver experience to
-build a real "ClearNAI Microphone" virtual audio device, based on
+build a real "ClearSpeak Microphone" virtual audio device, based on
 Microsoft's own SYSVAD sample (`microsoft/Windows-driver-samples`,
 `audio/sysvad`). It is not itself a working driver.
 
@@ -27,16 +27,16 @@ not just a compile error. That risk is not worth taking to produce
 
 1. Clone `https://github.com/microsoft/Windows-driver-samples`.
 2. Copy `audio/sysvad/EndpointsCommon/` and the `TabletAudioSample/`
-   endpoint folder into a new folder, e.g. `audio/sysvad/ClearNAIMic/`.
+   endpoint folder into a new folder, e.g. `audio/sysvad/ClearSpeakMic/`.
 3. Open it in Visual Studio with the WDK extension installed. Build the
    *unmodified* sample first, confirm it builds and loads (in test-signing
    mode, on a VM - never a machine you rely on) - this proves the toolchain
-   works before any ClearNAI-specific change is made.
+   works before any ClearSpeak-specific change is made.
 4. Only then start renaming: the endpoint's friendly name string, its
    hardware ID, its category GUID, and the INF's device description (see
    skeleton below) - these are plain string/GUID changes, not new kernel
    logic, and are safe to make without deep miniport knowledge.
-5. The actual "capture ClearNAI's processed audio and expose it as this
+5. The actual "capture ClearSpeak's processed audio and expose it as this
    endpoint's input" logic requires either extending the existing sample's
    wave miniport to pull from a named shared-memory ring buffer (the
    `RtAudioEngine`-copying pattern the DDK docs describe) or writing a
@@ -50,21 +50,21 @@ real repo. Placeholder GUIDs below are NOT real - generate real ones with
 `[System.Guid]::NewGuid()` in PowerShell before ever installing this.
 
 ```inf
-; ClearNAIMic.inf - adapted from Microsoft's SYSVAD ComponentizedAudioSample.inf
+; ClearSpeakMic.inf - adapted from Microsoft's SYSVAD ComponentizedAudioSample.inf
 [Version]
 Signature   = "$WINDOWS NT$"
 Class       = MEDIA
 ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-CatalogFile = ClearNAIMic.cat
+CatalogFile = ClearSpeakMic.cat
 DriverVer   = ; set by build tooling, not by hand
 PnpLockdown = 1
 
 [Manufacturer]
-%ManufacturerName% = ClearNAI, NT$ARCH$.10.0...16299
+%ManufacturerName% = ClearSpeak, NT$ARCH$.10.0...16299
 
-[ClearNAI.NT$ARCH$.10.0...16299]
-%ClearNAIMic.DeviceDesc% = ClearNAIMic_Install, ROOT\ClearNAIMic
+[ClearSpeak.NT$ARCH$.10.0...16299]
+%ClearSpeakMic.DeviceDesc% = ClearSpeakMic_Install, ROOT\ClearSpeakMic
 
 ; --- The rest (service install section, coinstallers, wave/topology
 ; references) must mirror ComponentizedAudioSample.inf's real sections
@@ -72,9 +72,9 @@ PnpLockdown = 1
 ; hand-retype it, so nothing subtly drifts from a working reference. ---
 
 [Strings]
-ProviderName        = "ClearNAI"
-ManufacturerName    = "ClearNAI"
-ClearNAIMic.DeviceDesc = "ClearNAI Microphone"
+ProviderName        = "ClearSpeak"
+ManufacturerName    = "ClearSpeak"
+ClearSpeakMic.DeviceDesc = "ClearSpeak Microphone"
 ```
 
 ## Realistic scope reminder

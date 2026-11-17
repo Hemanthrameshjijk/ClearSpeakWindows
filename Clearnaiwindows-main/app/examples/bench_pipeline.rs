@@ -5,7 +5,7 @@
 //! any I/O/graph overhead - synthetic frames in a tight loop, not real
 //! WASAPI capture).
 //!
-//! Run: cargo run --release -p clearnai-app --example bench_pipeline
+//! Run: cargo run --release -p clearspeak-app --example bench_pipeline
 //!
 //! This produces real numbers (RUNTIME_VERIFIED, on whatever machine runs
 //! it) instead of the guesses/assertions this project has otherwise relied
@@ -56,7 +56,7 @@ fn bench_stage(name: &str, mut stage: Box<dyn Stage>) {
 }
 
 fn main() {
-    println!("ClearNAI mic-path DSP benchmark - {FRAME_COUNT} synthetic frames per stage, isolated from I/O.\n");
+    println!("ClearSpeak mic-path DSP benchmark - {FRAME_COUNT} synthetic frames per stage, isolated from I/O.\n");
 
     bench_stage(
         "RNNoise",
@@ -72,7 +72,7 @@ fn main() {
     // BVC only if the real DLL/model are already extracted on this machine
     // (i.e. the real app has been run here at least once) - skipped
     // honestly, not faked, if unavailable.
-    let bvc_dir = clearnai_app_setup_path();
+    let bvc_dir = clearspeak_app_setup_path();
     match bvc_hush::HushBvcStage::try_load(&bvc_dir) {
         Ok(stage) => bench_stage("BVC (weya_nc.dll)", Box::new(stage)),
         Err(e) => println!("BVC (weya_nc.dll)          SKIPPED - not available on this machine: {e:#}"),
@@ -84,10 +84,10 @@ fn main() {
 
 /// Mirrors `setup::app_data_dir()`'s logic without pulling in the whole
 /// `app` binary crate's module tree into this example - same
-/// `%LOCALAPPDATA%\ClearNAI` path the real app already extracts BVC into.
-fn clearnai_app_setup_path() -> std::path::PathBuf {
+/// `%LOCALAPPDATA%\ClearSpeak` path the real app already extracts BVC into.
+fn clearspeak_app_setup_path() -> std::path::PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    base.join("ClearNAI")
+    base.join("ClearSpeak")
 }

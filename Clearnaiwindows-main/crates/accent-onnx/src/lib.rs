@@ -150,7 +150,7 @@ impl AccentStream {
 }
 
 /// Where the model bundle lives: `ACCENT_MODELS_DIR`, else `app_models` next to the exe, else
-/// `%LOCALAPPDATA%\ClearNAI\app_models`.
+/// `%LOCALAPPDATA%\ClearSpeak\app_models`.
 pub fn find_models_dir() -> Option<PathBuf> {
     let ok = |p: &PathBuf| BUNDLE_FILES.iter().all(|f| p.join(f).exists());
     let mut cands: Vec<PathBuf> = Vec::new();
@@ -163,7 +163,7 @@ pub fn find_models_dir() -> Option<PathBuf> {
         }
     }
     if let Ok(l) = std::env::var("LOCALAPPDATA") {
-        cands.push(PathBuf::from(l).join("ClearNAI").join("app_models"));
+        cands.push(PathBuf::from(l).join("ClearSpeak").join("app_models"));
     }
     cands.into_iter().find(ok)
 }

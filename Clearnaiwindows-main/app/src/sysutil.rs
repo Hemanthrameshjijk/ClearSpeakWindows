@@ -89,7 +89,7 @@ pub fn export_dir(fallback: &Path) -> PathBuf {
     fallback.to_path_buf()
 }
 
-/// Copies `src` (the app log) to `<dir>\ClearNAI-log-<unix>.txt` and returns the new path.
+/// Copies `src` (the app log) to `<dir>\ClearSpeak-log-<unix>.txt` and returns the new path.
 pub fn export_log(src: &Path, dir: &Path) -> Result<PathBuf, String> {
     if !src.is_file() {
         return Err(format!("no log file yet at {}", src.display()));
@@ -188,10 +188,10 @@ mod win {
         const MOD_SHIFT: u32 = 0x0004;
         const MOD_NOREPEAT: u32 = 0x4000;
         const WM_HOTKEY: u32 = 0x0312;
-        let spawned = std::thread::Builder::new().name("clearnai-hotkey".into()).spawn(|| unsafe {
+        let spawned = std::thread::Builder::new().name("clearspeak-hotkey".into()).spawn(|| unsafe {
             // Registered on this thread, so the WM_HOTKEY message arrives in this thread's own queue.
             if RegisterHotKey(0, 1, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, b'M' as u32) == 0 {
-                crate::log_error!("[clearnairt] could not register the Ctrl+Shift+M mute hotkey (another app may own it)");
+                crate::log_error!("[clearspeakrt] could not register the Ctrl+Shift+M mute hotkey (another app may own it)");
                 return;
             }
             let mut msg: Msg = std::mem::zeroed();
@@ -202,7 +202,7 @@ mod win {
             }
         });
         if let Err(e) = spawned {
-            crate::log_error!("[clearnairt] could not start the hotkey thread: {e}");
+            crate::log_error!("[clearspeakrt] could not start the hotkey thread: {e}");
         }
     }
 
@@ -225,7 +225,7 @@ mod win {
         const REG_SZ: u32 = 1;
         const ERROR_FILE_NOT_FOUND: i32 = 2;
         let sub = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-        let name = wide("ClearNAI");
+        let name = wide("ClearSpeak");
         let mut key: isize = 0;
         let rc = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, sub.as_ptr(), 0, KEY_SET_VALUE, &mut key) };
         if rc != 0 {
@@ -244,6 +244,9 @@ mod win {
             let rc = unsafe { RegDeleteValueW(key, name.as_ptr()) };
             if rc == 0 || rc == ERROR_FILE_NOT_FOUND { Ok(()) } else { Err(format!("could not remove ClearSpeak from Windows startup (error {rc})")) }
         };
+        // The value from before the rename would start the old exe, which the update removed: always delete it.
+        let old = wide("ClearNAI");
+        unsafe { RegDeleteValueW(key, old.as_ptr()) };
         unsafe { RegCloseKey(key) };
         result
     }
@@ -271,10 +274,10 @@ mod tests {
 
     #[test]
     fn run_value_quotes_the_exe_path() {
-        let v = run_value(Path::new(r"C:\Users\Dev eloper\AppData\Local\ClearNAI\clearnairt.exe"));
+        let v = run_value(Path::new(r"C:\Users\Dev eloper\AppData\Local\ClearSpeak\clearspeakrt.exe"));
         assert!(v.starts_with('"') && v.ends_with("\" --background"));
         assert!(v.contains("Dev eloper"));
-        assert!(v.contains("clearnairt.exe"));
+        assert!(v.contains("clearspeakrt.exe"));
     }
 
     #[test]
@@ -290,9 +293,9 @@ mod tests {
 
     #[test]
     fn exports_write_and_copy_files() {
-        let dir = std::env::temp_dir().join(format!("clearnai-sysutil-test-{}", unix_now()));
+        let dir = std::env::temp_dir().join(format!("clearspeak-sysutil-test-{}", unix_now()));
         std::fs::create_dir_all(&dir).unwrap();
-        let log = dir.join("clearnai.log");
+        let log = dir.join("clearspeak.log");
         assert!(export_log(&log, &dir).is_err());
         std::fs::write(&log, "hello").unwrap();
         let copied = export_log(&log, &dir).unwrap();

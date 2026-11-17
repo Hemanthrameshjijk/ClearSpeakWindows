@@ -6,7 +6,7 @@
 //! `engine.rs`, `setup.rs`, `settings.rs` only - other crates' own
 //! `eprintln!`s are a known, unfixed gap, see the top-level report) with a
 //! tiny appender that writes timestamped lines to
-//! `<app_data_dir>/clearnai.log`.
+//! `<app_data_dir>/clearspeak.log`.
 //!
 //! Deliberately not the `log` crate + a custom `Log` impl: a couple of thin
 //! wrapper functions plus two macros is less code than wiring up a facade
@@ -70,11 +70,11 @@ static LOGGER: OnceLock<Option<Logger>> = OnceLock::new();
 /// Must be called once, as the very first thing in `main()`, before any
 /// other code in this crate might log. `dir` is `setup::app_data_dir()`.
 pub fn init(dir: &Path) {
-    init_named(dir, "clearnai.log");
+    init_named(dir, "clearspeak.log");
 }
 
 /// Same as [`init`] with a chosen file name: the window and the engine are separate processes and each writes its own
-/// log (`clearnai-window.log` / `clearnai.log`) so their lines never interleave in one file.
+/// log (`clearspeak-window.log` / `clearspeak.log`) so their lines never interleave in one file.
 pub fn init_named(dir: &Path, file_name: &str) {
     let _ = LOG_PATH.set(Some(dir.join(file_name)));
 }
@@ -104,7 +104,7 @@ fn logger() -> Option<&'static Logger> {
             let path = LOG_PATH.get().and_then(|p| p.clone())?;
             let (tx, rx) = sync_channel(QUEUE_LINES);
             std::thread::Builder::new()
-                .name("clearnai-log-writer".into())
+                .name("clearspeak-log-writer".into())
                 .spawn(move || writer(&path, rx, MAX_LOG_BYTES))
                 .ok()?;
             Some(Logger { tx, seen: Mutex::new(HashMap::new()) })
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn writer_truncates_at_the_cap_and_keeps_going() {
-        let dir = std::env::temp_dir().join(format!("clearnai-log-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clearspeak-log-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.log");
         std::fs::write(&path, vec![b'@'; 5000]).unwrap(); // already over the cap, like the 200 MB real log

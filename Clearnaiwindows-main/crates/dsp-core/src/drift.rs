@@ -1,6 +1,6 @@
 //! Clock-drift compensation for the end of the mic chain.
 //!
-//! The mic chain runs at the pace of the microphone's clock, while everything it feeds (the ClearNAI driver, a
+//! The mic chain runs at the pace of the microphone's clock, while everything it feeds (the ClearSpeak driver, a
 //! virtual cable) consumes at the system's exact 48 kHz. A Bluetooth headset in call mode runs a little slow and
 //! drops the odd packet (live log: 5,965-5,998 frames a minute instead of 6,000), so those buffers slowly run dry and
 //! the listener hears short gaps: cut words.

@@ -40,7 +40,7 @@ shows the port is exact. Per-push frame counts match the reference exactly.
 ## Benchmarks (this PC: 12 logical cores, release build)
 
 Real-time factor = compute time / audio time (lower is better; must stay < 1, the safety net trips at 0.9).
-`cargo run --release -p clearnai-app --example accent_bench -- rtf`
+`cargo run --release -p clearspeak-app --example accent_bench -- rtf`
 
 | ORT threads | push | converter RTF | vocoder RTF | total RTF (incl. mel) | p95 per push (ms) |
 |---:|---:|---:|---:|---:|---:|
@@ -77,7 +77,7 @@ headroom for +25 ms delay. Neither knob is exposed in the GUI yet.
 The bundle is ~270 MB (fp32 ONNX), too big to commit (GitHub 100 MB file limit) or sensibly `include_bytes!`. It ships as
 `app_models/` next to the exe (`app/installer.nsi` installs it; during development put it in `app/assets/app_models/` or set
 `ACCENT_MODELS_SRC`). On the first time a voice is selected the worker calls `setup::ensure_accent_models`, which installs
-into `%LOCALAPPDATA%\ClearNAI\app_models`, comparing FULL file contents (streaming) and copying only files that differ.
+into `%LOCALAPPDATA%\ClearSpeak\app_models`, comparing FULL file contents (streaming) and copying only files that differ.
 Needed files: `accent_onnx::BUNDLE_FILES` (8 files; `ecapa.onnx`/`librnnoise.dylib` are not used). `app_models/` is gitignored.
 
 ## Not done

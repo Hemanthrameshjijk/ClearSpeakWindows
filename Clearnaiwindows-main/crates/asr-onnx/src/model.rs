@@ -21,7 +21,7 @@ const FUTURE_S: f64 = 2.0;
 const TOKEN_S: f64 = 0.08; // 80 ms per output frame
 const SR: f64 = 16_000.0;
 
-/// ASR_MODELS_DIR, else `asr_models` next to the exe, else %LOCALAPPDATA%\ClearNAI\asr_models.
+/// ASR_MODELS_DIR, else `asr_models` next to the exe, else %LOCALAPPDATA%\ClearSpeak\asr_models.
 pub fn find_models_dir() -> Option<PathBuf> {
     let ok = |d: &Path| BUNDLE_FILES.iter().all(|f| d.join(f).is_file());
     let mut cands: Vec<PathBuf> = Vec::new();
@@ -34,7 +34,7 @@ pub fn find_models_dir() -> Option<PathBuf> {
         }
     }
     if let Some(l) = std::env::var_os("LOCALAPPDATA") {
-        cands.push(PathBuf::from(l).join("ClearNAI").join("asr_models"));
+        cands.push(PathBuf::from(l).join("ClearSpeak").join("asr_models"));
     }
     cands.into_iter().find(|d| ok(d))
 }

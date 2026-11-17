@@ -14,13 +14,13 @@
 //!
 //! Earlier revisions of this module shipped `weya_nc.dll` and the ONNX
 //! model bundle as separate files the user (or a packaging script) had to
-//! place next to `clearnairt.exe`, with a first-run background HTTP
+//! place next to `clearspeakrt.exe`, with a first-run background HTTP
 //! download as a fallback for the model. Real hands-on testing on Windows
 //! found this confusing (a `.dll` isn't runnable and double-clicking it
 //! does nothing useful) and not "production ready" for a single-binary
 //! distribution goal. Both files are now `include_bytes!`-embedded directly
-//! into `clearnairt.exe` at build time (see `app/assets/`) and
-//! self-extracted into `%LOCALAPPDATA%\ClearNAI` on every launch - fast
+//! into `clearspeakrt.exe` at build time (see `app/assets/`) and
+//! self-extracted into `%LOCALAPPDATA%\ClearSpeak` on every launch - fast
 //! (already in memory, just a size check + maybe a file write) enough to do
 //! synchronously with no progress UI needed, and it means the packaged
 //! folder now only needs the one `.exe` for BVC to work at all.
@@ -191,7 +191,7 @@ pub fn check_system_compatibility() -> CompatibilityReport {
 }
 
 /// The directory BVC assets (`weya_nc.dll` and the ONNX model bundle) are
-/// extracted into on every launch: `%LOCALAPPDATA%\ClearNAI` on Windows -
+/// extracted into on every launch: `%LOCALAPPDATA%\ClearSpeak` on Windows -
 /// a per-user, writable-without-admin-rights location that is the
 /// conventional home for this kind of app-managed cache/support data (as
 /// opposed to `%PROGRAMFILES%`, which a non-admin install typically can't
@@ -199,9 +199,9 @@ pub fn check_system_compatibility() -> CompatibilityReport {
 /// moves away from).
 ///
 /// If `LOCALAPPDATA` isn't set (unusual, but not impossible - e.g. a
-/// stripped-down service account), falls back to `%TEMP%\ClearNAI` so the
+/// stripped-down service account), falls back to `%TEMP%\ClearSpeak` so the
 /// app still has *somewhere* writable rather than failing outright; if
-/// even that can't be resolved, falls back to `.\ClearNAI` (relative to
+/// even that can't be resolved, falls back to `.\ClearSpeak` (relative to
 /// the current directory).
 ///
 /// On non-Windows platforms (only ever exercised by `cargo check`/
@@ -220,14 +220,53 @@ pub fn app_data_dir() -> PathBuf {
     #[cfg(not(windows))]
     let base = std::env::temp_dir();
 
-    let dir = base.join("ClearNAI");
+    let dir = base.join("ClearSpeak");
+    move_old_data_dir(&base.join(OLD_NAME), &dir);
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        crate::log_error!("[clearnairt] WARNING: failed to create app data dir {}: {e:#}", dir.display());
+        crate::log_error!("[clearspeakrt] WARNING: failed to create app data dir {}: {e:#}", dir.display());
     }
     dir
 }
 
-/// Where the DLLs and models are loaded from. The installer puts them next to the exe (`C:\Program Files\ClearNAI`),
+/// The product's name before it became ClearSpeak. Only used to find what an older install left behind.
+pub const OLD_NAME: &str = "ClearNAI";
+
+static MIGRATION_NOTE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// What `app_data_dir` did with the folder from before the rename, once, for the log (the move happens before the log
+/// file can be opened, because the log lives in that folder).
+pub fn take_migration_note() -> Option<String> {
+    MIGRATION_NOTE.lock().ok()?.take()
+}
+
+/// First start after the rename: `%LOCALAPPDATA%\ClearNAI` (settings, license, logs, exposure, models) becomes
+/// `%LOCALAPPDATA%\ClearSpeak`, so the agent keeps everything. A rename is atomic, so the window and the engine
+/// starting together cannot both move it. If the rename fails (a file still open), the small files are copied instead.
+pub fn move_old_data_dir(old: &Path, new: &Path) {
+    if new.exists() || !old.is_dir() {
+        return;
+    }
+    let note = match std::fs::rename(old, new) {
+        Ok(()) => format!("[setup] moved {} to {} (renamed product)", old.display(), new.display()),
+        Err(_) if new.exists() => return, // the other process moved it first
+        Err(e) => {
+            let _ = std::fs::create_dir_all(new);
+            let mut copied = 0;
+            for entry in std::fs::read_dir(old).into_iter().flatten().flatten() {
+                let from = entry.path();
+                if from.is_file() && std::fs::copy(&from, new.join(entry.file_name())).is_ok() {
+                    copied += 1;
+                }
+            }
+            format!("[setup] could not move {} ({e}); copied {copied} file(s) to {}", old.display(), new.display())
+        }
+    };
+    if let Ok(mut n) = MIGRATION_NOTE.lock() {
+        *n = Some(note);
+    }
+}
+
+/// Where the DLLs and models are loaded from. The installer puts them next to the exe (`C:\Program Files\ClearSpeak`),
 /// which also works on PCs whose policy blocks programs/DLLs under `%LOCALAPPDATA%`; that folder is read-only for a
 /// normal user, so nothing is extracted or written there. Without that layout (a dev build, the old per-user install)
 /// the files are extracted into `app_data_dir()` as before. Settings, logs and transcripts always use `app_data_dir()`.
@@ -450,8 +489,8 @@ pub fn ensure_bvc_assets_extracted(target_dir: &Path) -> anyhow::Result<Extracti
 //
 // Unlike the Hush bundle (8 MB, `include_bytes!`-embedded), the accent bundle is ~270 MB (a 194 MB encoder, a 27 MB
 // decoder and a 52 MB vocoder, all fp32), far past what can be committed to git or reasonably embedded in the exe.
-// It is shipped as a folder next to `clearnairt.exe` (`app_models/`, see `installer.nsi`) and installed into
-// `%LOCALAPPDATA%\ClearNAI\app_models` the same way the Hush bundle is: a file is only (re)written when its FULL
+// It is shipped as a folder next to `clearspeakrt.exe` (`app_models/`, see `installer.nsi`) and installed into
+// `%LOCALAPPDATA%\ClearSpeak\app_models` the same way the Hush bundle is: a file is only (re)written when its FULL
 // content differs from the shipped one (never a size-only check; see `extract_one_if_needed`'s docs for why).
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -549,6 +588,24 @@ pub fn ensure_accent_models(source: Option<&Path>, target: &Path) -> anyhow::Res
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn old_data_folder_is_moved_once_and_never_over_a_new_one() {
+        let root = std::env::temp_dir().join(format!("clearspeak_migrate_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (old, new) = (root.join("ClearNAI"), root.join("ClearSpeak"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("settings.json"), "{}").unwrap();
+        move_old_data_dir(&old, &new);
+        assert!(new.join("settings.json").is_file() && !old.exists());
+        assert!(take_migration_note().unwrap().contains("moved"));
+
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("settings.json"), "old").unwrap();
+        move_old_data_dir(&old, &new);
+        assert_eq!(std::fs::read_to_string(new.join("settings.json")).unwrap(), "{}", "an existing ClearSpeak folder wins");
+        let _ = std::fs::remove_dir_all(&root);
+    }
     use super::*;
 
     fn fake_bundle(dir: &Path, fill: u8) {
@@ -560,7 +617,7 @@ mod tests {
 
     #[test]
     fn accent_bundle_installs_then_is_idempotent_and_compares_full_content() {
-        let root = std::env::temp_dir().join(format!("clearnai_accent_bundle_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("clearspeak_accent_bundle_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (src, dst) = (root.join("src"), root.join("dst"));
         fake_bundle(&src, 10);
@@ -610,7 +667,7 @@ mod tests {
 
     #[test]
     fn model_bundle_absent_when_no_file_exists() {
-        let dir = std::env::temp_dir().join(format!("clearnai_setup_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clearspeak_setup_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!model_bundle_present(&dir));
         std::fs::remove_dir_all(&dir).ok();
@@ -618,7 +675,7 @@ mod tests {
 
     #[test]
     fn model_bundle_absent_when_file_is_zero_bytes() {
-        let dir = std::env::temp_dir().join(format!("clearnai_setup_test_zero_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clearspeak_setup_test_zero_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(model_bundle_path(&dir), []).unwrap();
         assert!(!model_bundle_present(&dir), "a zero-byte file must not count as present");
@@ -627,7 +684,7 @@ mod tests {
 
     #[test]
     fn model_bundle_absent_when_size_does_not_match_embedded_bytes() {
-        let dir = std::env::temp_dir().join(format!("clearnai_setup_test_wrongsize_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clearspeak_setup_test_wrongsize_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(model_bundle_path(&dir), b"not a real tarball, and the wrong size too").unwrap();
         assert!(!model_bundle_present(&dir), "a size mismatch vs the embedded bytes must not count as present");
@@ -641,7 +698,7 @@ mod tests {
     /// `AlreadyPresent` and leave the wrong bytes in place forever.
     #[test]
     fn extract_one_if_needed_rewrites_a_same_size_but_wrong_content_file() {
-        let dir = std::env::temp_dir().join(format!("clearnai_setup_test_same_size_wrong_content_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clearspeak_setup_test_same_size_wrong_content_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("asset.bin");
 
@@ -664,7 +721,7 @@ mod tests {
 
     #[test]
     fn model_bundle_present_after_real_extraction() {
-        let dir = std::env::temp_dir().join(format!("clearnai_setup_test_present_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clearspeak_setup_test_present_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         ensure_bvc_assets_extracted(&dir).unwrap();
         assert!(model_bundle_present(&dir));
@@ -673,7 +730,7 @@ mod tests {
 
     #[test]
     fn ensure_bvc_assets_extracted_writes_files_matching_embedded_bytes() {
-        let dir = std::env::temp_dir().join(format!("clearnai_setup_test_extract_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clearspeak_setup_test_extract_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let outcome = ensure_bvc_assets_extracted(&dir).expect("extraction into a fresh temp dir must succeed");
@@ -701,7 +758,7 @@ mod tests {
 
     #[test]
     fn ensure_bvc_assets_extracted_is_idempotent_and_does_not_rewrite_correct_files() {
-        let dir = std::env::temp_dir().join(format!("clearnai_setup_test_idempotent_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clearspeak_setup_test_idempotent_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let first = ensure_bvc_assets_extracted(&dir).expect("first extraction must succeed");

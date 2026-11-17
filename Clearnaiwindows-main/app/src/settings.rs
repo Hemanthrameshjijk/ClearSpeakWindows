@@ -5,7 +5,7 @@
 //! Everything in this file is pure, portable Rust (serde + one environment
 //! variable read) - no OS audio calls, so it builds and its tests run
 //! identically on Linux and Windows. Only the *path* it resolves
-//! (`%LOCALAPPDATA%\ClearNAI\settings.json`) is Windows-shaped; on a
+//! (`%LOCALAPPDATA%\ClearSpeak\settings.json`) is Windows-shaped; on a
 //! platform without `LOCALAPPDATA` set, persistence is simply skipped and
 //! defaults are used - never a crash.
 
@@ -150,7 +150,7 @@ pub struct Settings {
     #[serde(default)]
     pub monitor_enabled: bool,
     /// Virtual microphone switched on: the cleaned voice goes to the virtual mic ("Send cleaned audio to" and the
-    /// ClearNAI Microphone driver). Off sends silence there, so meeting apps hear nothing. Default ON (older settings
+    /// ClearSpeak Microphone driver). Off sends silence there, so meeting apps hear nothing. Default ON (older settings
     /// files without this field keep working as before).
     #[serde(default = "default_true")]
     pub virtual_mic_on: bool,
@@ -216,7 +216,7 @@ pub struct Settings {
     /// Dark window theme. Default OFF (light); `#[serde(default)]` keeps older files loading.
     #[serde(default)]
     pub theme_dark: bool,
-    /// Launch ClearNAI at Windows sign-in (HKCU Run key, see `sysutil::set_autostart`). Default OFF.
+    /// Launch ClearSpeak at Windows sign-in (HKCU Run key, see `sysutil::set_autostart`). Default OFF.
     #[serde(default)]
     pub start_with_windows: bool,
     /// Closing the window hides it to a notification-area icon instead of quitting (see `tray.rs`). Default OFF.
@@ -323,13 +323,14 @@ impl Default for Settings {
     }
 }
 
-/// `%LOCALAPPDATA%\ClearNAI\settings.json`, read directly from the
+/// `%LOCALAPPDATA%\ClearSpeak\settings.json`, read directly from the
 /// `LOCALAPPDATA` environment variable. Deliberately not using the `dirs`
 /// crate: one env var read is simpler than an extra dependency for
 /// something this small, and avoids pinning yet another crate version.
 pub fn settings_path() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("ClearNAI").join("settings.json"))
+    // Through `app_data_dir`, so the folder from before the rename is moved first.
+    std::env::var_os("LOCALAPPDATA")?;
+    Some(crate::setup::app_data_dir().join("settings.json"))
 }
 
 /// Loads settings from disk, falling back to `Settings::default()` if the
@@ -350,7 +351,7 @@ pub fn load() -> Settings {
     match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
             crate::log_error!(
-                "[clearnairt] settings file at {} is corrupt/unreadable ({e}); \
+                "[clearspeakrt] settings file at {} is corrupt/unreadable ({e}); \
                  falling back to defaults (your previous selections were not preserved)",
                 path.display()
             );
@@ -359,7 +360,7 @@ pub fn load() -> Settings {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
         Err(e) => {
             crate::log_error!(
-                "[clearnairt] failed to read settings file at {} ({e}); falling back to defaults",
+                "[clearspeakrt] failed to read settings file at {} ({e}); falling back to defaults",
                 path.display()
             );
             Settings::default()
@@ -367,7 +368,7 @@ pub fn load() -> Settings {
     }
 }
 
-/// Persists settings to disk, creating `%LOCALAPPDATA%\ClearNAI\` if needed.
+/// Persists settings to disk, creating `%LOCALAPPDATA%\ClearSpeak\` if needed.
 /// Returns an error (not a panic) if `LOCALAPPDATA` isn't set or the write
 /// fails; callers treat persistence failure as non-fatal (log and continue).
 pub fn save(settings: &Settings) -> anyhow::Result<()> {

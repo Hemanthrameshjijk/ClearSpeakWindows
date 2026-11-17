@@ -11,7 +11,13 @@ fn is_virtual(label: &str) -> bool {
     l.contains("cable") || l.contains("vb-audio") || l.contains("virtual")
 }
 
-/// "CABLE Input (VB-Audio Virtual Cable)" -> "cable output (vb-audio virtual cable)": the other end of the same
+/// Our own virtual microphone driver, under its current name or the one it had before the rename.
+fn is_our_driver(label: &str) -> bool {
+    let l = label.to_ascii_lowercase();
+    l.contains("clearspeak virtual audio device") || l.contains("clearnai virtual audio device")
+}
+
+/// "CABLE Input (VB-Audio Virtual Cable)" ->"cable output (vb-audio virtual cable)": the other end of the same
 /// cable. Whatever we render into one end comes out of the other, so that end must never feed the speaker path.
 fn paired_capture_label(render_label: &str) -> String {
     render_label.to_ascii_lowercase().replacen("input", "output", 1)
@@ -59,14 +65,14 @@ pub fn cable_input_target(devices: &DeviceList) -> Option<DeviceOption> {
     found.next().is_none().then(|| only.clone())
 }
 
-/// "Send cleaned audio to" choices with friendlier names: the ClearNAI driver's render end ("Speakers (ClearNAI
-/// Virtual Audio Device)") is shown as "ClearSpeak Microphone input", since sending there is what feeds the ClearNAI
+/// "Send cleaned audio to" choices with friendlier names: the ClearSpeak driver's render end ("Speakers (ClearSpeak
+/// Virtual Audio Device)") is shown as "ClearSpeak Microphone input", since sending there is what feeds the ClearSpeak
 /// Microphone. Only the label changes; the id (what is saved and used) stays the same.
 pub fn virtual_target_choices(render: &[DeviceOption]) -> Vec<DeviceOption> {
     only_virtual(render, true)
         .into_iter()
         .map(|mut d| {
-            if d.label.to_ascii_lowercase().contains("clearnai virtual audio device") {
+            if is_our_driver(&d.label) {
                 d.label = "ClearSpeak Microphone input".to_string();
             }
             d
@@ -74,9 +80,9 @@ pub fn virtual_target_choices(render: &[DeviceOption]) -> Vec<DeviceOption> {
         .collect()
 }
 
-/// The microphone a meeting app must pick to hear ClearNAI's cleaned voice: the capture end of the same virtual
-/// device the cleaned audio is sent to ("Speakers (ClearNAI Virtual Audio Device)" pairs with
-/// "ClearNAI Microphone (ClearNAI Virtual Audio Device)"; "CABLE Input (VB-Audio Virtual Cable)" with "CABLE Output (...)").
+/// The microphone a meeting app must pick to hear ClearSpeak's cleaned voice: the capture end of the same virtual
+/// device the cleaned audio is sent to ("Speakers (ClearSpeak Virtual Audio Device)" pairs with
+/// "ClearSpeak Microphone (ClearSpeak Virtual Audio Device)"; "CABLE Input (VB-Audio Virtual Cable)" with "CABLE Output (...)").
 pub fn meeting_mic_label(devices: &DeviceList, mic_target_id: &str) -> Option<String> {
     let target = find(&devices.render, mic_target_id)?;
     let start = target.label.rfind(" (")?;
@@ -86,13 +92,13 @@ pub fn meeting_mic_label(devices: &DeviceList, mic_target_id: &str) -> Option<St
     found.next().is_none().then(|| only.label.clone())
 }
 
-/// Where the Default profile sends the cleaned voice: the ClearNAI driver ("ClearSpeak Microphone input") when it is
+/// Where the Default profile sends the cleaned voice: the ClearSpeak driver ("ClearSpeak Microphone input") when it is
 /// installed, otherwise the single VB-CABLE input.
 pub fn preferred_mic_target(devices: &DeviceList) -> Option<DeviceOption> {
     devices
         .render
         .iter()
-        .find(|d| d.label.to_ascii_lowercase().contains("clearnai virtual audio device"))
+        .find(|d| is_our_driver(&d.label))
         .cloned()
         .or_else(|| cable_input_target(devices))
 }
@@ -230,16 +236,16 @@ mod tests {
     #[test]
     fn the_meeting_mic_is_the_other_end_of_the_chosen_virtual_device() {
         let mut l = list();
-        l.render.push(dev("clearnai-out", "Speakers (ClearNAI Virtual Audio Device)"));
-        l.capture.push(dev("clearnai-mic", "ClearNAI Microphone (ClearNAI Virtual Audio Device)"));
-        assert_eq!(meeting_mic_label(&l, "clearnai-out").as_deref(), Some("ClearNAI Microphone (ClearNAI Virtual Audio Device)"));
+        l.render.push(dev("clearspeak-out", "Speakers (ClearSpeak Virtual Audio Device)"));
+        l.capture.push(dev("clearspeak-mic", "ClearSpeak Microphone (ClearSpeak Virtual Audio Device)"));
+        assert_eq!(meeting_mic_label(&l, "clearspeak-out").as_deref(), Some("ClearSpeak Microphone (ClearSpeak Virtual Audio Device)"));
         assert_eq!(meeting_mic_label(&l, "cable-in").as_deref(), Some("CABLE Output (VB-Audio Virtual Cable)"));
         assert_eq!(meeting_mic_label(&l, "missing"), None);
         let choices = virtual_target_choices(&l.render);
-        let ours = choices.iter().find(|d| d.id == "clearnai-out").unwrap();
+        let ours = choices.iter().find(|d| d.id == "clearspeak-out").unwrap();
         assert_eq!(ours.label, "ClearSpeak Microphone input", "renamed for the picker, same id");
         assert!(choices.iter().any(|d| d.label == "CABLE Input (VB-Audio Virtual Cable)"));
-        assert_eq!(preferred_mic_target(&l).map(|d| d.id).as_deref(), Some("clearnai-out"), "ClearNAI driver first");
+        assert_eq!(preferred_mic_target(&l).map(|d| d.id).as_deref(), Some("clearspeak-out"), "ClearSpeak driver first");
         assert_eq!(preferred_mic_target(&list()).map(|d| d.id).as_deref(), Some("cable-in"), "else VB-CABLE");
     }
 
@@ -316,13 +322,13 @@ mod tests {
                 dev("bt-hs-out", "Headset (realme Buds T310)"),
                 dev("realtek-out", "Speakers (Realtek(R) Audio)"),
                 dev("epos-out", "Speakers (EPOS PC 8 USB)"),
-                dev("clearnai-in", "Speakers (ClearNAI Virtual Audio Device)"),
+                dev("clearspeak-in", "Speakers (ClearSpeak Virtual Audio Device)"),
             ],
             capture: vec![
                 dev("bt-mic", "Headset (realme Buds T310)"),
                 dev("realtek-mic", "Microphone Array (Realtek(R) Audio)"),
                 dev("epos-mic", "Microphone (EPOS PC 8 USB)"),
-                dev("clearnai-mic", "Microphone (ClearNAI Virtual Audio Device)"),
+                dev("clearspeak-mic", "Microphone (ClearSpeak Virtual Audio Device)"),
                 dev("cable-out", "CABLE Output (VB-Audio Virtual Cable)"),
             ],
             ..DeviceList::empty()

@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [[bin]]
-# Standalone verification tool - NOT part of the ClearNAI product path.
-# Opens the shared section a running `clearnairt.exe` writes into and
+# Standalone verification tool - NOT part of the ClearSpeak product path.
+# Opens the shared section a running `clearspeakrt.exe` writes into and
 # dumps captured audio to a real WAV file, to prove the cross-process
 # transport works independent of Voicemeeter/any virtual audio driver.
 # See this crate's `src/bin/transport_reader.rs` for what it actually does
@@ -24,7 +24,7 @@ hound = { version = "3.5", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # Named shared-memory section (`CreateFileMappingW`/`MapViewOfFile`) - the
-# same kind of named kernel object a future ClearNAI virtual audio driver
+# same kind of named kernel object a future ClearSpeak virtual audio driver
 # would open from kernel mode (`ZwOpenSection`) to read this side's writes.
 # Portable/no-op on non-Windows so this crate still `cargo check`s there,
 # matching every other crate in this workspace's "portable unless it truly

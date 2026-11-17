@@ -349,7 +349,7 @@ pub enum Message {
     StopVoiceTestPlayback,
     SelectMonitorDevice(DeviceOption),
     /// Re-enumerates devices (e.g. after starting VoiceMeter/VB-Cable
-    /// *after* ClearNAI) without restarting the app. See
+    /// *after* ClearSpeak) without restarting the app. See
     /// `LiveDeviceSwitcher::enumerate_devices`.
     RefreshDevices,
     /// Turns BVC and Studio off (RNNoise is left exactly as it
@@ -784,7 +784,7 @@ fn terminate_process() -> ! {
 
 fn update_inner(screen: &mut Screen, message: Message) {
     if matches!(message, Message::WindowClosed) {
-        crate::log_info!("[clearnairt] window closed");
+        crate::log_info!("[clearspeakrt] window closed");
         terminate_process();
     }
     let transition = match screen {
@@ -875,7 +875,7 @@ fn refresh_alerts(state: &mut MainState) {
     let alerts = crate::ui_logic::alerts(&input);
     for a in &alerts {
         if !state.logged_alerts.contains(&a.key) {
-            crate::log_error!("[clearnairt] ALERT: {}", a.text);
+            crate::log_error!("[clearspeakrt] ALERT: {}", a.text);
             state.logged_alerts.push(a.key);
         }
     }
@@ -883,7 +883,7 @@ fn refresh_alerts(state: &mut MainState) {
     state.logged_alerts.retain(|k| {
         let keep = still.contains(k);
         if !keep {
-            crate::log_info!("[clearnairt] ALERT cleared: {k}");
+            crate::log_info!("[clearspeakrt] ALERT cleared: {k}");
         }
         keep
     });
@@ -1074,7 +1074,7 @@ fn update_main(state: &mut MainState, message: Message) {
         }
         Message::OpenInstallGuide => {
             if let Err(e) = crate::sysutil::open_url("https://vb-audio.com/Cable/") {
-                crate::log_error!("[clearnairt] {e}");
+                crate::log_error!("[clearspeakrt] {e}");
             }
         }
         Message::TranscriptSearch(query) => state.transcript_query = query,
@@ -1110,13 +1110,13 @@ fn update_main(state: &mut MainState, message: Message) {
         Message::ExportLogs => {
             let app_dir = crate::setup::app_data_dir();
             let dest_dir = crate::sysutil::export_dir(&app_dir);
-            state.diag_note = Some(match crate::sysutil::export_log(&app_dir.join("clearnai.log"), &dest_dir) {
+            state.diag_note = Some(match crate::sysutil::export_log(&app_dir.join("clearspeak.log"), &dest_dir) {
                 Ok(path) => {
                     crate::log_info!("[action] log exported");
                     format!("Log exported to {}", path.display())
                 }
                 Err(e) => {
-                    crate::log_error!("[clearnairt] log export failed: {e}");
+                    crate::log_error!("[clearspeakrt] log export failed: {e}");
                     e
                 }
             });
@@ -1724,9 +1724,9 @@ fn view(screen: &Screen) -> Element<'_, Message> {
     }
 }
 
-/// The title-bar / taskbar icon: 64x64 straight-alpha RGBA rendered from the logo (see `assets/clearnai.ico`).
+/// The title-bar / taskbar icon: 64x64 straight-alpha RGBA rendered from the logo (see `assets/clearspeak.ico`).
 fn window_icon() -> Option<iced::window::Icon> {
-    const RGBA: &[u8] = include_bytes!("../assets/clearnai_icon_64.rgba");
+    const RGBA: &[u8] = include_bytes!("../assets/clearspeak_icon_64.rgba");
     iced::window::icon::from_rgba(RGBA.to_vec(), 64, 64).ok()
 }
 

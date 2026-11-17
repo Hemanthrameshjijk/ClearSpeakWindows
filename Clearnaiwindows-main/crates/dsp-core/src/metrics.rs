@@ -4,7 +4,7 @@
 //! never allocates, locks, or does I/O. Percentile computation (which sorts
 //! a snapshot) happens off the audio thread (e.g. a GUI/monitor thread).
 //!
-//! Ported from the reference Linux project's `clearnai-core/src/metrics.rs`
+//! Ported from the reference Linux project's `clearspeak-core/src/metrics.rs`
 //! (`LatencyLog`, `compute_percentiles`, `classify_status`,
 //! `RealtimeStatus`, `FrameCounters`). Field names, the percentile formula,
 //! and the status thresholds (`p95 < deadline` => RealTime, `p99 < 2x

@@ -1,4 +1,4 @@
-//! The link between the background engine (`clearnai-engine.exe`) and the window (`clearnai.exe`).
+//! The link between the background engine (`clearspeak-engine.exe`) and the window (`clearspeak.exe`).
 //!
 //! One named pipe, newline-delimited JSON in both directions. The engine owns the audio, the tray, the hotkey,
 //! autostart and `settings.json`; the window shows what the engine reports and sends it commands. Messages are
@@ -208,11 +208,11 @@ pub fn read_msg<R: BufRead, T: DeserializeOwned>(r: &mut R) -> io::Result<Option
 
 pub fn pipe_name() -> String {
     // Overridable so tests never touch a real engine's pipe.
-    if let Ok(name) = std::env::var("CLEARNAI_PIPE_NAME") {
+    if let Ok(name) = std::env::var("CLEARSPEAK_PIPE_NAME") {
         return name;
     }
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".into());
-    format!(r"\\.\pipe\ClearNAI-engine-{user}")
+    format!(r"\\.\pipe\ClearSpeak-engine-{user}")
 }
 
 #[cfg(windows)]
@@ -392,7 +392,7 @@ mod tests {
     fn real_pipe_carries_messages_both_ways_without_stalling() {
         use std::io::Write;
         use std::time::{Duration, Instant};
-        std::env::set_var("CLEARNAI_PIPE_NAME", format!(r"\\.\pipe\ClearNAI-test-{}", std::process::id()));
+        std::env::set_var("CLEARSPEAK_PIPE_NAME", format!(r"\\.\pipe\ClearSpeak-test-{}", std::process::id()));
         let server = std::thread::spawn(|| {
             let pipe = accept().unwrap();
             let mut reader = PipeReader::new(pipe.try_clone().unwrap());

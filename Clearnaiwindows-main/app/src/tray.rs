@@ -30,13 +30,13 @@ pub fn take_actions() -> Vec<TrayAction> {
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-const ID_OPEN: &str = "clearnai-open";
+const ID_OPEN: &str = "clearspeak-open";
 #[cfg_attr(not(windows), allow(dead_code))]
-const ID_OPEN_FULL: &str = "clearnai-open-full";
+const ID_OPEN_FULL: &str = "clearspeak-open-full";
 #[cfg_attr(not(windows), allow(dead_code))]
-const ID_MUTE: &str = "clearnai-mute";
+const ID_MUTE: &str = "clearspeak-mute";
 #[cfg_attr(not(windows), allow(dead_code))]
-const ID_QUIT: &str = "clearnai-quit";
+const ID_QUIT: &str = "clearspeak-quit";
 
 #[cfg_attr(not(windows), allow(dead_code))]
 fn action_for_menu_id(id: &str) -> Option<TrayAction> {
@@ -49,11 +49,11 @@ fn action_for_menu_id(id: &str) -> Option<TrayAction> {
     }
 }
 
-/// The ClearNAI mark (`assets/clearnai_icon_64.rgba`, 64 x 64 straight-alpha RGBA) scaled to `size` x `size` by box
+/// The ClearSpeak mark (`assets/clearspeak_icon_64.rgba`, 64 x 64 straight-alpha RGBA) scaled to `size` x `size` by box
 /// averaging.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn icon_rgba(size: u32) -> Vec<u8> {
-    const SRC: &[u8] = include_bytes!("../assets/clearnai_icon_64.rgba");
+    const SRC: &[u8] = include_bytes!("../assets/clearspeak_icon_64.rgba");
     const SRC_SIZE: usize = 64;
     let size = size as usize;
     let mut out = vec![0u8; size * size * 4];
@@ -146,7 +146,7 @@ mod win {
         if THREAD_ID.compare_exchange(0, u32::MAX, Ordering::AcqRel, Ordering::Acquire).is_err() {
             return;
         }
-        let spawned = std::thread::Builder::new().name("clearnai-tray".into()).spawn(|| unsafe {
+        let spawned = std::thread::Builder::new().name("clearspeak-tray".into()).spawn(|| unsafe {
             let menu = Menu::new();
             let open = MenuItem::with_id(ID_OPEN, "Quick panel", true, None);
             let open_full = MenuItem::with_id(ID_OPEN_FULL, "Open full window", true, None);
@@ -168,7 +168,7 @@ mod win {
             let tray = match built {
                 Ok(t) => t,
                 Err(e) => {
-                    crate::log_error!("[clearnairt] could not create the tray icon: {e}");
+                    crate::log_error!("[clearspeakrt] could not create the tray icon: {e}");
                     THREAD_ID.store(0, Ordering::Release);
                     return;
                 }
@@ -195,7 +195,7 @@ mod win {
             THREAD_ID.store(0, Ordering::Release);
         });
         if let Err(e) = spawned {
-            crate::log_error!("[clearnairt] could not start the tray thread: {e}");
+            crate::log_error!("[clearspeakrt] could not start the tray thread: {e}");
             THREAD_ID.store(0, Ordering::Release);
         }
     }

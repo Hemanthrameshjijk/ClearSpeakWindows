@@ -1,5 +1,5 @@
 //! Real causal, bounded-state 48kHz<->16kHz (exact 3:1) resampler for the
-//! path between ClearNAI's native 48kHz mic pipeline and the 16kHz ONNX models. A direct port of the already-fixed, verified
+//! path between ClearSpeak's native 48kHz mic pipeline and the 16kHz ONNX models. A direct port of the already-fixed, verified
 //! reference prototype:
 //! - lowpass FIR (causal, windowed-sinc, Hamming window) then decimate by
 //!   3 for downsampling; zero-stuff by 3 then lowpass FIR (gain-

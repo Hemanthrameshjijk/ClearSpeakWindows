@@ -10,12 +10,12 @@ pub const PUBLIC_KEY: [u8; 32] = [
 mod tests {
     use super::*;
 
-    /// End-to-end on this PC: `CLEARNAI_TEST_TOKEN=<token made by licensegen for this PC's Device Code>
-    /// cargo test -p clearnai-app --lib license_key -- --ignored`. Needs PowerShell (reads the real hardware).
+    /// End-to-end on this PC: `CLEARSPEAK_TEST_TOKEN=<token made by licensegen for this PC's Device Code>
+    /// cargo test -p clearspeak-app --lib license_key -- --ignored`. Needs PowerShell (reads the real hardware).
     #[test]
     #[ignore]
     fn a_token_made_for_this_pc_verifies_with_the_built_in_public_key() {
-        let token = std::env::var("CLEARNAI_TEST_TOKEN").expect("set CLEARNAI_TEST_TOKEN");
+        let token = std::env::var("CLEARSPEAK_TEST_TOKEN").expect("set CLEARSPEAK_TEST_TOKEN");
         crate::device_id::start_reading();
         for _ in 0..100 {
             if crate::device_id::components().is_some() {

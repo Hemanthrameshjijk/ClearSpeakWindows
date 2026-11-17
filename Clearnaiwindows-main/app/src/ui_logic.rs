@@ -89,7 +89,7 @@ pub struct Profile {
 
 /// - Default: everything that cleans the microphone on, the transcript off, call audio (and every call-path switch)
 ///   and the monitor off, and the
-///   virtual microphone on the ClearNAI driver (or CABLE Input when only that is there). Accent stays as it is.
+///   virtual microphone on the ClearSpeak driver (or CABLE Input when only that is there). Accent stays as it is.
 /// - Office: quiet room, light touch - noise removal + Hush + Natural studio.
 /// - Busy floor: many people talking nearby - adds the quiet-voice gate, studio off to save CPU.
 /// - Presenting: you are the only voice that matters - noise removal + Hush + a fuller Balanced studio tone.
@@ -292,7 +292,7 @@ pub struct AlertInput {
     pub mic_too_quiet: bool,
     /// The free trial is over and no valid license key is entered.
     pub license_needed: bool,
-    /// The PC's clock is far behind the latest time ClearNAI has seen.
+    /// The PC's clock is far behind the latest time ClearSpeak has seen.
     pub clock_wrong: bool,
     /// Today's listening exposure in percent of the daily limit, when the exposure meter is shown.
     pub exposure_pct: Option<f32>,

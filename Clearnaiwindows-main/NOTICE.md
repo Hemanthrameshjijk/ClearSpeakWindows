@@ -1,6 +1,6 @@
 # Third-party components
 
-ClearNAI is built on the open-source components below. Licence names are the ones published by each project; check
+ClearSpeak is built on the open-source components below. Licence names are the ones published by each project; check
 the project itself for the authoritative text before redistributing.
 
 | Component | Used for | Licence |
@@ -21,4 +21,4 @@ These were not verified in this repository and need a decision from the owner:
 - `weya_nc.dll` (Hush noise model): redistribution terms.
 - Accent conversion models and the transcript (ASR) model: licence and attribution text.
 - VB-CABLE: link users to the vendor's download page instead of bundling it, unless VB-Audio grants permission.
-- The ClearNAI source licence itself (no `LICENSE` file is added here because that is the owner's choice).
+- The ClearSpeak source licence itself (no `LICENSE` file is added here because that is the owner's choice).

@@ -59,24 +59,24 @@ jobs:
           choco install nsis -y --no-progress
           "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Build ClearNAI-Setup.exe installer
+      - name: Build ClearSpeak-Setup.exe installer
         working-directory: app
         run: makensis installer.nsi
 
-      # Two programs: clearnai.exe (the window) and clearnai-engine.exe (the background engine). Keep them in the
+      # Two programs: clearspeak.exe (the window) and clearspeak-engine.exe (the background engine). Keep them in the
       # same folder; the window starts the engine if it is not running.
       - name: Upload raw executables (portable, no install needed)
         uses: actions/upload-artifact@v4
         with:
-          name: clearnai-windows-x64-portable
+          name: clearspeak-windows-x64-portable
           path: |
-            target/release/clearnai.exe
-            target/release/clearnai-engine.exe
+            target/release/clearspeak.exe
+            target/release/clearspeak-engine.exe
           if-no-files-found: error
 
-      - name: Upload ClearNAI-Setup.exe installer
+      - name: Upload ClearSpeak-Setup.exe installer
         uses: actions/upload-artifact@v4
         with:
-          name: ClearNAI-Setup
-          path: target/release/ClearNAI-Setup.exe
+          name: ClearSpeak-Setup
+          path: target/release/ClearSpeak-Setup.exe
           if-no-files-found: error

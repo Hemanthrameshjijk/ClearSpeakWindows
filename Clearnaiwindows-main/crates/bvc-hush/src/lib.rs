@@ -62,8 +62,8 @@
 //! - `weya_nc_session_create`'s `atten_lim_db` is hardcoded to
 //!   `DEFAULT_ATTEN_LIM_DB` (30.0 dB). This value is confirmed, not guessed:
 //!   it matches the reference Linux port's `BvcConfig::default()` in
-//!   `clearnai-bvc/src/registry.rs` (`hush_atten_lim_db: 30.0`) and its CLI
-//!   default in `clearnai-cli/src/main.rs` (`--bvc-atten-lim-db`,
+//!   `clearspeak-bvc/src/registry.rs` (`hush_atten_lim_db: 30.0`) and its CLI
+//!   default in `clearspeak-cli/src/main.rs` (`--bvc-atten-lim-db`,
 //!   `default_value_t = 30.0`). An earlier version of this file used 100.0
 //!   ("unlimited" per upstream's own docs) as an unverified guess; 30.0 is
 //!   the value the reference project actually ships and tunes against.
@@ -71,7 +71,7 @@
 //!
 //! # Documented divergence from the reference project
 //!
-//! The reference Linux port (`clearnai-bvc/src/hush.rs`) fails fast: it
+//! The reference Linux port (`clearspeak-bvc/src/hush.rs`) fails fast: it
 //! calls `weya_nc_get_frame_length()` once at initialization and returns a
 //! hard error if it doesn't equal the expected 480, refusing to run at a
 //! mismatched frame size. This crate deliberately does *not* replicate that
@@ -142,8 +142,8 @@ pub const BPO_V1_MODEL_BUNDLE_FILE_NAME: &str = "bpo_v1_onnx.tar.gz";
 
 /// `atten_lim_db` passed to `weya_nc_session_create`. 30.0 dB, matching the
 /// reference Linux port's confirmed default (`BvcConfig::default()` in
-/// `clearnai-bvc/src/registry.rs`, and the `--bvc-atten-lim-db` CLI flag
-/// default in `clearnai-cli/src/main.rs`). Not to be confused with
+/// `clearspeak-bvc/src/registry.rs`, and the `--bvc-atten-lim-db` CLI flag
+/// default in `clearspeak-cli/src/main.rs`). Not to be confused with
 /// upstream Hush's own "100.0 = unlimited" Python-quickstart default, which
 /// this project's reference deliberately does not use.
 pub const DEFAULT_ATTEN_LIM_DB: f32 = 30.0;

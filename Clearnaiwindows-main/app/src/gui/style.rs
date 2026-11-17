@@ -1,4 +1,4 @@
-//! The ClearNAI look (taken from the product's web page): a cool grey page, white cards with a thin line and 12 px
+//! The ClearSpeak look (taken from the product's web page): a cool grey page, white cards with a thin line and 12 px
 //! corners, a blue accent, soft pill toggles and a calm dark variant. Everything the window draws takes its colours from
 //! [`Tokens`], so light and dark stay consistent.
 

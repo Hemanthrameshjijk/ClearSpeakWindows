@@ -270,7 +270,7 @@ fn render_loop(
     // Playing into the same Bluetooth headset that is the microphone in call mode (the Monitor on the earbuds) can
     // make the headset glitch. The user wants to hear themselves, so it keeps playing; the log only notes it, which
     // explains glitches heard there. Only possible for a render sharing the mic's counters (Monitor, virtual-mic
-    // target); a cable or the ClearNAI device never matches a headset's name.
+    // target); a cable or the ClearSpeak device never matches a headset's name.
     let mut same_headset = false;
     while !stop_flag.load(Ordering::Relaxed) {
         if event_handle.wait_for_event(1000).is_err() {

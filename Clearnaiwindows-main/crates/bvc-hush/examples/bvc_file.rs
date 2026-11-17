@@ -1,6 +1,6 @@
 //! Test helper: runs a raw 48 kHz mono f32le file through Hush BVC the way the mic pipeline does
 //! (480-sample frames). `cargo run --release -p bvc-hush --example bvc_file -- in.f32 out.f32 [hush|bpo_v1] [dll_dir]`
-//! `dll_dir` defaults to %LOCALAPPDATA%\ClearNAI (where the app extracts weya_nc.dll and the model bundles).
+//! `dll_dir` defaults to %LOCALAPPDATA%\ClearSpeak (where the app extracts weya_nc.dll and the model bundles).
 use dsp_core::Stage;
 use std::path::PathBuf;
 
@@ -14,7 +14,7 @@ fn main() {
     let dir = args
         .get(4)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var("LOCALAPPDATA").unwrap()).join("ClearNAI"));
+        .unwrap_or_else(|| PathBuf::from(std::env::var("LOCALAPPDATA").unwrap()).join("ClearSpeak"));
 
     // Experiment knob: BVC_ATTEN_LIM_DB (default 30, what the app uses today).
     let atten: f32 = std::env::var("BVC_ATTEN_LIM_DB").ok().and_then(|v| v.parse().ok()).unwrap_or(bvc_hush::DEFAULT_ATTEN_LIM_DB);

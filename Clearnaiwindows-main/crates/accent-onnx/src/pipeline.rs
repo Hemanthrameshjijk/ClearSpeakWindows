@@ -231,7 +231,7 @@ pub struct AccentConfig {
 }
 
 /// ORT intra-op threads for the accent sessions, chosen from the machine's logical core count so the model never
-/// takes cores the audio threads need. Override: `CLEARNAI_ACCENT_THREADS`.
+/// takes cores the audio threads need. Override: `CLEARSPEAK_ACCENT_THREADS`.
 ///
 /// Above 8 cores this keeps the original rule, measured on a 12-thread PC with the full chain (Hush + Accent +
 /// AutoGain, `accent_bench live`): 4 threads -> mic-thread p99 10.5 ms (over its 10 ms deadline), 2 underruns, +747 ms
@@ -249,7 +249,7 @@ pub fn accent_threads_for_cores(cores: usize) -> usize {
 impl AccentConfig {
     pub fn new(onnxruntime_dll: PathBuf) -> Self {
         let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
-        let threads = std::env::var("CLEARNAI_ACCENT_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| accent_threads_for_cores(cores));
+        let threads = std::env::var("CLEARSPEAK_ACCENT_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| accent_threads_for_cores(cores));
         Self { models_dir: None, onnxruntime_dll, threads, jitter_ms: DEFAULT_JITTER_MS, initial_voice: ACCENT_OFF, prepare_models: None }
     }
 }
@@ -310,7 +310,7 @@ fn start_inner(cfg: Option<AccentConfig>, unavailable_reason: &str) -> (AccentSt
         Some(cfg) => {
             let w_sh = sh.clone();
             let spawned = std::thread::Builder::new()
-                .name("clearnai-accent-worker".into())
+                .name("clearspeak-accent-worker".into())
                 .spawn(move || worker(w_sh, in_cons, out_prod, cfg));
             if let Err(e) = spawned {
                 sh.worker.store(W_FAILED, Relaxed);

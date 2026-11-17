@@ -1,4 +1,4 @@
-//! Dev / pilot tool: makes ClearNAI device-bound tokens without the license server (the server is the normal way).
+//! Dev / pilot tool: makes ClearSpeak device-bound tokens without the license server (the server is the normal way).
 //! Run it on your own PC only; never ship it or commit the secret key. The production signing key lives with the
 //! license server (an encrypted file made by its `scripts/newkey.py`), not here.
 //!

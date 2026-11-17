@@ -1,6 +1,6 @@
 # Virtual audio device setup (real user setup step - not solved by this code)
 
-ClearNAI needs **two distinct virtual audio endpoints** at once, playing two
+ClearSpeak needs **two distinct virtual audio endpoints** at once, playing two
 different roles:
 
 1. **Virtual microphone target.** The engine renders its fully-processed mic
@@ -27,7 +27,7 @@ tell those two data streams apart on a single cable.
   named pairs ("CABLE-A Input"/"CABLE-A Output" and "CABLE-B
   Input"/"CABLE-B Output") in one package.
 
-Then, in ClearNAI's GUI:
+Then, in ClearSpeak's GUI:
 
 - Set **"Virtual mic target"** to one pair's render endpoint (e.g. "CABLE-A
   Input").
@@ -41,7 +41,7 @@ Then, in ClearNAI's GUI:
 
 - `audio-io::devices::find_vb_cable_endpoints()` looks for endpoints whose
   friendly name contains "CABLE Input"/"CABLE Output" (VB-Cable's *default*
-  single-pair naming). ClearNAI's startup logic
+  single-pair naming). ClearSpeak's startup logic
   (`app/src/engine.rs::default_virtual_mic_target`) only **auto-selects** the
   *virtual mic target* when exactly one matching endpoint exists - it never
   guesses between multiple candidates. The *virtual speaker source* is never
@@ -83,7 +83,7 @@ independent virtual cable pair out of one VB-Cable install.
 
 ## Using the virtual mic in a BPO/call-center dialer or softphone
 
-No app-specific integration is needed. ClearNAI forwards its cleaned-up mic
+No app-specific integration is needed. ClearSpeak forwards its cleaned-up mic
 signal into an ordinary WASAPI capture endpoint ("CABLE Output" or
 "CABLE-A/B Output"), so **any softphone/dialer that lets you choose a
 microphone device from a dropdown** (Avaya, Genesys, Five9, RingCentral,

@@ -13,7 +13,7 @@ fn write_now(line: &str) {
     let Some(path) = PATH.get() else { return };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "[{}.{:03}] [ERROR] [clearnairt] {line}", now.as_secs(), now.subsec_millis());
+        let _ = writeln!(f, "[{}.{:03}] [ERROR] [clearspeakrt] {line}", now.as_secs(), now.subsec_millis());
     }
 }
 

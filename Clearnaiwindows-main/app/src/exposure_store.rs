@@ -1,4 +1,4 @@
-//! Keeps today's listening exposure across engine restarts (`%LOCALAPPDATA%\ClearNAI\exposure.json`), and starts a
+//! Keeps today's listening exposure across engine restarts (`%LOCALAPPDATA%\ClearSpeak\exposure.json`), and starts a
 //! new shift after a long break with no call audio. A break, not midnight, so a night shift is counted as one shift.
 
 use serde::{Deserialize, Serialize};

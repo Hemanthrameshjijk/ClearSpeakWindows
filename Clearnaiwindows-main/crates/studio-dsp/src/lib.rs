@@ -1,5 +1,5 @@
 //! "Studio" stage: a hand-rolled EQ / compressor / de-esser / limiter chain
-//! for voice, matching the reference Linux (ClearNAI) signal chain:
+//! for voice, matching the reference Linux (ClearSpeak) signal chain:
 //!
 //! 1. High-pass filter (rumble removal)
 //! 2. 3-band EQ (low shelf, mid peak, high shelf)
@@ -325,7 +325,7 @@ pub enum StudioPreset {
 }
 
 /// Preset DSP parameters per profile, matching the reference Linux
-/// (ClearNAI) `preset_params()` in `chain.rs` exactly (values, not
+/// (ClearSpeak) `preset_params()` in `chain.rs` exactly (values, not
 /// ear-adjacent approximations). Low shelf is fixed at 150Hz and high
 /// shelf fixed at 8000Hz across every preset — only their gains change.
 struct PresetParams {
@@ -432,7 +432,7 @@ impl StudioPreset {
 // ---------------------------------------------------------------------
 
 /// Hand-rolled EQ / compressor / de-esser / limiter chain for a single
-/// mono voice signal, matching the reference Linux (ClearNAI) "Studio"
+/// mono voice signal, matching the reference Linux (ClearSpeak) "Studio"
 /// stage. Allocation-free per `process()` call: all filter/envelope state
 /// lives inline in the struct.
 pub struct StudioStage {

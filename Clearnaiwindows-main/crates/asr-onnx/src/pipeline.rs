@@ -73,7 +73,7 @@ pub struct TranscriptConfig {
 
 impl TranscriptConfig {
     pub fn new(dll: PathBuf) -> Self {
-        let threads = std::env::var("CLEARNAI_ASR_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+        let threads = std::env::var("CLEARSPEAK_ASR_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
         Self { dll, models_dir: None, threads, save_dir: None, initial_enabled: false }
     }
 }
@@ -234,7 +234,7 @@ pub fn start(cfg: TranscriptConfig) -> (TranscriptStage, TranscriptHandle) {
     let sh = Arc::new(new_shared(cfg.initial_enabled));
     let (prod, cons) = RingBuffer::<f32>::new(48_000 * RING_SECONDS);
     let w_sh = sh.clone();
-    if let Err(e) = std::thread::Builder::new().name("clearnai-transcript-worker".into()).spawn(move || worker(w_sh, cons, cfg)) {
+    if let Err(e) = std::thread::Builder::new().name("clearspeak-transcript-worker".into()).spawn(move || worker(w_sh, cons, cfg)) {
         sh.state.store(S_UNAVAILABLE, Relaxed);
         sh.data.lock().unwrap().message = format!("could not start worker thread: {e}");
     }

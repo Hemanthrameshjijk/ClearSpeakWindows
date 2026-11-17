@@ -1,4 +1,4 @@
-//! The window process (`clearnai.exe`): connects to the background engine over the pipe (see `ipc.rs`), and keeps a
+//! The window process (`clearspeak.exe`): connects to the background engine over the pipe (see `ipc.rs`), and keeps a
 //! local *mirror* of the engine's state in an ordinary `EngineHandles`, so the window code reads and flips switches
 //! exactly as it did when the engine lived in the same process.
 //!
@@ -127,13 +127,13 @@ impl LiveDeviceSwitcher for RemoteSwitcher {
 }
 
 fn engine_exe() -> Option<std::path::PathBuf> {
-    std::env::current_exe().ok().map(|me| me.with_file_name("clearnai-engine.exe"))
+    std::env::current_exe().ok().map(|me| me.with_file_name("clearspeak-engine.exe"))
 }
 
 fn start_engine() {
     if let Some(exe) = engine_exe() {
         if let Err(e) = std::process::Command::new(&exe).arg("--background").spawn() {
-            crate::log_error!("[clearnairt] could not start the engine ({}): {e}", exe.display());
+            crate::log_error!("[clearspeakrt] could not start the engine ({}): {e}", exe.display());
         }
     }
 }
@@ -143,7 +143,7 @@ fn connect_with_start(limit: Duration) -> Option<File> {
     if let Ok(f) = ipc::connect() {
         return Some(f);
     }
-    crate::log_info!("[clearnairt] engine not running; starting it");
+    crate::log_info!("[clearspeakrt] engine not running; starting it");
     start_engine();
     let t0 = Instant::now();
     while t0.elapsed() < limit {
@@ -153,7 +153,7 @@ fn connect_with_start(limit: Duration) -> Option<File> {
             return Some(f);
         }
     }
-    crate::log_error!("[clearnairt] engine did not answer within {} s of being started", limit.as_secs());
+    crate::log_error!("[clearspeakrt] engine did not answer within {} s of being started", limit.as_secs());
     None
 }
 
@@ -391,7 +391,7 @@ fn connect_and_mirror() -> Option<Connected> {
     })?;
     if hello.version != ipc::PROTOCOL_VERSION {
         crate::log_error!(
-            "[clearnairt] engine speaks protocol {} but this window speaks {}; reinstall ClearSpeak",
+            "[clearspeakrt] engine speaks protocol {} but this window speaks {}; reinstall ClearSpeak",
             hello.version,
             ipc::PROTOCOL_VERSION
         );
@@ -434,7 +434,7 @@ fn connect_and_mirror() -> Option<Connected> {
     // Reader thread: applies observations, answers device lists, reconnects when the pipe drops.
     {
         let (handles, latest, link) = (handles.clone(), latest.clone(), link.clone());
-        let _ = thread::Builder::new().name("clearnai-engine-link".into()).spawn(move || {
+        let _ = thread::Builder::new().name("clearspeak-engine-link".into()).spawn(move || {
             let mut reader = reader;
             loop {
                 match reader.poll::<ServerMsg>() {
@@ -454,7 +454,7 @@ fn connect_and_mirror() -> Option<Connected> {
                         if link.live.shutdown.load(Ordering::Relaxed) {
                             return;
                         }
-                        crate::log_error!("[clearnairt] lost the connection to the engine; reconnecting");
+                        crate::log_error!("[clearspeakrt] lost the connection to the engine; reconnecting");
                         // Loop until the engine (restarted if needed) answers again.
                         let (file, new_reader) = loop {
                             if let Some(f) = connect_with_start(Duration::from_secs(30)) {
@@ -472,7 +472,7 @@ fn connect_and_mirror() -> Option<Connected> {
                         *latest.lock().unwrap() = None;
                         *link.writer.lock().unwrap() = Some(file);
                         link.live.connected.store(true, Ordering::Relaxed);
-                        crate::log_info!("[clearnairt] reconnected to the engine");
+                        crate::log_info!("[clearspeakrt] reconnected to the engine");
                     }
                 }
             }
@@ -482,7 +482,7 @@ fn connect_and_mirror() -> Option<Connected> {
     // Sync thread: window -> engine for switches, engine -> window for switches changed elsewhere (tray, hotkey).
     {
         let (handles, latest) = (handles.clone(), latest.clone());
-        let _ = thread::Builder::new().name("clearnai-switch-sync".into()).spawn(move || loop {
+        let _ = thread::Builder::new().name("clearspeak-switch-sync".into()).spawn(move || loop {
             thread::sleep(Duration::from_millis(50));
             let snapshot = latest.lock().unwrap().clone();
             sync.step(&handles, snapshot.as_ref());
@@ -517,9 +517,9 @@ extern "system" {
 
 fn show_event_name(mode: ShowMode) -> Vec<u16> {
     let name = match mode {
-        ShowMode::Panel => "Local\\ClearNAI-window-show-panel",
-        ShowMode::Card => "Local\\ClearNAI-window-show-card",
-        ShowMode::Full => "Local\\ClearNAI-window-show-full",
+        ShowMode::Panel => "Local\\ClearSpeak-window-show-panel",
+        ShowMode::Card => "Local\\ClearSpeak-window-show-card",
+        ShowMode::Full => "Local\\ClearSpeak-window-show-full",
     };
     name.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -542,7 +542,7 @@ fn start_show_listener() {
         if h == 0 {
             continue;
         }
-        let _ = thread::Builder::new().name("clearnai-window-show".into()).spawn(move || loop {
+        let _ = thread::Builder::new().name("clearspeak-window-show".into()).spawn(move || loop {
             if unsafe { WaitForSingleObject(h, 0xFFFF_FFFF) } == 0 {
                 SHOW_REQUESTED.store(code, Ordering::Relaxed);
             }
@@ -550,25 +550,28 @@ fn start_show_listener() {
     }
 }
 
-/// Entry point of `clearnai.exe`.
+/// Entry point of `clearspeak.exe`.
 pub fn run_window() -> iced::Result {
-    if crate::host::another_instance_running("Local\\ClearNAI-window") {
+    if crate::host::another_instance_running("Local\\ClearSpeak-window") {
         signal_existing_window(launch_mode().unwrap_or(ShowMode::Card));
         return Ok(());
     }
-    crate::logging::init_named(&crate::setup::app_data_dir(), "clearnai-window.log");
-    crate::crash::install(&crate::setup::app_data_dir(), "clearnai-window.log");
+    crate::logging::init_named(&crate::setup::app_data_dir(), "clearspeak-window.log");
+    crate::crash::install(&crate::setup::app_data_dir(), "clearspeak-window.log");
     start_show_listener();
+    if let Some(note) = crate::setup::take_migration_note() {
+        crate::log_info!("{note}");
+    }
     crate::log_info!(
-        "[clearnairt] window starting: ClearSpeak {} (build {}), mode {:?}",
+        "[clearspeakrt] window starting: ClearSpeak {} (build {}), mode {:?}",
         env!("CARGO_PKG_VERSION"),
-        env!("CLEARNAI_GIT_COMMIT"),
+        env!("CLEARSPEAK_GIT_COMMIT"),
         launch_mode()
     );
 
     let t0 = Instant::now();
     let Some(connected) = connect_and_mirror() else {
-        crate::log_error!("[clearnairt] could not reach the ClearNAI engine (gave up after {} s)", t0.elapsed().as_secs());
+        crate::log_error!("[clearspeakrt] could not reach the ClearSpeak engine (gave up after {} s)", t0.elapsed().as_secs());
         return Ok(());
     };
     crate::log_info!("[startup] window connected to the engine in {} ms", t0.elapsed().as_millis());

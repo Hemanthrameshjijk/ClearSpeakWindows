@@ -199,7 +199,7 @@ pub fn load_bundled_deep_filter() -> Result<DeepFilterEngine> {
     // entirely rather than relying on call ordering to stay safe.
     static CALL_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let call_id = CALL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("clearnai-deepfilternet3-onnx-{}-{call_id}.tar.gz", std::process::id()));
+    let path = std::env::temp_dir().join(format!("clearspeak-deepfilternet3-onnx-{}-{call_id}.tar.gz", std::process::id()));
     std::fs::write(&path, BUNDLED_MODEL_TAR_GZ)
         .with_context(|| format!("extracting bundled DeepFilterNet model to {}", path.display()))?;
     let result = DeepFilterEngine::new(&path);

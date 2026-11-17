@@ -2,13 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug clearnairt",
+      "name": "Debug clearspeakrt",
       "type": "lldb",
       "request": "launch",
       "cargo": {
-        "args": ["build", "-p", "clearnai-app"],
+        "args": ["build", "-p", "clearspeak-app"],
         "filter": {
-          "name": "clearnairt",
+          "name": "clearspeakrt",
           "kind": "bin"
         }
       },

@@ -1,13 +1,13 @@
-//! Connection to the ClearNAI virtual audio driver (the separate `ClearnaiWindows-Diver` project).
+//! Connection to the ClearSpeak virtual audio driver (the separate `ClearnaiWindows-Diver` project).
 //!
 //! Additive and removable: the mic pipeline hands each final processed frame to a [`DriverSink`], which forwards it
-//! to the driver's control device `\\.\ClearNAIPipe` from its own thread, so the real-time audio thread never makes a
-//! system call. Apps then pick "ClearNAI Microphone" as their input. If the driver is not installed the sink just
+//! to the driver's control device `\\.\ClearSpeakPipe` from its own thread, so the real-time audio thread never makes a
+//! system call. Apps then pick "ClearSpeak Microphone" as their input. If the driver is not installed the sink just
 //! keeps retrying once a second and drops the frames; nothing else in the app is affected (the VB-CABLE route keeps
 //! working as before).
 //!
-//! Wire contract (must match `driver/ClearNAI/sysvad/EndpointsCommon/clearnaipipe.h` in the driver project):
-//! `IOCTL_CLEARNAI_WRITE` takes PCM16, mono, 48 kHz, at most 100 ms per call.
+//! Wire contract (must match `driver/ClearSpeak/sysvad/EndpointsCommon/clearspeakpipe.h` in the driver project):
+//! `IOCTL_CLEARSPEAK_WRITE` takes PCM16, mono, 48 kHz, at most 100 ms per call.
 //!
 //! To remove this connection: delete this file, the `pub mod driver_pipe;` line in `lib.rs`, the extra `windows`
 //! features in `Cargo.toml`, and the three `driver_pipe` references in `engine.rs`
@@ -29,7 +29,7 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::System::IO::DeviceIoControl;
 
 /// CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_WRITE_DATA).
-const IOCTL_CLEARNAI_WRITE: u32 = (0x22 << 16) | (2 << 14) | (0x800 << 2);
+const IOCTL_CLEARSPEAK_WRITE: u32 = (0x22 << 16) | (2 << 14) | (0x800 << 2);
 
 /// Frames of headroom between the pipeline thread and the sender thread (~0.5 s).
 const QUEUE_SECONDS: f32 = 0.5;
@@ -56,7 +56,7 @@ impl DriverSink {
         let (t_stop, t_connected, t_dropped) = (stop.clone(), connected.clone(), dropped.clone());
 
         let handle = thread::Builder::new()
-            .name("clearnai-driver-pipe".into())
+            .name("clearspeak-driver-pipe".into())
             .spawn(move || {
                 let mut device: Option<HANDLE> = None;
                 let mut last_try = Instant::now() - Duration::from_secs(10);
@@ -69,7 +69,7 @@ impl DriverSink {
                         let lost = t_dropped.swap(0, Ordering::Relaxed);
                         if device.is_some() || sent > 0 {
                             crate::log_info!(
-                                "[driver] last {}s: {sent} frames sent to ClearNAI Microphone, {failed} write errors, {lost} dropped (queue full), loudest {:.1} dBFS",
+                                "[driver] last {}s: {sent} frames sent to ClearSpeak Microphone, {failed} write errors, {lost} dropped (queue full), loudest {:.1} dBFS",
                                 SUMMARY_EVERY.as_secs(),
                                 if peak <= 0 { -120.0 } else { 20.0 * (peak as f32 / 32767.0).log10() }
                             );
@@ -92,9 +92,9 @@ impl DriverSink {
                         if device.is_some() {
                             t_connected.store(true, Ordering::Relaxed);
                             told_missing = false;
-                            crate::log_info!("[driver] connected to the ClearNAI virtual microphone driver");
+                            crate::log_info!("[driver] connected to the ClearSpeak virtual microphone driver");
                         } else if !std::mem::replace(&mut told_missing, true) {
-                            crate::log_info!("[driver] ClearNAI virtual microphone driver not found (not installed or not loaded); retrying every second");
+                            crate::log_info!("[driver] ClearSpeak virtual microphone driver not found (not installed or not loaded); retrying every second");
                         }
                     }
                     if let Some(h) = device {
@@ -107,7 +107,7 @@ impl DriverSink {
                             }
                             device = None;
                             t_connected.store(false, Ordering::Relaxed);
-                            crate::log_error!("[driver] write to the ClearNAI virtual microphone driver failed; reconnecting");
+                            crate::log_error!("[driver] write to the ClearSpeak virtual microphone driver failed; reconnecting");
                         }
                     }
                 }
@@ -150,9 +150,14 @@ impl Drop for DriverSink {
 }
 
 fn open_device() -> Option<HANDLE> {
+    // A driver installed before the rename still uses the old device name.
+    open_named(w!("\\\\.\\ClearSpeakPipe")).or_else(|| open_named(w!("\\\\.\\ClearNAIPipe")))
+}
+
+fn open_named(name: windows::core::PCWSTR) -> Option<HANDLE> {
     unsafe {
         CreateFileW(
-            w!("\\\\.\\ClearNAIPipe"),
+            name,
             GENERIC_WRITE.0,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
@@ -169,7 +174,7 @@ fn write_frame(h: HANDLE, pcm: &[i16]) -> bool {
     unsafe {
         DeviceIoControl(
             h,
-            IOCTL_CLEARNAI_WRITE,
+            IOCTL_CLEARSPEAK_WRITE,
             Some(pcm.as_ptr() as *const _),
             (pcm.len() * 2) as u32,
             None,

@@ -103,7 +103,7 @@ pub fn log_session_header(settings: &Settings, devices: &DeviceList) {
     crate::log_info!(
         "[session] ClearSpeak {} (build {}{}), {}, {} logical cores",
         env!("CARGO_PKG_VERSION"),
-        env!("CLEARNAI_GIT_COMMIT"),
+        env!("CLEARSPEAK_GIT_COMMIT"),
         if cfg!(feature = "dev-code") { ", test build" } else { "" },
         windows_version(),
         std::thread::available_parallelism().map_or(0, |n| n.get())

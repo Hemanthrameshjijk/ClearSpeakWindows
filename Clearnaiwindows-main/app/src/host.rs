@@ -1,5 +1,5 @@
-//! The background engine process (`clearnai-engine.exe`): audio pipelines, tray icon, mute hotkey, autostart,
-//! settings, and the pipe the window (`clearnai.exe`) connects to. It has no window of its own, so closing the window
+//! The background engine process (`clearspeak-engine.exe`): audio pipelines, tray icon, mute hotkey, autostart,
+//! settings, and the pipe the window (`clearspeak.exe`) connects to. It has no window of its own, so closing the window
 //! never interrupts the audio. See `ipc.rs` for the messages.
 
 use std::fs::File;
@@ -41,11 +41,11 @@ pub fn bootstrap(settings: &settings::Settings) -> Booted {
     // used to play the user's own voice out of the speakers).
     let resolved = device_rules::resolve(settings, &devices, engine::default_virtual_mic_target(&devices));
     for note in &resolved.notes {
-        crate::log_info!("[clearnairt] devices: {note}");
+        crate::log_info!("[clearspeakrt] devices: {note}");
     }
     if resolved.changed {
         if let Err(e) = settings::save(&resolved.settings) {
-            crate::log_error!("[clearnairt] failed to save corrected device settings: {e:#}");
+            crate::log_error!("[clearspeakrt] failed to save corrected device settings: {e:#}");
         }
     }
     let mic_target = resolved.mic_target.clone();
@@ -85,7 +85,7 @@ pub fn bootstrap(settings: &settings::Settings) -> Booted {
     } {
         Ok(()) => None,
         Err(e) => {
-            crate::log_error!("[clearnairt] WARNING: failed to extract embedded BVC assets: {e:#}");
+            crate::log_error!("[clearspeakrt] WARNING: failed to extract embedded BVC assets: {e:#}");
             Some(format!("{e:#}"))
         }
     };
@@ -111,7 +111,7 @@ pub fn bootstrap(settings: &settings::Settings) -> Booted {
             bvc_extraction_error,
         },
         Err(e) => {
-            crate::log_error!("[clearnairt] FATAL: failed to start audio engine: {e:#}");
+            crate::log_error!("[clearspeakrt] FATAL: failed to start audio engine: {e:#}");
             // Still bring up the GUI rather than exiting silently: an inert
             // engine handle set makes the failure visible (status stays
             // Bypass, no audio flows) instead of the whole app vanishing
@@ -299,10 +299,10 @@ impl Host {
             }
             ClientMsg::SaveSettings(new) => {
                 if let Err(e) = crate::sysutil::set_autostart(new.start_with_windows) {
-                    crate::log_error!("[clearnairt] {e}");
+                    crate::log_error!("[clearspeakrt] {e}");
                 }
                 if let Err(e) = settings::save(&new) {
-                    crate::log_error!("[clearnairt] failed to persist settings: {e:#}");
+                    crate::log_error!("[clearspeakrt] failed to persist settings: {e:#}");
                 }
                 let mut current = self.settings.lock().unwrap();
                 for change in crate::diag::settings_diff(&current, &new) {
@@ -314,7 +314,7 @@ impl Host {
                 crate::log_info!("[action] {}: {}", crate::diag::role_name(r), id.as_deref().unwrap_or("(none / Windows default)"));
                 // Opening a device and joining the old worker can take a while: never on the pipe thread.
                 let sw = h.device_switcher.clone();
-                let _ = thread::Builder::new().name("clearnai-device-switch".into()).spawn(move || match r {
+                let _ = thread::Builder::new().name("clearspeak-device-switch".into()).spawn(move || match r {
                     role::PHYSICAL_MIC => sw.set_physical_mic(id),
                     role::VIRTUAL_MIC_TARGET => sw.set_virtual_mic_target(id),
                     role::VIRTUAL_SPEAKER_SOURCE => sw.set_virtual_speaker_source(id),
@@ -327,7 +327,7 @@ impl Host {
                 crate::log_info!("[action] refresh devices");
                 let this = self.clone();
                 let writer = writer.clone();
-                let _ = thread::Builder::new().name("clearnai-device-refresh".into()).spawn(move || {
+                let _ = thread::Builder::new().name("clearspeak-device-refresh".into()).spawn(move || {
                     let list = this.handles.device_switcher.enumerate_devices();
                     let _ = send(&writer, &ServerMsg::Devices(list));
                 });
@@ -353,7 +353,7 @@ impl Host {
 
     /// Tells every window to close, then ends the process at once (see `sysutil::terminate_process`).
     fn quit(&self) -> ! {
-        crate::log_info!("[clearnairt] engine quitting");
+        crate::log_info!("[clearspeakrt] engine quitting");
         for w in self.writers.lock().unwrap().iter() {
             let _ = send(w, &ServerMsg::Shutdown);
         }
@@ -372,18 +372,18 @@ fn send(writer: &SharedWriter, msg: &ServerMsg) -> std::io::Result<()> {
     w.flush()
 }
 
-/// Starts the window (`clearnai.exe` next to this exe). If it is already open, the new copy just brings the existing
+/// Starts the window (`clearspeak.exe` next to this exe). If it is already open, the new copy just brings the existing
 /// window to the front and exits.
 fn open_window(mode: ipc::ShowMode) {
     let Ok(me) = std::env::current_exe() else { return };
-    let ui = me.with_file_name("clearnai.exe");
+    let ui = me.with_file_name("clearspeak.exe");
     let arg = match mode {
         ipc::ShowMode::Panel => "--panel",
         ipc::ShowMode::Card => "--card",
         ipc::ShowMode::Full => "--full",
     };
     if let Err(e) = std::process::Command::new(&ui).arg(arg).spawn() {
-        crate::log_error!("[clearnairt] could not open the window ({}): {e}", ui.display());
+        crate::log_error!("[clearspeakrt] could not open the window ({}): {e}", ui.display());
     }
 }
 
@@ -394,12 +394,12 @@ fn serve(host: Arc<Host>, pipe: File) {
         return;
     }
     host.writers.lock().unwrap().push(writer.clone());
-    crate::log_info!("[clearnairt] window connected");
+    crate::log_info!("[clearspeakrt] window connected");
 
     let alive = Arc::new(AtomicBool::new(true));
     {
         let (host, writer, alive) = (host.clone(), writer.clone(), alive.clone());
-        let _ = thread::Builder::new().name("clearnai-status".into()).spawn(move || {
+        let _ = thread::Builder::new().name("clearspeak-status".into()).spawn(move || {
             let mut tx = TxState::default();
             while alive.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(250));
@@ -422,7 +422,7 @@ fn serve(host: Arc<Host>, pipe: File) {
     }
     alive.store(false, Ordering::Relaxed);
     host.writers.lock().unwrap().retain(|w| !Arc::ptr_eq(w, &writer));
-    crate::log_info!("[clearnairt] window disconnected");
+    crate::log_info!("[clearspeakrt] window disconnected");
 }
 
 fn toggle_mute(host: &Host) {
@@ -458,6 +458,35 @@ fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor) {
 /// The engine side of the listening-exposure meter: restores the shift at start-up, feeds the speaker pipeline the
 /// current ear offset (headset rating + Windows volume) once a second, saves every minute and starts a new shift
 /// after a long break.
+/// Every switch and setting, for the per-call log (`call_log`).
+fn call_features(h: &EngineHandles) -> Vec<crate::call_log::Feature> {
+    use crate::call_log::Feature;
+    let mut f: Vec<Feature> =
+        h.toggles().iter().zip(crate::diag::TOGGLE_NAMES).map(|(t, name)| Feature::switch(name, t.is_on())).collect();
+    f.extend(h.presets().iter().zip(crate::diag::PRESET_NAMES).map(|(p, name)| Feature::value(name, p.load().to_string())));
+    let voice = h.accent.voice();
+    f.push(Feature::switch("accent", voice > 0));
+    let voice_name = match voice {
+        0 => "off",
+        v => accent_onnx::VOICE_NAMES.get(v as usize - 1).copied().unwrap_or("?"),
+    };
+    f.push(Feature::value("accent voice", voice_name));
+    f.push(Feature::value("accent state", format!("{:?}", h.accent.status().state)));
+    f.push(Feature::switch("transcript", h.transcript.enabled()));
+    f.push(Feature::switch("Bluetooth call mode", h.counters.hands_free.load(Ordering::Relaxed)));
+    f.push(Feature::value("microphone", h.counters.capture_device.lock().map(|d| d.clone()).unwrap_or_default()));
+    f
+}
+
+/// Figures printed only at the start and the end of a call.
+fn call_stats(h: &EngineHandles) -> String {
+    format!(
+        "listening exposure today {:.0}%, {} loud sound(s) blocked today",
+        h.exposure.dose_pct.load(),
+        h.exposure.shocks.load(Ordering::Relaxed)
+    )
+}
+
 struct ExposureTick {
     last_volume: Option<audio_io::volume::OutputVolume>,
 }
@@ -526,28 +555,31 @@ impl ExposureTick {
     }
 }
 
-/// Entry point of `clearnai-engine.exe`. Never returns.
+/// Entry point of `clearspeak-engine.exe`. Never returns.
 pub fn run_engine() {
-    if another_instance_running("Local\\ClearNAI-engine") {
+    if another_instance_running("Local\\ClearSpeak-engine") {
         return;
     }
     // Must happen before anything that touches WASAPI on this thread (see `audio_io::initialize_com_for_this_thread`).
     audio_io::initialize_com_for_this_thread();
     crate::logging::init(&setup::app_data_dir());
-    crate::crash::install(&setup::app_data_dir(), "clearnai.log");
+    crate::crash::install(&setup::app_data_dir(), "clearspeak.log");
     // audio-io reports everything through one channel; route its informational notes to INFO so the log's ERROR
     // lines are real errors only.
     audio_io::set_error_sink(|msg| match msg.split_once("] INFO: ") {
         Some((_, note)) => crate::log_info!("[audio-io] {note}"),
         None => crate::log_error!("{msg}"),
     });
-    crate::log_info!("[clearnairt] engine starting");
+    crate::log_info!("[clearspeakrt] engine starting");
+    if let Some(note) = setup::take_migration_note() {
+        crate::log_info!("{note}");
+    }
 
     let saved = settings::load();
     let booted = bootstrap(&saved);
     crate::diag::log_session_header(&booted.settings, &booted.devices);
     if let Err(e) = crate::sysutil::set_autostart(booted.settings.start_with_windows) {
-        crate::log_error!("[clearnairt] {e}");
+        crate::log_error!("[clearspeakrt] {e}");
     }
     crate::sysutil::start_mute_hotkey();
     crate::tray::start();
@@ -566,7 +598,7 @@ pub fn run_engine() {
     {
         let host = host.clone();
         crate::device_id::start_reading();
-        let _ = thread::Builder::new().name("clearnai-license-gate".into()).spawn(move || {
+        let _ = thread::Builder::new().name("clearspeak-license-gate".into()).spawn(move || {
             let mut last_logged = String::new();
             loop {
                 thread::sleep(Duration::from_secs(5));
@@ -592,11 +624,12 @@ pub fn run_engine() {
     // with no window open.
     {
         let host = host.clone();
-        let _ = thread::Builder::new().name("clearnai-engine-ui-events".into()).spawn(move || {
+        let _ = thread::Builder::new().name("clearspeak-engine-ui-events".into()).spawn(move || {
             let mut cpu = crate::sysutil::CpuSampler::new();
             let mut ticks = 0u32;
             let mut exposure = ExposureTick::start(&host.handles);
             let mut governor = crate::perf_governor::Governor::new();
+            let mut calls = crate::call_log::CallTracker::default();
             let mut watch = crate::diag::StateWatch::default();
             let (mut cpu_sum, mut cpu_max, mut cpu_n) = (0.0f32, 0.0f32, 0u32);
             loop {
@@ -606,7 +639,12 @@ pub fn run_engine() {
                         crate::tray::TrayAction::Open => open_window(ipc::ShowMode::Panel),
                         crate::tray::TrayAction::OpenFull => open_window(ipc::ShowMode::Full),
                         crate::tray::TrayAction::ToggleMute => toggle_mute(&host),
-                        crate::tray::TrayAction::Quit => host.quit(),
+                        crate::tray::TrayAction::Quit => {
+                            for line in calls.end(&call_stats(&host.handles)) {
+                                crate::log_info!("{line}");
+                            }
+                            host.quit()
+                        }
                     }
                 }
                 if crate::sysutil::take_hotkey_pressed() {
@@ -620,6 +658,10 @@ pub fn run_engine() {
                     let settings = host.settings.lock().unwrap().clone();
                     exposure.second(&host.handles, &settings, ticks % 600 == 0);
                     perf_second(&host.handles, &mut governor);
+                    let apps = crate::call_log::mic_users();
+                    for line in calls.tick(&apps, call_features(&host.handles), &call_stats(&host.handles)) {
+                        crate::log_info!("{line}");
+                    }
                 }
                 if ticks % 10 == 0 {
                     if let Some(p) = cpu.sample() {
@@ -651,10 +693,10 @@ pub fn run_engine() {
         match ipc::accept() {
             Ok(pipe) => {
                 let host = host.clone();
-                let _ = thread::Builder::new().name("clearnai-client".into()).spawn(move || serve(host, pipe));
+                let _ = thread::Builder::new().name("clearspeak-client".into()).spawn(move || serve(host, pipe));
             }
             Err(e) => {
-                crate::log_error!("[clearnairt] pipe accept failed: {e}");
+                crate::log_error!("[clearspeakrt] pipe accept failed: {e}");
                 thread::sleep(Duration::from_secs(1));
             }
         }

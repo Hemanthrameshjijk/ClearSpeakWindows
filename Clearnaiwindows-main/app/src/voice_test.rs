@@ -1,9 +1,9 @@
 //! "Test my voice": record 20 seconds from the microphone, then play the same recording back as the original and as
 //! each feature would make it sound (noise removed, voices removed, accent, all together), with what was said.
 //!
-//! The work runs in a helper process (`clearnai-engine.exe --voice-test`) so the live call audio in the engine is never
+//! The work runs in a helper process (`clearspeak-engine.exe --voice-test`) so the live call audio in the engine is never
 //! touched: the helper opens the microphone itself (shared mode, next to the engine), loads its own copies of the models,
-//! writes WAV files and a transcript per version into `%LOCALAPPDATA%\ClearNAI\voice_test`, and exits (freeing the
+//! writes WAV files and a transcript per version into `%LOCALAPPDATA%\ClearSpeak\voice_test`, and exits (freeing the
 //! memory). The window starts it, reads `progress.json` / `result.json` on its tick, and plays the files.
 //!
 //! The versions use the same stages, order and settings as the live mic path (`engine::spawn_mic_pipeline`): mic boost,
@@ -139,7 +139,7 @@ pub fn start() -> Result<(), String> {
     write_json(&progress_path(), &Progress::default());
     let exe = std::env::current_exe()
         .map_err(|e| e.to_string())?
-        .with_file_name("clearnai-engine.exe");
+        .with_file_name("clearspeak-engine.exe");
     std::process::Command::new(&exe)
         .arg("--voice-test")
         .spawn()
@@ -209,11 +209,11 @@ fn fail(p: &mut Progress, msg: String) {
     });
 }
 
-/// Entry point of `clearnai-engine.exe --voice-test`. Returns when the files are written (or on failure).
+/// Entry point of `clearspeak-engine.exe --voice-test`. Returns when the files are written (or on failure).
 pub fn run_helper() {
     let app = crate::setup::app_data_dir();
-    crate::logging::init_named(&app, "clearnai-voicetest.log");
-    crate::crash::install(&app, "clearnai-voicetest.log");
+    crate::logging::init_named(&app, "clearspeak-voicetest.log");
+    crate::crash::install(&app, "clearspeak-voicetest.log");
     audio_io::initialize_com_for_this_thread();
     audio_io::set_error_sink(|msg| match msg.split_once("] INFO: ") {
         Some((_, note)) => crate::log_info!("[audio-io] {note}"),
@@ -221,7 +221,7 @@ pub fn run_helper() {
     });
     let _ = std::fs::create_dir_all(dir());
     let mut p = Progress::default();
-    if crate::host::another_instance_running("Local\\ClearNAI-voice-test") {
+    if crate::host::another_instance_running("Local\\ClearSpeak-voice-test") {
         return fail(&mut p, "A voice test is already running. Wait for it to finish and try again.".into());
     }
     let settings = crate::settings::load();
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn wav_header_is_valid() {
-        let p = std::env::temp_dir().join(format!("clearnai-vt-{}.wav", std::process::id()));
+        let p = std::env::temp_dir().join(format!("clearspeak-vt-{}.wav", std::process::id()));
         write_wav(&p, &[0.0, 0.5, -0.5]).unwrap();
         let b = std::fs::read(&p).unwrap();
         assert_eq!(&b[..4], b"RIFF");

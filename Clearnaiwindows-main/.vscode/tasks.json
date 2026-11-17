@@ -5,7 +5,7 @@
       "label": "cargo build (debug)",
       "type": "shell",
       "command": "cargo",
-      "args": ["build", "-p", "clearnai-app"],
+      "args": ["build", "-p", "clearspeak-app"],
       "group": { "kind": "build", "isDefault": true },
       "problemMatcher": ["$rustc"]
     },
@@ -13,7 +13,7 @@
       "label": "cargo build (release)",
       "type": "shell",
       "command": "cargo",
-      "args": ["build", "--release", "-p", "clearnai-app"],
+      "args": ["build", "--release", "-p", "clearspeak-app"],
       "group": "build",
       "problemMatcher": ["$rustc"]
     }

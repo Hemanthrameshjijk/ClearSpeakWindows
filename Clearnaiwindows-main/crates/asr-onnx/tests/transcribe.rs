@@ -1,6 +1,6 @@
 //! Golden check against the Python reference (`tools/make_golden.py`): log-mel features and the decoded text of the
 //! 5 s accent test clip. The model test needs the model folder (ASR_MODELS_DIR, asr_models next to the exe, or
-//! %LOCALAPPDATA%\ClearNAI\asr_models) and onnxruntime.dll; without them it skips with a message.
+//! %LOCALAPPDATA%\ClearSpeak\asr_models) and onnxruntime.dll; without them it skips with a message.
 
 use asr_onnx::features::Features;
 use std::path::Path;
