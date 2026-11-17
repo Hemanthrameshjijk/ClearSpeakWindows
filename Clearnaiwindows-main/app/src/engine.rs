@@ -285,7 +285,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
         match device_id {
             Some(id) => {
                 let (producer, consumer) = make_ring_buffer(2.0);
-                match HardwareRender::start_on_device_id(&id, consumer, self.counters.clone()) {
+                match HardwareRender::start_on_device_id_or_default(&id, consumer, self.counters.clone()) {
                     Ok(render) => {
                         *self.monitor_out_swap.lock().unwrap() = Some(producer);
                         Self::stop_and_replace_render(&self.monitor_render, Some(render));
@@ -791,7 +791,7 @@ pub fn start(
     let (monitor_render, monitor_out_p) = match monitor_id {
         Some(id) => {
             let (p, c) = make_ring_buffer(2.0);
-            match HardwareRender::start_on_device_id(id, c, handles.counters.clone()) {
+            match HardwareRender::start_on_device_id_or_default(id, c, handles.counters.clone()) {
                 Ok(render) => (Some(render), Some(p)),
                 Err(e) => {
                     // Exactly as graceful as the "no virtual mic target

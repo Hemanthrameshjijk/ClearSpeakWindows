@@ -46,7 +46,7 @@ impl HardwareRender {
         // Checked once here so "there is no default render device at all" is
         // still reported to the caller as an error.
         default_render_device()?;
-        Self::spawn(RenderTarget::Default, consumer, counters)
+        Self::spawn(RenderTarget::Default, consumer, counters, false)
     }
 
     /// Opens the render device whose friendly name contains `name_substr`
@@ -65,10 +65,18 @@ impl HardwareRender {
     /// specifically into "CABLE Input" rather than whatever the OS default
     /// happens to be.
     pub fn start_on_device_id(device_id: &str, consumer: Consumer<f32>, counters: Arc<FrameCounters>) -> Result<Self> {
-        Self::spawn(RenderTarget::Id(device_id.to_string()), consumer, counters)
+        Self::spawn(RenderTarget::Id(device_id.to_string()), consumer, counters, false)
     }
 
-    fn spawn(target: RenderTarget, consumer: Consumer<f32>, counters: Arc<FrameCounters>) -> Result<Self> {
+    /// Like `start_on_device_id`, but while that device is not connected it plays on the Windows default output
+    /// instead (or the first real output when the default is a virtual device), and goes back to the chosen device
+    /// when it returns. For listening paths like the Monitor, where some sound beats silence. Never for the
+    /// virtual-mic target.
+    pub fn start_on_device_id_or_default(device_id: &str, consumer: Consumer<f32>, counters: Arc<FrameCounters>) -> Result<Self> {
+        Self::spawn(RenderTarget::Id(device_id.to_string()), consumer, counters, true)
+    }
+
+    fn spawn(target: RenderTarget, consumer: Consumer<f32>, counters: Arc<FrameCounters>, allow_fallback: bool) -> Result<Self> {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let thread_stop = stop_flag.clone();
 
@@ -97,7 +105,7 @@ impl HardwareRender {
                 let mut failed_attempts: u32 = 0;
                 while !thread_stop.load(Ordering::Relaxed) {
                     let mut streaming = false;
-                    let result = render_loop(&target, &mut consumer, &thread_stop, &counters, failed_attempts, &mut streaming);
+                    let result = render_loop(&target, &mut consumer, &thread_stop, &counters, failed_attempts, &mut streaming, allow_fallback);
                     if streaming {
                         failed_attempts = 0;
                     }
@@ -189,13 +197,15 @@ fn render_loop(
     counters: &FrameCounters,
     failed_attempts: u32,
     streaming: &mut bool,
+    allow_fallback: bool,
 ) -> Result<bool> {
     let _ = initialize_mta();
 
-    // Never fall back to the default here: for the virtual-mic cable that would play the cleaned voice out of the
-    // real speakers. A device that is not connected is reported as such instead of activating a dead id (which
-    // failed with 0x88890004 on every retry); one that came back under a new id is found by name.
-    let choice = follow::resolve(&Direction::Render, target, false).with_context(|| match target {
+    // No fallback to the default unless the caller asked for it (`start_on_device_id_or_default`): for the
+    // virtual-mic cable that would play the cleaned voice out of the real speakers. A device that is not connected is
+    // reported as such instead of activating a dead id (which failed with 0x88890004 on every retry); one that came
+    // back under a new id is found by name.
+    let choice = follow::resolve(&Direction::Render, target, allow_fallback).with_context(|| match target {
         RenderTarget::Id(id) => format!("render device '{id}' is not connected"),
         RenderTarget::Default => "there is no default render device".to_string(),
     })?;
@@ -256,7 +266,10 @@ fn render_loop(
     crate::report_error(&if failed_attempts > 0 {
         format!("[audio-io] INFO: hardware render is playing on '{name}' after {failed_attempts} failed attempt(s)")
     } else {
-        format!("[audio-io] INFO: hardware render started on '{name}'")
+        format!(
+            "[audio-io] INFO: hardware render started on '{name}'{}",
+            if choice.fallback { " (the chosen output is not connected; using this one until it is back)" } else { "" }
+        )
     });
 
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES);
@@ -278,7 +291,7 @@ fn render_loop(
         }
         if last_follow_check.elapsed() >= Duration::from_secs(1) {
             last_follow_check = std::time::Instant::now();
-            if follow::should_switch(&Direction::Render, target, &choice, false) {
+            if follow::should_switch(&Direction::Render, target, &choice, allow_fallback) {
                 audio_client.stop_stream().ok();
                 return Ok(true);
             }

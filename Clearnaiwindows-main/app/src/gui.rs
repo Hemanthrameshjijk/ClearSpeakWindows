@@ -994,6 +994,9 @@ fn update_main(state: &mut MainState, message: Message) {
         Message::SelectTab(tab) => {
             state.tab = tab;
             state.reset_armed = false;
+            // Fresh device list on every page change, so the pickers never offer a headset that was unplugged
+            // since the window opened (picking one played to nothing).
+            state.devices = state.handles.device_switcher.enumerate_devices();
         }
         Message::ToggleMute => {
             let on = state.handles.mic_master_enabled.is_on();
