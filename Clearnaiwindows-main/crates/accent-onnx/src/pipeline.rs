@@ -2,14 +2,14 @@
 //! all model work happens on a dedicated worker thread.
 //!
 //! ```text
-//!  mic thread (480 @ 48 kHz, no allocation)                worker thread (50 ms pushes)
+//!  mic thread (480 @ 48 kHz, no allocation)                worker thread (100 ms pushes)
 //!  AccentStage::process --in ring--> 48k -> 16k (causal) -> leveler -> AccentStream (mel, converter,
 //!        ^                                                              vocoder) -> 24k -> 48k (causal)
 //!        +-- jitter buffer <--out ring-- 480 @ 48 kHz  <-----------------------------------+
 //! ```
 //!
 //! Safety net: if the output ring runs dry, or the worker's real-time factor stays above 0.97 for 5 s, the stage
-//! crossfades (20 ms) to the incoming (BVC-only) signal, keeps the engine running, and reports a "paused"
+//! crossfades (40 ms, in a quiet moment) to the incoming (BVC-only) signal, keeps the engine running, and reports a "paused"
 //! state; it returns to the accent output once the worker has caught up and the jitter buffer has refilled.
 
 use crate::resample::CausalUpsampler2x;
@@ -28,7 +28,9 @@ const PUSH48: usize = 4800;
 const PUSH16: usize = 1600;
 const PUSH_MS: f32 = 100.0;
 /// Input backlog (48 kHz samples) above which the worker skips ahead instead of falling further behind.
-const MAX_BACKLOG48: usize = 4 * PUSH48;
+// Above the longest stall the mic side still covers on the converted voice (cushion up to 300 ms + 300 ms of
+// concealment): skipping input any earlier dropped words while the converted voice kept playing.
+const MAX_BACKLOG48: usize = 7 * PUSH48;
 const RING_SECONDS: usize = 1;
 const RAMP_SAMPLES: f32 = 1920.0; // 40 ms crossfade
 const REPRIME_HOLDOFF_FRAMES: u32 = 100; // 1 s of dry after a long stall before trusting the accent again
@@ -49,7 +51,9 @@ pub const DEFAULT_JITTER_MS: u32 = 160;
 const SLOW_RTF: f32 = 0.97;
 const SLOW_WINDOW: usize = 50; // pushes = 5 s
 // Must sit clearly above the normal running RTF (0.55-0.8 on this PC) or a paused stage could never recover.
-const RECOVER_RTF: f32 = 0.80;
+// Resume once clearly under the 0.97 pause level. 0.80 sat inside the normal running range of some PCs
+// (0.74-0.88 measured), so a paused accent could stay paused for the whole call.
+const RECOVER_RTF: f32 = 0.90;
 const RECOVER_WINDOW: usize = 30; // pushes = 3 s
 const LEVEL_TARGET_RMS: f32 = 0.06;
 const RESAMPLER_TAPS: usize = 97;
@@ -129,6 +133,8 @@ struct Shared {
     underruns: AtomicU32,
     dropped_input: AtomicU32,
     catchups: AtomicU32,
+    /// Set by the worker when it skipped input: the converted voice has a hole, so go back to the plain voice.
+    reprime: AtomicBool,
     error: Mutex<String>, // never locked on the mic thread
 }
 
@@ -274,6 +280,13 @@ pub struct AccentStage {
     mix: f32,
     was_on: bool,
     holdoff: u32,
+    /// Frames waited for a quiet moment to switch between the converted and the plain voice.
+    switch_wait: u32,
+    /// Lowest converted-buffer level over the current second (the real cushion), and frames counted so far.
+    level_min: usize,
+    level_frames: u32,
+    /// Real cushion over the last full second, for the trim and the reported delay.
+    cushion: usize,
 }
 
 /// Start the worker thread and return the mic-thread stage plus the GUI handle. The (large) model bundle is
@@ -300,6 +313,7 @@ fn start_inner(cfg: Option<AccentConfig>, unavailable_reason: &str) -> (AccentSt
         underruns: AtomicU32::new(0),
         dropped_input: AtomicU32::new(0),
         catchups: AtomicU32::new(0),
+        reprime: AtomicBool::new(false),
         error: Mutex::new(String::new()),
     });
     let cap = 48_000 * RING_SECONDS;
@@ -337,6 +351,10 @@ fn start_inner(cfg: Option<AccentConfig>, unavailable_reason: &str) -> (AccentSt
         mix: 0.0,
         was_on: false,
         holdoff: 0,
+        switch_wait: 0,
+        level_min: usize::MAX,
+        level_frames: 0,
+        cushion: jitter,
     };
     (stage, AccentHandle(sh))
 }
@@ -359,15 +377,37 @@ fn upcoming_is_quiet(cons: &mut Consumer<f32>, n: usize) -> bool {
     }
 }
 
+impl AccentStage {
+    /// Ramps from the converted voice back to the plain one over the usual crossfade. True while still fading.
+    fn fade_out(&mut self, frame: &mut [f32]) -> bool {
+        if self.mix <= 0.0 {
+            return false;
+        }
+        let step = 1.0 / RAMP_SAMPLES;
+        for d in frame.iter_mut() {
+            let w = self.out_cons.pop().unwrap_or(0.0);
+            self.mix = (self.mix - step).max(0.0);
+            *d = *d * (1.0 - self.mix) + w * self.mix;
+        }
+        self.mix > 0.0
+    }
+}
+
 impl Stage for AccentStage {
     fn name(&self) -> &'static str {
         "Accent"
     }
 
     fn process(&mut self, frame: &mut [f32]) {
-        let sh = &*self.sh;
+        // A counted copy of the shared state (no allocation), so `self` stays free for `fade_out`.
+        let shared = self.sh.clone();
+        let sh = &*shared;
         if sh.voice.load(Relaxed) == ACCENT_OFF {
             if self.was_on {
+                // Fade back to the plain voice instead of cutting (a cut clicked).
+                if self.fade_out(frame) {
+                    return;
+                }
                 self.was_on = false;
                 self.primed = false;
                 self.mix = 0.0;
@@ -383,10 +423,26 @@ impl Stage for AccentStage {
             self.primed = false;
             self.mix = 0.0;
             self.holdoff = 0;
+            self.jitter = self.base_jitter;
+            self.stable = 0;
+            self.short_run = 0;
+            self.switch_wait = 0;
+            self.cushion = self.base_jitter;
             sh.mic.store(M_STARTING, Relaxed);
         }
         if sh.worker.load(Relaxed) != W_READY || frame.len() != FRAME_SAMPLES {
-            return; // loading or failed: pass the BVC signal through untouched
+            // Loading or failed: the plain (BVC) signal, faded back to if the converted voice was playing.
+            if frame.len() == FRAME_SAMPLES {
+                self.fade_out(frame);
+            }
+            return;
+        }
+        if sh.reprime.swap(false, Relaxed) && self.primed {
+            // The worker skipped input (it fell far behind): its output now has a hole. The plain voice has the
+            // words, so go back to it and re-prime, instead of playing the converted voice with words missing.
+            self.primed = false;
+            self.holdoff = REPRIME_HOLDOFF_FRAMES;
+            self.short_run = 0;
         }
 
         for &s in frame.iter() {
@@ -398,7 +454,7 @@ impl Stage for AccentStage {
         let mut have = false;
         let avail = self.out_cons.slots();
         if !self.primed {
-            // The worker delivers audio in bursts of one push (50 ms). Start with `jitter + one push` buffered so
+            // The worker delivers audio in bursts of one push (100 ms). Start with `jitter + one push` buffered so
             // the level then cycles between `jitter + push` (just after a burst) and `jitter` (just before the
             // next one): the jitter setting is the real safety margin, not a fraction of it.
             let target = self.jitter + PUSH48;
@@ -424,10 +480,12 @@ impl Stage for AccentStage {
                 have = true;
             } else {
                 if self.short_run == 0 {
-                    // One count per gap. Adaptive jitter buffer: each gap asks for 40 ms more cushion (max 300 ms).
+                    // One count per gap. The next re-prime starts with 40 ms more cushion (max 300 ms); not while
+                    // paused (the plain voice is playing, the gap is not heard).
                     sh.underruns.fetch_add(1, Relaxed);
-                    self.jitter = (self.jitter + 40 * 48).min(300 * 48);
-                    sh.jitter_ms.store((self.jitter / 48) as u32, Relaxed);
+                    if !sh.slow.load(Relaxed) {
+                        self.jitter = (self.jitter + 40 * 48).min(300 * 48);
+                    }
                 }
                 self.short_run += 1;
                 self.stable = 0;
@@ -462,8 +520,19 @@ impl Stage for AccentStage {
             // frames in a row, and the 20 ms about to be dropped is quiet too), so nothing audible is cut.
             self.stable = self.stable.saturating_add(1);
             self.quiet_run = if self.wet.iter().all(|v| v.abs() < 0.003) { self.quiet_run.saturating_add(1) } else { 0 };
+            // The real cushion is the lowest buffer level over a second (it swings by one push between bursts).
+            self.level_min = self.level_min.min(self.out_cons.slots());
+            self.level_frames += 1;
+            if self.level_frames >= 100 {
+                self.cushion = self.level_min;
+                self.level_min = usize::MAX;
+                self.level_frames = 0;
+                sh.jitter_ms.store((self.cushion / 48) as u32, Relaxed);
+            }
+            // Gaps leave extra cushion behind (the late audio plays after the silence that covered it). After 20 s
+            // without a gap give 20 ms of that EXTRA back, in real silence only, never below the starting cushion.
             if self.stable >= 2000
-                && self.jitter > self.base_jitter
+                && self.cushion >= self.base_jitter + 20 * 48
                 && self.quiet_run >= QUIET_FRAMES_BEFORE_TRIM
                 && self.out_cons.slots() >= 2 * FRAME_SAMPLES
                 && upcoming_is_quiet(&mut self.out_cons, 20 * 48)
@@ -471,8 +540,10 @@ impl Stage for AccentStage {
                 for _ in 0..20 * 48 {
                     let _ = self.out_cons.pop();
                 }
+                self.cushion -= 20 * 48;
+                self.level_min = self.level_min.saturating_sub(20 * 48);
                 self.jitter = self.jitter.saturating_sub(20 * 48).max(self.base_jitter);
-                sh.jitter_ms.store((self.jitter / 48) as u32, Relaxed);
+                sh.jitter_ms.store((self.cushion / 48) as u32, Relaxed);
                 self.stable = 0;
             }
         }
@@ -481,7 +552,23 @@ impl Stage for AccentStage {
         if self.holdoff > 0 {
             self.holdoff -= 1;
         }
-        let target = if want_wet { 1.0 } else { 0.0 };
+        // The converted voice runs ~0.5 s behind the plain one, so switching mid-word skips or repeats speech. Wait
+        // for a moment where both are quiet (at most 3 s). With no converted audio at all there is nothing to wait
+        // with: go to the plain voice at once.
+        let settled = if self.mix >= 1.0 { 1.0 } else if self.mix <= 0.0 { 0.0 } else { -1.0 };
+        let wanted = if want_wet { 1.0 } else { 0.0 };
+        let mut go = true;
+        // A re-prime (the converted audio has a hole) goes to the plain voice at once.
+        let forced = self.holdoff > 0 && wanted == 0.0;
+        if settled >= 0.0 && wanted != settled && have && !forced {
+            let quiet = frame.iter().all(|v| v.abs() < SWITCH_QUIET) && self.wet.iter().all(|v| v.abs() < SWITCH_QUIET);
+            self.switch_wait += 1;
+            go = quiet || self.switch_wait >= MAX_SWITCH_WAIT_FRAMES;
+        }
+        if go {
+            self.switch_wait = 0;
+        }
+        let target = if go { wanted } else { settled };
         let step = 1.0 / RAMP_SAMPLES;
         for (d, &w) in frame.iter_mut().zip(self.wet.iter()) {
             if self.mix < target {
@@ -524,6 +611,15 @@ struct Leveler {
 
 const GATE_OPEN_RMS: f32 = 0.008;
 const GATE_HANG_CHUNKS: u32 = 6;
+/// The gate looks at 10 ms slices (160 samples at 16 kHz), so a word starting late in a chunk opens it.
+const GATE_BLOCK: usize = 160;
+/// Kept before the first loud slice when the gate opens (20 ms), faded in over 5 ms.
+const GATE_PREROLL: usize = 320;
+const GATE_FADE: usize = 80;
+/// Longest wait for a quiet moment before switching between the converted and the plain voice (3 s).
+const MAX_SWITCH_WAIT_FRAMES: u32 = 300;
+/// Converted-voice level counted as quiet (both voices must be quiet to switch).
+const SWITCH_QUIET: f32 = 0.01;
 
 fn soft_clip(v: f32) -> f32 {
     let a = v.abs();
@@ -540,10 +636,15 @@ impl Leveler {
     }
     fn process(&mut self, x: &mut [f32]) {
         let rms = (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt();
-        if rms > GATE_OPEN_RMS {
+        // Speech is judged on 10 ms slices: a word that starts late in the chunk, or softly, still counts.
+        let first_loud = x.chunks(GATE_BLOCK).position(|b| {
+            (b.iter().map(|v| v * v).sum::<f32>() / b.len().max(1) as f32).sqrt() > GATE_OPEN_RMS
+        });
+        let was_open = self.open;
+        if first_loud.is_some() {
             self.open = true;
             self.hang = GATE_HANG_CHUNKS;
-            self.est += 0.05 * (rms - self.est);
+            self.est += 0.05 * (rms.max(GATE_OPEN_RMS) - self.est);
         } else if self.open {
             self.hang = self.hang.saturating_sub(1);
             if self.hang == 0 {
@@ -554,7 +655,24 @@ impl Leveler {
             x.iter_mut().for_each(|v| *v = 0.0);
             return;
         }
-        let target = (LEVEL_TARGET_RMS / self.est.max(1e-4)).clamp(0.1, 6.0);
+        if !was_open {
+            // Just opened: keep 20 ms before the first loud slice (the soft start of the word), silence before it.
+            let start = (first_loud.unwrap_or(0) * GATE_BLOCK).saturating_sub(GATE_PREROLL);
+            for v in x[..start].iter_mut() {
+                *v = 0.0;
+            }
+            for (i, v) in x[start..].iter_mut().take(GATE_FADE).enumerate() {
+                *v *= i as f32 / GATE_FADE as f32;
+            }
+        }
+        let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        // Never more gain than keeps this chunk's peak under the soft-clip knee: the slow loudness estimate alone let
+        // a quiet-then-loud talker distort for 1-2 s.
+        let cap = if peak > 0.0 { 0.75 / peak } else { 6.0 };
+        let target = (LEVEL_TARGET_RMS / self.est.max(1e-4)).clamp(0.1, 6.0).min(cap.max(0.1));
+        if target < self.gain {
+            self.gain = target; // drop at once on a loud chunk
+        }
         // fast down (attack), slow up (release)
         let k = if target < self.gain { 0.7 } else { 0.1 };
         let next = self.gain + k * (target - self.gain);
@@ -607,6 +725,26 @@ mod tests {
         }
     }
 
+    /// Brings a stage fully onto the converted voice the way a call starts: in a quiet moment (the switch waits for
+    /// one), then speech (converted 0.5, plain 0.2) until the quiet part of the buffer has played.
+    fn warm(stage: &mut AccentStage, out: &mut Producer<f32>) {
+        for _ in 0..stage.jitter + PUSH48 + 2 * FRAME_SAMPLES {
+            out.push(0.0).unwrap();
+        }
+        for _ in 0..60 {
+            for _ in 0..FRAME_SAMPLES {
+                out.push(0.0).unwrap();
+            }
+            let mut f = [0.0f32; FRAME_SAMPLES];
+            stage.process(&mut f);
+        }
+        assert!(stage.mix >= 1.0, "switched on in the quiet start");
+        for _ in 0..100 {
+            feed(out, FRAME_SAMPLES);
+            step(stage);
+        }
+    }
+
     /// Runs one 10 ms frame (dry input 0.2) and returns its last sample.
     fn step(stage: &mut AccentStage) -> f32 {
         let mut f = [0.2f32; FRAME_SAMPLES];
@@ -617,11 +755,7 @@ mod tests {
     #[test]
     fn a_late_push_is_covered_with_silence_instead_of_falling_back_to_the_plain_voice() {
         let (mut stage, mut out) = hand_fed_stage();
-        feed(&mut out, stage.jitter + PUSH48 + 2 * FRAME_SAMPLES);
-        for _ in 0..60 {
-            feed(&mut out, FRAME_SAMPLES);
-            step(&mut stage);
-        }
+        warm(&mut stage, &mut out);
         assert!((step(&mut stage) - 0.5).abs() < 1e-3, "fully on the converted voice");
         // Drain the buffer, then the worker is late for a few frames.
         while stage.out_cons.slots() > 0 {
@@ -643,11 +777,7 @@ mod tests {
     #[test]
     fn a_long_stall_falls_back_to_the_plain_voice_without_saying_paused() {
         let (mut stage, mut out) = hand_fed_stage();
-        feed(&mut out, stage.jitter + PUSH48 + 2 * FRAME_SAMPLES);
-        for _ in 0..60 {
-            feed(&mut out, FRAME_SAMPLES);
-            step(&mut stage);
-        }
+        warm(&mut stage, &mut out);
         while stage.out_cons.slots() > 0 {
             let _ = stage.out_cons.pop();
         }
@@ -672,6 +802,85 @@ mod tests {
             speech.0.push(if i == 500 { 0.3 } else { 0.0 }).unwrap();
         }
         assert!(!upcoming_is_quiet(&mut speech.1, 960), "speech in the next 20 ms blocks the trim");
+    }
+
+    #[test]
+    fn a_word_starting_late_in_a_chunk_keeps_its_start() {
+        let mut l = Leveler::new();
+        // 80 ms of silence, then a word in the last 20 ms of the chunk.
+        let mut x = vec![0.0f32; 1600];
+        for (i, v) in x[1280..].iter_mut().enumerate() {
+            *v = 0.1 * (i as f32 * 0.3).sin();
+        }
+        l.process(&mut x);
+        assert!(x[1300..].iter().any(|v| v.abs() > 0.05), "the word is kept");
+        assert!(x[..900].iter().all(|&v| v == 0.0), "silence well before it stays silent");
+    }
+
+    #[test]
+    fn loud_after_quiet_is_capped_in_the_same_chunk() {
+        let mut l = Leveler::new();
+        for _ in 0..40 {
+            let mut q = tone(0.02, 1600);
+            l.process(&mut q);
+        }
+        let mut loud = tone(0.5, 1600);
+        l.process(&mut loud);
+        let peak = loud.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak <= 0.8, "kept under the soft-clip knee, got {peak}");
+    }
+
+    #[test]
+    fn switching_voices_waits_for_a_quiet_moment() {
+        let (mut stage, mut out) = hand_fed_stage();
+        warm(&mut stage, &mut out);
+        assert!(stage.mix >= 1.0);
+        // The PC is "too slow": the plain voice is wanted, but the speaker is mid-word (loud frames).
+        stage.sh.slow.store(true, Relaxed);
+        for _ in 0..20 {
+            feed(&mut out, FRAME_SAMPLES);
+            step(&mut stage);
+        }
+        assert!(stage.mix >= 1.0, "no switch in the middle of speech");
+        // A quiet moment in both voices (once the speech still queued in the cushion has played): now it switches.
+        for _ in 0..60 {
+            for _ in 0..FRAME_SAMPLES {
+                out.push(0.0).unwrap();
+            }
+            let mut f = [0.0f32; FRAME_SAMPLES];
+            stage.process(&mut f);
+        }
+        assert!(stage.mix <= 0.0, "switched in the pause");
+    }
+
+    #[test]
+    fn turning_off_fades_instead_of_cutting() {
+        let (mut stage, mut out) = hand_fed_stage();
+        warm(&mut stage, &mut out);
+        stage.sh.voice.store(ACCENT_OFF, Relaxed);
+        let mut f = [0.2f32; FRAME_SAMPLES];
+        stage.process(&mut f);
+        assert!(f[0] > 0.45, "starts on the converted voice, no jump");
+        let mut max_step = 0.0f32;
+        for w in f.windows(2) {
+            max_step = max_step.max((w[1] - w[0]).abs());
+        }
+        assert!(max_step < 0.01, "smooth fade, biggest step {max_step}");
+    }
+
+    #[test]
+    fn a_worker_skip_goes_back_to_the_plain_voice() {
+        let (mut stage, mut out) = hand_fed_stage();
+        warm(&mut stage, &mut out);
+        stage.sh.reprime.store(true, Relaxed);
+        feed(&mut out, FRAME_SAMPLES);
+        step(&mut stage);
+        assert!(stage.holdoff > 0, "re-primes after the worker skipped input");
+        for _ in 0..5 {
+            feed(&mut out, FRAME_SAMPLES);
+            step(&mut stage);
+        }
+        assert!(stage.mix <= 0.0, "straight to the plain voice, without waiting for a pause");
     }
 
     #[test]
@@ -881,6 +1090,7 @@ fn worker(sh: Arc<Shared>, mut in_cons: Consumer<f32>, mut out_prod: Producer<f3
                 let _ = in_cons.pop();
             }
             sh.catchups.fetch_add(1, Relaxed);
+            sh.reprime.store(true, Relaxed);
         }
         for s in buf48.iter_mut() {
             *s = in_cons.pop().unwrap_or(0.0);
