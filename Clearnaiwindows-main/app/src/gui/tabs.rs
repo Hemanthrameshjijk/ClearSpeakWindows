@@ -2329,7 +2329,7 @@ fn advanced_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         .push(setting_row(
             state,
             "Save CPU automatically",
-            Some("When this PC can't keep up, pause Studio, Transcript, caller voice removal and then Accent, one at a time, and bring them back when it can. Your switches stay as you set them."),
+            Some("When this PC can't keep up, pause Studio and Transcript, then caller voice removal, then use lighter noise removal, one at a time, and bring them back when it can. Accent pauses and resumes by itself. Your switches stay as you set them."),
             h.perf_auto.is_on(),
             Message::TogglePerfAuto,
         ))

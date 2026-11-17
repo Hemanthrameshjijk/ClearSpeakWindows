@@ -3,14 +3,16 @@
 //! skips the paused stages while `step` is above 0, and brings them back once the PC has kept up for a while.
 //!
 //! Runs once a second in the engine (`host.rs`), so it works with no window open.
+//!
+//! The accent is left out on purpose: it manages its own pause and resume exactly as before (pause above RTF 0.97
+//! for 5 s, resume below 0.80 for 3 s, see `accent_onnx::pipeline`). Reacting to that pause here as well paused
+//! unrelated features and then switched the accent off, which made it flap on a busy PC.
 
 /// Highest step.
 pub const MAX_STEP: u8 = 3;
 
 /// Overloaded for this many seconds in a row steps down.
 pub const DOWN_AFTER_SECS: u32 = 5;
-/// The accent pausing itself (too slow) for this long steps down.
-pub const ACCENT_PAUSED_SECS: u32 = 10;
 /// Keeping up for this long steps back up (doubles after each relapse, see `Governor::backoff`).
 pub const UP_AFTER_SECS: u32 = 60;
 /// Never change step more often than this.
@@ -24,7 +26,7 @@ pub fn step_pauses(step: u8) -> &'static str {
         0 => "nothing",
         1 => "Studio and Transcript",
         2 => "Studio, Transcript and caller voice removal",
-        _ => "Studio, Transcript, caller voice removal and Accent; your voice uses light noise removal",
+        _ => "Studio, Transcript and caller voice removal; your voice uses light noise removal",
     }
 }
 
@@ -41,10 +43,6 @@ pub fn skip_transcript(step: u8) -> bool {
 pub fn skip_speaker_bvc(step: u8) -> bool {
     step >= 2
 }
-#[inline]
-pub fn skip_accent(step: u8) -> bool {
-    step >= 3
-}
 /// Mic background-voice removal replaced by the light RNNoise.
 #[inline]
 pub fn light_mic_noise(step: u8) -> bool {
@@ -56,15 +54,12 @@ pub fn light_mic_noise(step: u8) -> bool {
 pub struct Signals {
     /// Either audio path is over its time budget (`RealtimeStatus::Overloaded`).
     pub overloaded: bool,
-    /// The accent paused itself because the PC is too slow.
-    pub accent_paused: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct Governor {
     step: u8,
     bad: u32,
-    paused: u32,
     good: u32,
     since_change: u32,
     /// Seconds since the last step up, to notice a relapse.
@@ -98,30 +93,22 @@ impl Governor {
         if let Some(t) = self.since_up.as_mut() {
             *t += 1;
         }
-        // The accent is not fed at the top step, so its pause flag no longer means anything there.
-        let accent_paused = s.accent_paused && !skip_accent(self.step);
         self.bad = if s.overloaded { self.bad + 1 } else { 0 };
-        self.paused = if accent_paused { self.paused + 1 } else { 0 };
-        self.good = if s.overloaded || accent_paused { 0 } else { self.good + 1 };
+        self.good = if s.overloaded { 0 } else { self.good + 1 };
 
         if self.since_change < MIN_GAP_SECS {
             return None;
         }
         let old = self.step;
-        if old < MAX_STEP && (self.bad >= DOWN_AFTER_SECS || self.paused >= ACCENT_PAUSED_SECS) {
+        if old < MAX_STEP && self.bad >= DOWN_AFTER_SECS {
             // Falling back soon after stepping up: wait longer before the next try.
             if self.since_up.is_some_and(|t| t < 5 * 60) {
                 self.backoff += 1;
             }
-            let reason = if self.bad >= DOWN_AFTER_SECS {
-                format!("audio over its time budget for {} s", self.bad)
-            } else {
-                format!("accent paused (PC too slow) for {} s", self.paused)
-            };
+            let reason = format!("audio over its time budget for {} s", self.bad);
             self.step += 1;
             self.since_change = 0;
             self.bad = 0;
-            self.paused = 0;
             self.good = 0;
             return Some((old, self.step, reason));
         }
@@ -141,8 +128,8 @@ impl Governor {
 mod tests {
     use super::*;
 
-    const BAD: Signals = Signals { overloaded: true, accent_paused: false };
-    const OK: Signals = Signals { overloaded: false, accent_paused: false };
+    const BAD: Signals = Signals { overloaded: true };
+    const OK: Signals = Signals { overloaded: false };
 
     fn run(g: &mut Governor, s: Signals, secs: u32) -> Vec<(u8, u8)> {
         (0..secs).filter_map(|_| g.tick(s).map(|(a, b, _)| (a, b))).collect()
@@ -161,11 +148,10 @@ mod tests {
     }
 
     #[test]
-    fn a_paused_accent_steps_down_after_10_s() {
-        let mut g = Governor::new();
-        let paused = Signals { overloaded: false, accent_paused: true };
-        assert_eq!(run(&mut g, paused, 9), vec![]);
-        assert_eq!(run(&mut g, paused, 1), vec![(0, 1)]);
+    fn steps_never_touch_the_accent() {
+        for step in 0..=MAX_STEP {
+            assert!(!step_pauses(step).contains("Accent"), "step {step}: the accent manages its own pause");
+        }
     }
 
     #[test]

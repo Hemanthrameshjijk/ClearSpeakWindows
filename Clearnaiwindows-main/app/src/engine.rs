@@ -1230,9 +1230,7 @@ fn spawn_mic_pipeline(
                     }
                     // Accent conversion sits right after BVC (which does the cleanup) and before AutoGain.
                     // Off = one atomic load, frame untouched. It is its own switch, independent of BVC.
-                    if !crate::perf_governor::skip_accent(perf) {
-                        accent_stage.process(&mut frame);
-                    }
+                    accent_stage.process(&mut frame);
                     auto_gain.process(&mut frame);
                 } else {
                     // BVC off: Accent (if switched on) gets the post-voice-gate mic signal - never the
@@ -1241,9 +1239,7 @@ fn spawn_mic_pipeline(
                     if !crate::perf_governor::skip_transcript(perf) {
                         transcript_stage.process(&mut frame);
                     }
-                    if !crate::perf_governor::skip_accent(perf) {
-                        accent_stage.process(&mut frame);
-                    }
+                    accent_stage.process(&mut frame);
                     auto_gain.process(&mut frame);
                     if light && handles.mic_bvc.is_on() {
                         // Background-voice removal paused to save CPU: the light noise removal stands in.

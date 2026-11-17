@@ -169,6 +169,40 @@ mod win {
     extern "system" {
         fn GetCurrentProcess() -> isize;
         fn GetProcessTimes(h: isize, creation: *mut FileTime, exit: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
+        fn GetSystemTimes(idle: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
+        fn GetSystemPowerStatus(status: *mut PowerStatus) -> i32;
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct PowerStatus {
+        ac_line: u8,
+        battery_flag: u8,
+        battery_percent: u8,
+        system_status: u8,
+        battery_life_secs: u32,
+        battery_full_secs: u32,
+    }
+
+    /// Whole-PC CPU times (idle, kernel incl. idle, user), 100 ns units.
+    pub fn system_cpu_times_100ns() -> Option<(u64, u64, u64)> {
+        let mut i = FileTime { low: 0, high: 0 };
+        let mut k = FileTime { low: 0, high: 0 };
+        let mut u = FileTime { low: 0, high: 0 };
+        if unsafe { GetSystemTimes(&mut i, &mut k, &mut u) } == 0 {
+            return None;
+        }
+        let join = |t: &FileTime| ((t.high as u64) << 32) | t.low as u64;
+        Some((join(&i), join(&k), join(&u)))
+    }
+
+    /// Power source and battery saver, for the health log.
+    pub fn power_line() -> String {
+        let mut p = PowerStatus::default();
+        if unsafe { GetSystemPowerStatus(&mut p) } == 0 {
+            return "power unknown".into();
+        }
+        super::power_text(p.ac_line, p.battery_percent, p.system_status & 1 == 1)
     }
 
     #[link(name = "advapi32")]
@@ -253,7 +287,38 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{process_cpu_time_100ns, set_autostart, start_mute_hotkey};
+pub use win::{power_line, process_cpu_time_100ns, set_autostart, start_mute_hotkey, system_cpu_times_100ns};
+
+#[cfg(not(windows))]
+pub fn system_cpu_times_100ns() -> Option<(u64, u64, u64)> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn power_line() -> String {
+    "power unknown".into()
+}
+
+/// "plugged in" / "on battery 43%", plus "battery saver ON" (Windows slows apps down in battery saver).
+pub fn power_text(ac_line: u8, battery_percent: u8, saver: bool) -> String {
+    let mut s = match ac_line {
+        1 => "plugged in".to_string(),
+        0 if battery_percent <= 100 => format!("on battery {battery_percent}%"),
+        0 => "on battery".to_string(),
+        _ => "power source unknown".to_string(),
+    };
+    if saver {
+        s.push_str(", battery saver ON");
+    }
+    s
+}
+
+/// Whole-PC CPU use (all apps) between two `system_cpu_times_100ns` readings, percent.
+pub fn system_cpu_percent(before: (u64, u64, u64), after: (u64, u64, u64)) -> Option<f32> {
+    let idle = after.0.checked_sub(before.0)?;
+    let total = after.1.checked_sub(before.1)? + after.2.checked_sub(before.2)?;
+    (total > 0).then(|| ((1.0 - idle as f64 / total as f64) * 100.0).clamp(0.0, 100.0) as f32)
+}
 
 #[cfg(not(windows))]
 pub fn start_mute_hotkey() {}
@@ -266,6 +331,19 @@ pub fn process_cpu_time_100ns() -> Option<u64> {
 #[cfg(not(windows))]
 pub fn set_autostart(_enable: bool) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(test)]
+mod power_tests {
+    use super::*;
+
+    #[test]
+    fn power_and_system_cpu_text() {
+        assert_eq!(power_text(1, 255, false), "plugged in");
+        assert_eq!(power_text(0, 43, true), "on battery 43%, battery saver ON");
+        assert_eq!(system_cpu_percent((100, 400, 100), (175, 500, 200)), Some(62.5));
+        assert_eq!(system_cpu_percent((100, 400, 100), (100, 400, 100)), None);
+    }
 }
 
 #[cfg(test)]

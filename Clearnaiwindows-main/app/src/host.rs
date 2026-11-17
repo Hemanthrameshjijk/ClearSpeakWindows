@@ -438,11 +438,7 @@ fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor) {
         let over = |log: &dsp_core::LatencyLog| {
             classify_status(&compute_percentiles(log.snapshot()), DEADLINE_NS, false) == RealtimeStatus::Overloaded
         };
-        let accent_paused = h.accent.status().state == accent_onnx::pipeline::AccentState::Paused;
-        g.tick(crate::perf_governor::Signals {
-            overloaded: over(&h.latency_log) || over(&h.speaker_latency_log),
-            accent_paused,
-        })
+        g.tick(crate::perf_governor::Signals { overloaded: over(&h.latency_log) || over(&h.speaker_latency_log) })
     } else {
         g.reset()
     };
@@ -629,6 +625,7 @@ pub fn run_engine() {
             let mut ticks = 0u32;
             let mut exposure = ExposureTick::start(&host.handles);
             let mut governor = crate::perf_governor::Governor::new();
+            let mut sys_cpu_prev = crate::sysutil::system_cpu_times_100ns();
             let mut calls = crate::call_log::CallTracker::default();
             let mut watch = crate::diag::StateWatch::default();
             let (mut cpu_sum, mut cpu_max, mut cpu_n) = (0.0f32, 0.0f32, 0u32);
@@ -672,10 +669,20 @@ pub fn run_engine() {
                     }
                 }
                 if ticks % 600 == 0 && cpu_n > 0 {
+                    // The whole PC too, and the power state: an accent that slows down while the engine itself is
+                    // quiet means other apps, or Windows power saving, took the CPU.
+                    let sys_now = crate::sysutil::system_cpu_times_100ns();
+                    let pc = match (sys_cpu_prev, sys_now) {
+                        (Some(a), Some(b)) => crate::sysutil::system_cpu_percent(a, b),
+                        _ => None,
+                    };
+                    sys_cpu_prev = sys_now;
                     crate::log_info!(
-                        "[health] engine CPU last 60s: avg {:.1}% / worst {:.1}% of the whole PC",
+                        "[health] engine CPU last 60s: avg {:.1}% / worst {:.1}% of the whole PC; all apps {}; {}",
                         cpu_sum / cpu_n as f32,
-                        cpu_max
+                        cpu_max,
+                        pc.map_or("unknown".to_string(), |p| format!("{p:.0}%")),
+                        crate::sysutil::power_line(),
                     );
                     (cpu_sum, cpu_max, cpu_n) = (0.0, 0.0, 0);
                 }
