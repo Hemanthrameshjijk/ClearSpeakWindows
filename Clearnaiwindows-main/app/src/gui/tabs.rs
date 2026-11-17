@@ -226,10 +226,20 @@ fn bluetooth_hint(state: &MainState) -> Element<'static, Message> {
     let engine_says = state.handles.counters.hands_free.load(std::sync::atomic::Ordering::Relaxed);
     if engine_says || label.is_some_and(|l| audio_io::follow::is_hands_free(l, 0)) {
         let t = style::tokens_for(state.settings.theme_dark);
-        text(ui_logic::bluetooth_hint_text(state.handles.mic_boost.load()))
-            .size(12)
-            .color(t.warning)
-            .into()
+        let hint = text(ui_logic::bluetooth_hint_text(state.handles.mic_boost.load())).size(12).color(t.warning);
+        match crate::device_rules::talk_mic_instead(&state.devices) {
+            // One click: talk on the PC/USB mic, the earbuds go back to full-quality listening.
+            Some(mic) => column![
+                hint,
+                btn(text(format!("Talk on {}", mic.label)).size(12).font(bold()).color(t.primary))
+                    .padding([4, 0])
+                    .on_press(Message::UseTalkMic(mic))
+                    .style(style::text_button),
+            ]
+            .spacing(4)
+            .into(),
+            None => hint.into(),
+        }
     } else {
         column![].into()
     }

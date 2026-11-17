@@ -183,8 +183,9 @@ pub fn bluetooth_hint_text(boost_db: u8) -> String {
         "Your voice may be quiet: turn on Mic boost (about +12 dB).".to_string()
     };
     format!(
-        "Bluetooth mic: call quality. {level} If words get cut, set Noise reduction to Gentle. Best sound: listen on \
-         the earbuds, talk on the PC or USB mic."
+        "Bluetooth mic: call quality, and what you hear in the earbuds drops to call quality too. {level} If words get \
+         cut, set Noise reduction to Gentle. Best sound: talk on the PC or USB mic and keep the earbuds for listening \
+         (in Meet or Zoom pick the speaker \"Headphones\", not \"Headset\")."
     )
 }
 

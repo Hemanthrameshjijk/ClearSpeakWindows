@@ -332,6 +332,8 @@ pub enum Message {
     ClearTranscript,
     SelectMicTarget(DeviceOption),
     SelectPhysicalMic(DeviceOption),
+    /// The Bluetooth hint's button: talk on this (non-Bluetooth) mic so the earbuds stay in full-quality listening mode.
+    UseTalkMic(DeviceOption),
     ToggleMonitor(bool),
     /// Virtual microphone on/off (Devices page).
     ToggleVirtualMic(bool),
@@ -1274,6 +1276,10 @@ fn update_main(state: &mut MainState, message: Message) {
             spawn_device_switch(state.handles.device_switcher.clone(), seq, this_seq, move |s| {
                 s.set_virtual_mic_target(Some(device.id))
             });
+        }
+        Message::UseTalkMic(device) => {
+            crate::log_info!("[action] bluetooth: talk on '{}', earbuds for listening only", device.label);
+            update_main(state, Message::SelectPhysicalMic(device));
         }
         Message::SelectPhysicalMic(device) => {
             state.settings.physical_mic_device_id = Some(device.id.clone());

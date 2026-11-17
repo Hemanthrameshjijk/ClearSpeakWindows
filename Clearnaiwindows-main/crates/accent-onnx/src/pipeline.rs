@@ -729,6 +729,23 @@ mod tests {
         assert!(soft_clip(5.0) <= 1.0 && soft_clip(-5.0) >= -1.0);
         assert!(soft_clip(0.9) > 0.8 && soft_clip(0.9) < 0.9);
     }
+
+    #[test]
+    fn measured_delay_finds_how_late_the_converted_voice_is() {
+        // "Speech": bursts of different lengths, so only one lag matches.
+        let mut input = vec![0.0f32; 48_000 * 4];
+        for (start, len) in [(4_800usize, 9_600usize), (40_000, 4_800), (70_000, 19_200), (130_000, 7_200)] {
+            for (i, s) in input[start..start + len].iter_mut().enumerate() {
+                *s = 0.3 * (i as f32 * 0.07).sin();
+            }
+        }
+        let lag = 9_600; // 200 ms
+        let mut out = vec![0.0f32; lag];
+        out.extend(input.iter().map(|v| v * 0.5)); // quieter and different, like a converted voice
+        let d = measured_delay(&input, &out).expect("speech present");
+        assert!((d as i64 - lag as i64).abs() <= 480, "measured {d}, want {lag}");
+        assert_eq!(measured_delay(&vec![0.0; 48_000], &vec![0.0; 48_000]), None, "silence has nothing to match");
+    }
 }
 
 fn set_error(sh: &Shared, msg: String) {
@@ -760,11 +777,32 @@ pub fn convert_offline(models: &std::path::Path, threads: usize, voice: u8, x48:
         out48.extend(up.push(&eng.push(&chunk)?));
     }
     out48.extend(up.push(&eng.flush()?));
-    // Remove the model + resampler delay so the converted voice lines up with the original.
-    let delay = ((eng.algorithmic_latency_ms() * 48.0) as usize + RESAMPLER_TAPS).min(out48.len());
+    // Remove the model + resampler delay so the converted voice lines up with the original. Measured from the speech
+    // itself (the estimate from the model alone was 180 ms off); the estimate is used only when there is no speech.
+    let estimate = (eng.algorithmic_latency_ms() * 48.0) as usize + RESAMPLER_TAPS;
+    let delay = measured_delay(x48, &out48).unwrap_or(estimate).min(out48.len());
     out48.drain(..delay);
     out48.resize(x48.len(), 0.0);
     Ok(out48)
+}
+
+/// How many samples `out` lags `input`, from the best match of their 10 ms loudness envelopes over 0..1 s. `None` for
+/// near-silence, where there is nothing to match.
+fn measured_delay(input: &[f32], out: &[f32]) -> Option<usize> {
+    const HOP: usize = 480;
+    let env = |x: &[f32]| -> Vec<f32> { x.chunks(HOP).map(|c| c.iter().map(|v| v.abs()).sum::<f32>() / c.len() as f32).collect() };
+    let (a, b) = (env(input), env(out));
+    let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+    let (ma, mb) = (mean(&a), mean(&b));
+    if ma < 1e-4 || mb < 1e-4 {
+        return None;
+    }
+    let max_lag = 100.min(b.len().saturating_sub(1));
+    let score = |lag: usize| -> f32 {
+        a.iter().zip(b.iter().skip(lag)).map(|(x, y)| (x - ma) * (y - mb)).sum()
+    };
+    let best = (0..=max_lag).max_by(|&l, &m| score(l).partial_cmp(&score(m)).unwrap_or(std::cmp::Ordering::Equal))?;
+    (score(best) > 0.0).then_some(best * HOP)
 }
 
 fn worker(sh: Arc<Shared>, mut in_cons: Consumer<f32>, mut out_prod: Producer<f32>, mut cfg: AccentConfig) {

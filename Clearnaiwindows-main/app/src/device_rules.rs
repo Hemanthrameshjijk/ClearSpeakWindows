@@ -27,6 +27,30 @@ pub fn only_virtual(options: &[DeviceOption], virtual_wanted: bool) -> Vec<Devic
     options.iter().filter(|d| is_virtual(&d.label) == virtual_wanted).cloned().collect()
 }
 
+/// The microphone of a Bluetooth headset. Opening it puts the earbuds into call mode, which drops what you hear to
+/// phone quality too. Known by "Hands-Free" in the name, or as Windows names earbuds: a "Headset (X)" mic next to a
+/// "Headphones (X)" output of the same device (a USB headset's mic is "Microphone (X)").
+pub fn is_bluetooth_mic(label: &str, devices: &DeviceList) -> bool {
+    audio_io::follow::is_hands_free(label, 0)
+        || (label.to_ascii_lowercase().starts_with("headset")
+            && devices.render.iter().any(|r| {
+                r.label.to_ascii_lowercase().starts_with("headphones") && audio_io::follow::same_physical_device(label, &r.label)
+            }))
+}
+
+/// A real, non-Bluetooth microphone to talk on, so Bluetooth earbuds can stay in full-quality listening mode: a USB
+/// or wired headset mic first, then the PC's built-in mic. `None` when there is no other real mic.
+pub fn talk_mic_instead(devices: &DeviceList) -> Option<DeviceOption> {
+    let built_in = |l: &str| {
+        let l = l.to_ascii_lowercase();
+        l.contains("array") || l.contains("realtek") || l.contains("internal") || l.contains("built-in")
+    };
+    only_virtual(&devices.capture, false)
+        .into_iter()
+        .filter(|d| !is_bluetooth_mic(&d.label, devices) && !audio_io::follow::is_virtual_device(&d.label))
+        .min_by_key(|d| built_in(&d.label))
+}
+
 /// The "CABLE Input" render endpoint a virtual microphone should go to, when exactly one is installed (the usual
 /// VB-CABLE setup). Two or none means there is no safe pick, so `None`.
 pub fn cable_input_target(devices: &DeviceList) -> Option<DeviceOption> {
@@ -283,5 +307,46 @@ mod tests {
         let mut s = Settings::default();
         s.virtual_speaker_source_id = Some("x".into());
         assert_eq!(resolve(&s, &DeviceList::empty(), None).speaker_source.as_deref(), Some("x"));
+    }
+
+    fn earbuds_and_pc() -> DeviceList {
+        DeviceList {
+            render: vec![
+                dev("bt-hp", "Headphones (realme Buds T310)"),
+                dev("bt-hs-out", "Headset (realme Buds T310)"),
+                dev("realtek-out", "Speakers (Realtek(R) Audio)"),
+                dev("epos-out", "Speakers (EPOS PC 8 USB)"),
+                dev("clearnai-in", "Speakers (ClearNAI Virtual Audio Device)"),
+            ],
+            capture: vec![
+                dev("bt-mic", "Headset (realme Buds T310)"),
+                dev("realtek-mic", "Microphone Array (Realtek(R) Audio)"),
+                dev("epos-mic", "Microphone (EPOS PC 8 USB)"),
+                dev("clearnai-mic", "Microphone (ClearNAI Virtual Audio Device)"),
+                dev("cable-out", "CABLE Output (VB-Audio Virtual Cable)"),
+            ],
+            ..DeviceList::empty()
+        }
+    }
+
+    #[test]
+    fn earbud_mic_is_bluetooth_usb_and_built_in_are_not() {
+        let d = earbuds_and_pc();
+        assert!(is_bluetooth_mic("Headset (realme Buds T310)", &d));
+        assert!(is_bluetooth_mic("Headset (Galaxy Buds2 Hands-Free AG Audio)", &DeviceList::empty()));
+        assert!(!is_bluetooth_mic("Microphone (EPOS PC 8 USB)", &d));
+        assert!(!is_bluetooth_mic("Microphone Array (Realtek(R) Audio)", &d));
+        // A wired "Headset" with no matching "Headphones" output is not Bluetooth.
+        assert!(!is_bluetooth_mic("Headset (USB Audio Device)", &d));
+    }
+
+    #[test]
+    fn talk_mic_prefers_usb_then_built_in_never_bluetooth_or_virtual() {
+        let mut d = earbuds_and_pc();
+        assert_eq!(talk_mic_instead(&d).map(|m| m.id).as_deref(), Some("epos-mic"));
+        d.capture.retain(|m| m.id != "epos-mic");
+        assert_eq!(talk_mic_instead(&d).map(|m| m.id).as_deref(), Some("realtek-mic"));
+        d.capture.retain(|m| m.id != "realtek-mic");
+        assert_eq!(talk_mic_instead(&d), None, "only the earbuds and virtual mics are left");
     }
 }
