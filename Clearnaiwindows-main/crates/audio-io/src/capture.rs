@@ -246,6 +246,8 @@ fn capture_loop(
     // Per-minute summary: how much audio the device really delivered, and how often it said it lost some.
     let mut stats_since = std::time::Instant::now();
     let (mut stat_samples, mut stat_gaps, mut stat_silent) = (0u64, 0u32, 0u32);
+    // WASAPI usually flags the very first packet after the stream starts as a discontinuity; that is not a lost packet.
+    let mut first_packet = true;
     let mut smoother = GapSmoother::default();
 
     while !stop_flag.load(Ordering::Relaxed) {
@@ -291,6 +293,13 @@ fn capture_loop(
             stat_samples += got as u64;
             stat_gaps += info.flags.data_discontinuity as u32;
             stat_silent += info.flags.silent as u32;
+            if info.flags.data_discontinuity && !first_packet {
+                counters.capture_gaps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            first_packet = false;
+            if info.flags.silent {
+                counters.capture_silent_packets.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
 
             for (k, c) in scratch[..got as usize * 4].chunks_exact(4).enumerate() {
                 // A packet marked silent (Bluetooth glitch, profile switch) is silence whatever its bytes say.

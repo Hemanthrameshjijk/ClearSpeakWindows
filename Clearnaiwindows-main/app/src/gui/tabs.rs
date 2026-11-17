@@ -1350,7 +1350,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
 
             let test_voice = btn(
                 container(
-                    row![glyph_icon(icons::PLAY, 14.0, t.primary), text("Test my voice").size(14).font(bold()).color(t.primary)]
+                    row![glyph_icon(icons::PLAY, 14.0, t.primary), text("Pre-shift check").size(14).font(bold()).color(t.primary)]
                         .spacing(8)
                         .align_y(iced::Alignment::Center),
                 )
@@ -1403,6 +1403,33 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
 
 /// "Test my voice": record 20 s, then play the original and each feature's version, each with the words it gives.
 /// `small` = the card's screen (with a Back button); otherwise a section of the Microphone page.
+/// The pre-shift verdict banner and one row per check, with what to do about anything that is not a pass.
+fn preshift_summary<'a>(state: &MainState, r: &'a crate::voice_test::Results) -> Element<'a, Message> {
+    use crate::preshift::{overall_line, Verdict};
+    let t = style::tokens_for(state.settings.theme_dark);
+    let color = |v: Verdict| match v {
+        Verdict::Pass => t.success,
+        Verdict::Warn => t.warning,
+        Verdict::Fail => t.danger,
+    };
+    let mut col = column![text(overall_line(r.verdict)).size(14).font(bold()).color(color(r.verdict))].spacing(6);
+    for c in &r.checks {
+        let mut line = column![row![
+            text(c.label.as_str()).size(13).width(Length::Fill),
+            text(c.value.as_str()).size(12).color(t.muted),
+            text(c.verdict.word()).size(12).font(bold()).color(color(c.verdict)),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center)]
+        .spacing(2);
+        if !c.tip.is_empty() {
+            line = line.push(text(c.tip.as_str()).size(12).color(t.muted));
+        }
+        col = col.push(line);
+    }
+    container(col).padding(10).width(Length::Fill).style(style::soft_box).into()
+}
+
 pub fn voice_test_panel(state: &MainState, small: bool) -> Element<'_, Message> {
     use crate::voice_test::{Phase, MIN_SECONDS, SECONDS};
     use super::icons;
@@ -1410,7 +1437,7 @@ pub fn voice_test_panel(state: &MainState, small: bool) -> Element<'_, Message> 
     let vt = &state.voice_test;
     let mut col = column![].spacing(12);
 
-    let mut head = row![glyph_icon(icons::MIC, 17.0, t.primary), text("Test my voice").size(16).font(bold())]
+    let mut head = row![glyph_icon(icons::MIC, 17.0, t.primary), text("Pre-shift check").size(16).font(bold())]
         .spacing(10)
         .align_y(iced::Alignment::Center);
     if small {
@@ -1460,6 +1487,9 @@ pub fn voice_test_panel(state: &MainState, small: bool) -> Element<'_, Message> 
 
     match &vt.results {
         Some(r) => {
+            if !r.checks.is_empty() {
+                col = col.push(preshift_summary(state, r));
+            }
             col = col.push(
                 text("Play each one. Use headphones, so your speakers don't play into the mic.").size(12).color(t.muted),
             );
@@ -1514,8 +1544,9 @@ pub fn voice_test_panel(state: &MainState, small: bool) -> Element<'_, Message> 
             col = col
                 .push(
                     text(format!(
-                        "Record {SECONDS:.0} seconds of your voice. Then hear it as it is, with noise removed, with background voices \
-                         removed, with the accent and all together, and see the words each version gives."
+                        "Record {SECONDS:.0} seconds of your voice. We check your headset (voice level, background noise, \
+                         distortion, dropouts) and this PC's speed, then you can hear it as it is, with noise removed, with \
+                         background voices removed, with the accent and all together."
                     ))
                     .size(13),
                 )

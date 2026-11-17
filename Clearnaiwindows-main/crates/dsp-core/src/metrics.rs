@@ -152,6 +152,10 @@ pub struct FrameCounters {
     /// Name of the capture device feeding these counters (set when it opens, never on the audio path). Lets a render
     /// thread sharing them notice it is the same Bluetooth headset as the mic (see `audio_io::render`).
     pub capture_device: std::sync::Mutex<String>,
+    /// Discontinuities the capture device reported (lost packets, mostly Bluetooth), since it opened.
+    pub capture_gaps: AtomicU64,
+    /// Packets the capture device marked silent, since it opened.
+    pub capture_silent_packets: AtomicU64,
 }
 
 #[cfg(test)]

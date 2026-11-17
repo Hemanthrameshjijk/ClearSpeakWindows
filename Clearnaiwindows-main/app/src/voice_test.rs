@@ -58,6 +58,46 @@ pub struct Results {
     pub versions: Vec<Version>,
     /// Set when the speech model is not installed (the versions still play).
     pub transcript_note: String,
+    /// Pre-shift check: one row per measurement (see `preshift`).
+    #[serde(default)]
+    pub checks: Vec<crate::preshift::Check>,
+    #[serde(default)]
+    pub verdict: crate::preshift::Verdict,
+}
+
+fn history_path() -> PathBuf {
+    crate::setup::app_data_dir().join("preshift_history.jsonl")
+}
+
+/// One line per pre-shift check, kept for a later report to the supervisor (nothing is sent anywhere today).
+#[derive(Serialize)]
+struct HistoryLine<'a> {
+    at: u64,
+    verdict: crate::preshift::Verdict,
+    device: &'a str,
+    org: &'a str,
+    uid: &'a str,
+    checks: &'a [crate::preshift::Check],
+}
+
+fn append_history(results: &Results, device: &str, who: Option<(String, String)>) {
+    use std::io::Write as _;
+    let (org, uid) = who.unwrap_or_default();
+    let line = HistoryLine {
+        at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+        verdict: results.verdict,
+        device,
+        org: &org,
+        uid: &uid,
+        checks: &results.checks,
+    };
+    let ok = serde_json::to_string(&line).ok().and_then(|text| {
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(history_path()).ok()?;
+        writeln!(f, "{text}").ok()
+    });
+    if ok.is_none() {
+        crate::log_error!("[voice-test] could not add to {}", history_path().display());
+    }
 }
 
 pub fn dir() -> PathBuf {
@@ -188,19 +228,27 @@ pub fn run_helper() {
     crate::device_id::start_reading();
     let t0 = Instant::now();
 
-    let rec = match record(&settings, &mut p) {
+    let (rec, capture_info) = match record(&settings, &mut p) {
         Ok(r) => r,
         Err(e) => return fail(&mut p, e),
     };
+    let mut checks = crate::preshift::analyse(&rec, SR, &capture_info);
     crate::log_info!("[voice-test] recorded {:.1} s in {} ms", rec.len() as f32 / SR as f32, t0.elapsed().as_millis());
 
     set(&mut p, |p| {
         p.phase = Phase::Processing;
         p.step = "Preparing...".into();
     });
-    let allowed = license_allowed(&settings);
-    match process(&settings, allowed, &rec, &mut p) {
-        Ok(results) => {
+    let (allowed, who) = license_allowed(&settings);
+    match process(&settings, allowed, &rec, &mut p, &mut checks) {
+        Ok(mut results) => {
+            results.verdict = crate::preshift::overall(&checks);
+            for c in &checks {
+                crate::log_info!("[pre-shift] {}: {} -> {}", c.label, c.value, c.verdict.word());
+            }
+            crate::log_info!("[pre-shift] {} on '{}'", crate::preshift::overall_line(results.verdict), capture_info.device);
+            results.checks = checks;
+            append_history(&results, &capture_info.device, who);
             write_json(&results_path(), &results);
             crate::log_info!(
                 "[voice-test] done in {} ms: {}",
@@ -218,7 +266,7 @@ pub fn run_helper() {
 
 /// What this PC's license allows, read the same way as the engine's license gate (so editing files cannot unlock a
 /// feature here). Waits up to 10 s for the PC identity (usually ready long before the recording ends).
-fn license_allowed(settings: &crate::settings::Settings) -> crate::license_gate::Allowed {
+fn license_allowed(settings: &crate::settings::Settings) -> (crate::license_gate::Allowed, Option<(String, String)>) {
     let until = Instant::now() + Duration::from_secs(10);
     let mut devices = crate::device_id::texts();
     while devices.is_empty() && Instant::now() < until {
@@ -228,15 +276,20 @@ fn license_allowed(settings: &crate::settings::Settings) -> crate::license_gate:
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let status = crate::license_gate::status_for(settings, &devices, now, crate::clock_guard::registry_mark());
     crate::log_info!("[voice-test] {}", crate::diag::license_line(&status, now));
-    crate::license_gate::allowed(&status)
+    // Organisation and user ids (not names) for the pre-shift history.
+    let who = match &status {
+        license::Status::Licensed(p) => Some((p.org.clone(), p.uid.clone())),
+        _ => None,
+    };
+    (crate::license_gate::allowed(&status), who)
 }
 
-fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<Vec<f32>, String> {
+fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<(Vec<f32>, crate::preshift::CaptureInfo), String> {
     let (producer, mut consumer) = dsp_core::make_ring_buffer(2.0);
     let counters = std::sync::Arc::new(dsp_core::FrameCounters::default());
     let capture = match settings.physical_mic_device_id.as_deref() {
-        Some(id) => audio_io::capture::MicCapture::start_on_device_id(id, producer, counters),
-        None => audio_io::capture::MicCapture::start_default(producer, counters),
+        Some(id) => audio_io::capture::MicCapture::start_on_device_id(id, producer, counters.clone()),
+        None => audio_io::capture::MicCapture::start_default(producer, counters.clone()),
     }
     .map_err(|e| format!("Could not open the microphone ({e:#})."))?;
 
@@ -282,7 +335,20 @@ fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<Vec<
     if (rec.len() as f32) < MIN_SECONDS * SR as f32 {
         return Err("The recording is too short. Try again and speak for at least a few seconds.".into());
     }
-    Ok(rec)
+    use std::sync::atomic::Ordering::Relaxed;
+    let info = crate::preshift::CaptureInfo {
+        gaps: counters.capture_gaps.load(Relaxed),
+        silent_packets: counters.capture_silent_packets.load(Relaxed),
+        hands_free: counters.hands_free.load(Relaxed),
+        device: counters.capture_device.lock().map(|d| d.clone()).unwrap_or_default(),
+    };
+    crate::log_info!(
+        "[voice-test] capture: {} gap(s), {} silent packet(s){}",
+        info.gaps,
+        info.silent_packets,
+        if info.hands_free { ", Bluetooth call mode" } else { "" }
+    );
+    Ok((rec, info))
 }
 
 /// Runs `stages` over `x` in 10 ms frames, as the live mic thread does.
@@ -381,6 +447,7 @@ fn process(
     allowed: crate::license_gate::Allowed,
     rec: &[f32],
     p: &mut Progress,
+    checks: &mut Vec<crate::preshift::Check>,
 ) -> Result<Results, String> {
     let step = |p: &mut Progress, s: &str| {
         crate::log_info!("[voice-test] {s}");
@@ -436,6 +503,9 @@ fn process(
         let t = Instant::now();
         let acc = accent_onnx::pipeline::convert_offline(models, threads, voice, &pre)?;
         crate::log_info!("[voice-test] accent ({voice_label}) in {} ms", t.elapsed().as_millis());
+        // Offline conversion uses about the threads the live accent does, so its speed predicts whether the
+        // live accent will keep up on this PC.
+        checks.push(crate::preshift::speed_check(t.elapsed().as_secs_f64(), pre.len() as f64 / SR as f64));
         versions.push(("accent".into(), format!("Accent ({voice_label})"), finish(&acc)));
 
         if allowed.nc || allowed.bvc {
@@ -492,7 +562,7 @@ fn process(
         };
         out.push(Version { key, label, file, transcript });
     }
-    Ok(Results { seconds: rec.len() as f32 / SR as f32, versions: out, transcript_note })
+    Ok(Results { seconds: rec.len() as f32 / SR as f32, versions: out, transcript_note, ..Default::default() })
 }
 
 #[cfg(test)]
