@@ -1157,6 +1157,8 @@ fn spawn_mic_pipeline(
             let mut health = crate::diag::PathHealth::default();
             let mut echo_canceller = aec::NlmsAec::new_default();
             let mut echo_reference = vec![0.0f32; FRAME_SAMPLES];
+            // Frames left in which call audio counts as playing (1 s after the last reference frame).
+            let mut reference_recent = 0u32;
             loop {
                 let trimmed = pull_frame_blocking(&mic_in, &mut frame, &handles.counters);
                 if trimmed > 0 {
@@ -1167,18 +1169,26 @@ fn spawn_mic_pipeline(
                 // Echo removal runs first, on the raw mic, where the echo is still a linear copy of the call
                 // audio. The reference ring is always drained (even when off) so it never goes stale: keep
                 // at most ~30 ms of backlog, and use silence when no full frame of call audio is waiting.
+                // Trimmed in whole frames, only when over 30 ms: dropping single samples every frame shifted the
+                // reference against the echo by a different amount each time, and the filter had to keep re-learning.
                 while echo_ref.slots() > FRAME_SAMPLES * 3 {
-                    let _ = echo_ref.pop();
+                    for _ in 0..FRAME_SAMPLES {
+                        let _ = echo_ref.pop();
+                    }
                 }
                 let have_reference = echo_ref.slots() >= FRAME_SAMPLES;
                 if have_reference {
                     for r in echo_reference.iter_mut() {
                         *r = echo_ref.pop().unwrap_or(0.0);
                     }
+                    reference_recent = 100;
                 } else {
                     echo_reference.fill(0.0);
+                    reference_recent = reference_recent.saturating_sub(1);
                 }
-                if handles.echo_cancel.is_on() && have_reference {
+                // While call audio is playing, a frame with no reference ready still runs (with silence), so the
+                // filter's history keeps moving in step with the echo instead of skipping a frame.
+                if handles.echo_cancel.is_on() && reference_recent > 0 {
                     aec::AecEngine::process(&mut echo_canceller, &mut frame, &echo_reference);
                 }
                 // "Before" meter: raw mic peak, same plain peak-store as `handles.level` below (which is the
