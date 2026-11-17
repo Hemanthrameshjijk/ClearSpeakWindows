@@ -283,7 +283,8 @@ fn render_loop(
     let mut trim = LatencyTrim::default();
     let mut trims_since_log = 0u32;
     let mut last_trim_log: Option<std::time::Instant> = None;
-    let mut last_follow_check = std::time::Instant::now();
+    let watch = follow::SwitchWatch::start(Direction::Render, target.clone(), choice.clone(), allow_fallback);
+    let mut last_headset_check = std::time::Instant::now();
     // Playing into the same Bluetooth headset that is the microphone in call mode (the Monitor on the earbuds) can
     // make the headset glitch. The user wants to hear themselves, so it keeps playing; the log only notes it, which
     // explains glitches heard there. Only possible for a render sharing the mic's counters (Monitor, virtual-mic
@@ -293,12 +294,12 @@ fn render_loop(
         if event_handle.wait_for_event(1000).is_err() {
             bail!("render event wait failed or timed out; render device likely became unavailable");
         }
-        if last_follow_check.elapsed() >= Duration::from_secs(1) {
-            last_follow_check = std::time::Instant::now();
-            if follow::should_switch(&Direction::Render, target, &choice, allow_fallback) {
-                audio_client.stop_stream().ok();
-                return Ok(true);
-            }
+        if watch.due() {
+            audio_client.stop_stream().ok();
+            return Ok(true);
+        }
+        if last_headset_check.elapsed() >= Duration::from_secs(1) {
+            last_headset_check = std::time::Instant::now();
             let now_same = counters.hands_free.load(Ordering::Relaxed)
                 && counters.capture_device.lock().map_or(false, |mic| follow::same_physical_device(&name, &mic));
             if now_same != same_headset {

@@ -158,8 +158,6 @@ impl Drop for MicCapture {
     }
 }
 
-/// How often a streaming thread looks for a better device (default changed, saved headset back).
-const FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 /// First wait for audio after opening: a Bluetooth headset switching into call mode can take several seconds.
 const FIRST_EVENT_TIMEOUT_MS: u32 = 5000;
 
@@ -242,7 +240,7 @@ fn capture_loop(
     let mut scratch: Vec<u8> = vec![0; 48_000 * 4 / 2];
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES);
     let mut timeout_ms = FIRST_EVENT_TIMEOUT_MS;
-    let mut last_follow_check = std::time::Instant::now();
+    let watch = follow::SwitchWatch::start(Direction::Capture, target.clone(), choice.clone(), allow_fallback);
     // Per-minute summary: how much audio the device really delivered, and how often it said it lost some.
     let mut stats_since = std::time::Instant::now();
     let (mut stat_samples, mut stat_gaps, mut stat_silent) = (0u64, 0u32, 0u32);
@@ -258,12 +256,9 @@ fn capture_loop(
             bail!("capture event wait failed or timed out; capture device likely became unavailable");
         }
         timeout_ms = 1000;
-        if last_follow_check.elapsed() >= FOLLOW_EVERY {
-            last_follow_check = std::time::Instant::now();
-            if follow::should_switch(&Direction::Capture, target, &choice, allow_fallback) {
-                audio_client.stop_stream().ok();
-                return Ok(true);
-            }
+        if watch.due() {
+            audio_client.stop_stream().ok();
+            return Ok(true);
         }
 
         loop {

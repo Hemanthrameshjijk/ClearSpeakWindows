@@ -149,6 +149,52 @@ mod live {
 #[cfg(windows)]
 pub use live::{resolve, should_switch};
 
+/// Runs [`should_switch`] once a second on its own thread, so the audio thread only reads a flag. The check lists
+/// devices and reads their names (tens of ms, more with Bluetooth), which on the audio thread itself could make a
+/// small glitch every second.
+#[cfg(windows)]
+pub struct SwitchWatch {
+    due: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(windows)]
+impl SwitchWatch {
+    pub fn start(direction: wasapi::Direction, target: Target, current: Choice, allow_fallback: bool) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+        use std::sync::Arc;
+        let due = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (d, s) = (due.clone(), stop.clone());
+        let _ = std::thread::Builder::new().name("audio-io-follow".into()).spawn(move || {
+            let _ = wasapi::initialize_mta();
+            while !s.load(Relaxed) {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if s.load(Relaxed) {
+                    break;
+                }
+                if should_switch(&direction, &target, &current, allow_fallback) {
+                    d.store(true, Relaxed);
+                    break;
+                }
+            }
+        });
+        Self { due, stop }
+    }
+
+    /// A better device is available: the audio thread should reopen.
+    pub fn due(&self) -> bool {
+        self.due.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for SwitchWatch {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
