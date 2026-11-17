@@ -132,6 +132,14 @@ impl DriftCompensator {
         }
     }
 
+    /// `samples` of input were dropped on purpose (the backlog trim). Count them as delivered, so the clock comparison
+    /// does not see them as a shortfall and stretch the voice for many seconds to make the same delay up again.
+    pub fn skip(&mut self, samples: usize) {
+        if self.origin.is_some() {
+            self.emitted += samples as f64;
+        }
+    }
+
     /// Next full output frame, if one is ready.
     pub fn pop_frame(&mut self, out: &mut [f32]) -> bool {
         if self.output.len() < out.len() {
@@ -273,5 +281,29 @@ mod tests {
         let max_step = all.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
         // The source tone moves at most 0.5 * 0.031 per sample; no clicks means no step much larger than that.
         assert!(max_step < 0.02, "a jump of {max_step} in the output");
+    }
+
+    #[test]
+    fn samples_dropped_on_purpose_are_not_made_up_again() {
+        let mut d = DriftCompensator::new();
+        let mut out = vec![0.0f32; FRAME_SAMPLES];
+        let frame = vec![0.1f32; FRAME_SAMPLES];
+        let mut t = 0.0;
+        for _ in 0..100 {
+            d.push(&frame, t);
+            while d.pop_frame(&mut out) {}
+            t += 0.01;
+        }
+        // A 150 ms stall whose backlog the trim dropped: the frames arrive 150 ms late and are never caught up.
+        t += 0.15;
+        d.skip(7200);
+        let mut max_ratio: f64 = 1.0;
+        for _ in 0..1500 {
+            d.push(&frame, t);
+            while d.pop_frame(&mut out) {}
+            max_ratio = max_ratio.max(d.take_stats().max_ratio);
+            t += 0.01;
+        }
+        assert_eq!(max_ratio, 1.0, "no stretching after a deliberate trim");
     }
 }

@@ -1023,12 +1023,13 @@ const BACKLOG_TARGET_SAMPLES: usize = FRAME_SAMPLES * 4;
 /// keeps end-to-end latency roughly constant instead of monotonically
 /// growing, at the cost of a few dropped (skipped) samples whenever a trim
 /// actually fires - inaudible compared to a multi-second delay.
-fn trim_backlog(consumer: &SwapConsumer, counters: &dsp_core::FrameCounters) {
+/// Returns how many samples were dropped (0 almost always).
+fn trim_backlog(consumer: &SwapConsumer, counters: &dsp_core::FrameCounters) -> usize {
     let mut guard = consumer.lock().unwrap();
-    let Some(c) = guard.as_mut() else { return };
+    let Some(c) = guard.as_mut() else { return 0 };
     let backlog = c.slots();
     if backlog <= MAX_TOLERATED_BACKLOG_SAMPLES {
-        return;
+        return 0;
     }
     let to_drop = backlog - BACKLOG_TARGET_SAMPLES;
     let mut dropped = 0usize;
@@ -1046,10 +1047,12 @@ fn trim_backlog(consumer: &SwapConsumer, counters: &dsp_core::FrameCounters) {
              trimmed {dropped} samples to keep latency bounded"
         );
     }
+    dropped
 }
 
-fn pull_frame_blocking(consumer: &SwapConsumer, out: &mut [f32], counters: &dsp_core::FrameCounters) {
-    trim_backlog(consumer, counters);
+/// Fills `out` with the next frame; returns how many samples the backlog trim dropped first.
+fn pull_frame_blocking(consumer: &SwapConsumer, out: &mut [f32], counters: &dsp_core::FrameCounters) -> usize {
+    let trimmed = trim_backlog(consumer, counters);
 
     let mut n = 0;
     while n < out.len() {
@@ -1065,6 +1068,7 @@ fn pull_frame_blocking(consumer: &SwapConsumer, out: &mut [f32], counters: &dsp_
             None => thread::sleep(std::time::Duration::from_micros(200)),
         }
     }
+    trimmed
 }
 
 /// Pushes `frame` into `producer`. A `None` swap (no device configured for
@@ -1154,7 +1158,11 @@ fn spawn_mic_pipeline(
             let mut echo_canceller = aec::NlmsAec::new_default();
             let mut echo_reference = vec![0.0f32; FRAME_SAMPLES];
             loop {
-                pull_frame_blocking(&mic_in, &mut frame, &handles.counters);
+                let trimmed = pull_frame_blocking(&mic_in, &mut frame, &handles.counters);
+                if trimmed > 0 {
+                    // Dropped on purpose to cut the delay: drift correction must not stretch the voice to put it back.
+                    drift.skip(trimmed);
+                }
                 let started = Instant::now();
                 // Echo removal runs first, on the raw mic, where the echo is still a linear copy of the call
                 // audio. The reference ring is always drained (even when off) so it never goes stale: keep
