@@ -21,10 +21,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Order of the on/off switches in [`Status::toggles`] and [`ClientMsg::Toggle::key`]
 /// (see `EngineHandles::toggles`).
-pub const TOGGLE_COUNT: usize = 13;
+pub const TOGGLE_COUNT: usize = 14;
 /// Order of the small-number selectors in [`Status::presets`] and [`ClientMsg::Preset::key`]
 /// (see `EngineHandles::presets`).
-pub const PRESET_COUNT: usize = 6;
+pub const PRESET_COUNT: usize = 7;
 
 /// How the window should appear when it is opened or brought to the front.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -242,6 +242,10 @@ pub struct EngineHandles {
     pub speaker_shock_guard: StageToggle,
     /// Listening exposure: written by the speaker pipeline and the engine's tick thread, mirrored to the window.
     pub exposure: Arc<ExposureShared>,
+    /// Low-end PC mode on/off (`perf_governor`).
+    pub perf_auto: StageToggle,
+    /// Current CPU-saving step (0 = normal), set by the engine's governor only; the pipelines read it every frame.
+    pub perf_step: SharedPreset,
 
     /// Master mute for the WHOLE mic pipeline - unlike `mic_noise`/
     /// `mic_bvc`/`mic_studio` (which only gate whether their OWN stage's
@@ -420,6 +424,8 @@ impl EngineHandles {
             speaker_studio_preset: SharedPreset::new(settings.speaker_studio_preset),
             speaker_shock_guard: StageToggle::new(settings.speaker_shock_guard_on),
             exposure: Arc::new(ExposureShared::default()),
+            perf_auto: StageToggle::new(settings.perf_auto_on),
+            perf_step: SharedPreset::new(0),
             mic_master_enabled: StageToggle::new(true),
             speaker_master_enabled: StageToggle::new(true),
             monitor: StageToggle::new(settings.monitor_enabled),
@@ -472,6 +478,7 @@ impl EngineHandles {
             &self.monitor,
             &self.virtual_mic,
             &self.speaker_shock_guard,
+            &self.perf_auto,
         ]
     }
 
@@ -484,6 +491,7 @@ impl EngineHandles {
             &self.speaker_bvc_backend,
             &self.mic_nr_strength,
             &self.mic_boost,
+            &self.perf_step,
         ]
     }
 }

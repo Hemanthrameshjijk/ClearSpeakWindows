@@ -106,6 +106,10 @@ pub struct Settings {
     /// at maximum. 100 suits most call-centre headsets.
     #[serde(default = "default_headset_db_spl")]
     pub headset_db_spl: u8,
+    /// Low-end PC mode: pause the heaviest extras step by step while this PC cannot keep up (`perf_governor`).
+    /// Default ON. Never changes the other switches.
+    #[serde(default = "default_true")]
+    pub perf_auto_on: bool,
     /// "Speaker Tap (inbound, read-only)" - removed along with AEC (see
     /// `aec_on`'s doc comment); kept only so an old `settings.json` still
     /// deserializes.
@@ -294,6 +298,7 @@ impl Default for Settings {
             speaker_shock_guard_on: true,
             exposure_meter_on: true,
             headset_db_spl: default_headset_db_spl(),
+            perf_auto_on: true,
             speaker_tap_on: true,
             virtual_mic_target_id: None,
             virtual_speaker_source_id: None,

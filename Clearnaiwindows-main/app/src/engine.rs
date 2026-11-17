@@ -1219,21 +1219,38 @@ fn spawn_mic_pipeline(
                 // AutoGain runs AFTER BVC instead of before it. When BVC is
                 // off, the original order (AutoGain -> RNNoise -> BVC
                 // no-op) is unchanged.
-                if handles.mic_bvc.is_on() {
+                // Low-end PC mode (`perf_governor`): stages paused while the PC cannot keep up. The user's
+                // switches are untouched; this only skips work.
+                let perf = handles.perf_step.load();
+                let light = crate::perf_governor::light_mic_noise(perf);
+                if handles.mic_bvc.is_on() && !light {
                     bvc_stage.process(&mut frame);
-                    transcript_stage.process(&mut frame); // tap only: what you said, after BVC cleanup
+                    if !crate::perf_governor::skip_transcript(perf) {
+                        transcript_stage.process(&mut frame); // tap only: what you said, after BVC cleanup
+                    }
                     // Accent conversion sits right after BVC (which does the cleanup) and before AutoGain.
                     // Off = one atomic load, frame untouched. It is its own switch, independent of BVC.
-                    accent_stage.process(&mut frame);
+                    if !crate::perf_governor::skip_accent(perf) {
+                        accent_stage.process(&mut frame);
+                    }
                     auto_gain.process(&mut frame);
                 } else {
                     // BVC off: Accent (if switched on) gets the post-voice-gate mic signal - never the
                     // RNNoise output, which runs after it. Cleaner input = better conversion, so BVC on is
                     // still recommended.
-                    transcript_stage.process(&mut frame);
-                    accent_stage.process(&mut frame);
+                    if !crate::perf_governor::skip_transcript(perf) {
+                        transcript_stage.process(&mut frame);
+                    }
+                    if !crate::perf_governor::skip_accent(perf) {
+                        accent_stage.process(&mut frame);
+                    }
                     auto_gain.process(&mut frame);
-                    run_if_enabled(noise_stage.as_mut(), &handles.mic_noise, &mut frame);
+                    if light && handles.mic_bvc.is_on() {
+                        // Background-voice removal paused to save CPU: the light noise removal stands in.
+                        noise_stage.process(&mut frame);
+                    } else {
+                        run_if_enabled(noise_stage.as_mut(), &handles.mic_noise, &mut frame);
+                    }
                     // `handles.mic_bvc` is already known false here, so this
                     // is a no-op - kept as `run_if_enabled` (rather than
                     // skipped outright) only so a live toggle flip between
@@ -1241,7 +1258,9 @@ fn spawn_mic_pipeline(
                     // permanently unrun; see `run_if_enabled`'s docs.
                     run_if_enabled(bvc_stage.as_mut(), &handles.mic_bvc, &mut frame);
                 }
-                run_if_enabled(studio_stage.as_mut(), &handles.mic_studio, &mut frame);
+                if !crate::perf_governor::skip_studio(perf) {
+                    run_if_enabled(studio_stage.as_mut(), &handles.mic_studio, &mut frame);
+                }
                 output_limiter.process(&mut frame);
 
                 let peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
@@ -1462,8 +1481,13 @@ fn spawn_speaker_pipeline(
                 }
 
                 run_if_enabled(noise_stage.as_mut(), &handles.speaker_noise, &mut frame);
-                run_if_enabled(bvc_stage.as_mut(), &handles.speaker_bvc, &mut frame);
-                run_if_enabled(studio_stage.as_mut(), &handles.speaker_studio, &mut frame);
+                let perf = handles.perf_step.load();
+                if !crate::perf_governor::skip_speaker_bvc(perf) {
+                    run_if_enabled(bvc_stage.as_mut(), &handles.speaker_bvc, &mut frame);
+                }
+                if !crate::perf_governor::skip_studio(perf) {
+                    run_if_enabled(studio_stage.as_mut(), &handles.speaker_studio, &mut frame);
+                }
                 if handles.speaker_shock_guard.is_on() {
                     shock.process(&mut frame);
                     ceiling.process(&mut frame);

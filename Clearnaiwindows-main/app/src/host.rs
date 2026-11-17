@@ -434,6 +434,31 @@ fn toggle_mute(host: &Host) {
 /// The engine side of the listening-exposure meter: restores the shift at start-up, feeds the speaker pipeline the
 /// current ear offset (headset rating + Windows volume) once a second, saves every minute and starts a new shift
 /// after a long break.
+/// Low-end PC mode, once a second: feed the governor what the audio paths and the accent report, apply its step.
+fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor) {
+    use dsp_core::{classify_status, compute_percentiles, RealtimeStatus};
+    const DEADLINE_NS: u64 = (dsp_core::FRAME_SAMPLES as u64 * 1_000_000_000) / dsp_core::SAMPLE_RATE_HZ as u64;
+    let change = if h.perf_auto.is_on() {
+        let over = |log: &dsp_core::LatencyLog| {
+            classify_status(&compute_percentiles(log.snapshot()), DEADLINE_NS, false) == RealtimeStatus::Overloaded
+        };
+        let accent_paused = h.accent.status().state == accent_onnx::pipeline::AccentState::Paused;
+        g.tick(crate::perf_governor::Signals {
+            overloaded: over(&h.latency_log) || over(&h.speaker_latency_log),
+            accent_paused,
+        })
+    } else {
+        g.reset()
+    };
+    if let Some((old, new, reason)) = change {
+        h.perf_step.store(new);
+        crate::log_info!(
+            "[perf] step {old} -> {new} because {reason}; paused now: {}",
+            crate::perf_governor::step_pauses(new)
+        );
+    }
+}
+
 struct ExposureTick {
     last_volume: Option<audio_io::volume::OutputVolume>,
 }
@@ -571,6 +596,7 @@ pub fn run_engine() {
             let mut cpu = crate::sysutil::CpuSampler::new();
             let mut ticks = 0u32;
             let mut exposure = ExposureTick::start(&host.handles);
+            let mut governor = crate::perf_governor::Governor::new();
             let mut watch = crate::diag::StateWatch::default();
             let (mut cpu_sum, mut cpu_max, mut cpu_n) = (0.0f32, 0.0f32, 0u32);
             loop {
@@ -593,6 +619,7 @@ pub fn run_engine() {
                 if ticks % 10 == 0 {
                     let settings = host.settings.lock().unwrap().clone();
                     exposure.second(&host.handles, &settings, ticks % 600 == 0);
+                    perf_second(&host.handles, &mut governor);
                 }
                 if ticks % 10 == 0 {
                     if let Some(p) = cpu.sample() {

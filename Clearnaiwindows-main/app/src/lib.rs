@@ -19,6 +19,7 @@ pub mod crash;
 pub mod dev_code;
 pub mod device_id;
 pub mod dpapi;
+pub mod perf_governor;
 pub mod preshift;
 pub mod exposure_store;
 pub mod device_rules;

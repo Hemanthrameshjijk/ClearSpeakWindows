@@ -373,6 +373,8 @@ pub enum Message {
     SelectSpeakerStudioPreset(&'static str),
     /// Loud-sound protection on the call audio (`dsp_core::ShockGuard`).
     ToggleShockGuard(bool),
+    /// Low-end PC mode (`perf_governor`).
+    TogglePerfAuto(bool),
     /// Show the listening-exposure line and alerts.
     ToggleExposureMeter(bool),
     /// Headset loudness for the exposure estimate (label from `ui_logic::HEADSET_DB_NAMES`).
@@ -968,7 +970,7 @@ fn update_main(state: &mut MainState, message: Message) {
             } else {
                 state.consecutive_overloaded_ticks = 0;
             }
-            if state.consecutive_overloaded_ticks >= LOW_CPU_SUGGESTION_THRESHOLD_TICKS {
+            if state.consecutive_overloaded_ticks >= LOW_CPU_SUGGESTION_THRESHOLD_TICKS && !state.settings.perf_auto_on {
                 state.show_low_cpu_suggestion = true;
             }
             if let Some(live) = &state.handles.remote {
@@ -1417,6 +1419,14 @@ fn update_main(state: &mut MainState, message: Message) {
             state.settings.speaker_studio_on = on;
             persist(&state.settings);
         }
+        Message::TogglePerfAuto(on) => {
+            state.handles.perf_auto.set(on);
+            state.settings.perf_auto_on = on;
+            persist(&state.settings);
+            if on {
+                state.show_low_cpu_suggestion = false;
+            }
+        }
         Message::ToggleShockGuard(on) => {
             state.handles.speaker_shock_guard.set(on);
             state.settings.speaker_shock_guard_on = on;
@@ -1590,6 +1600,7 @@ fn reset_to_defaults(state: &mut MainState) {
     update_main(state, Message::ToggleSpeakerStudio(d.speaker_studio_on));
     update_main(state, Message::SelectSpeakerStudioPreset(preset(d.speaker_studio_preset)));
     update_main(state, Message::ToggleShockGuard(d.speaker_shock_guard_on));
+    update_main(state, Message::TogglePerfAuto(d.perf_auto_on));
     update_main(state, Message::ToggleExposureMeter(d.exposure_meter_on));
     update_main(state, Message::SelectHeadsetDb(crate::ui_logic::headset_db_name(d.headset_db_spl)));
     update_main(

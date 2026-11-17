@@ -22,6 +22,7 @@ pub const TOGGLE_NAMES: [&str; crate::ipc::TOGGLE_COUNT] = [
     "monitor",
     "virtual microphone",
     "loud-sound protection",
+    "save CPU automatically",
 ];
 
 /// Names of `EngineHandles::presets`, in the same order (`ipc::PRESET_COUNT`).
@@ -32,6 +33,7 @@ pub const PRESET_NAMES: [&str; crate::ipc::PRESET_COUNT] = [
     "caller BVC model",
     "noise reduction strength",
     "mic boost dB",
+    "CPU-saving step",
 ];
 
 pub fn role_name(role: u8) -> &'static str {

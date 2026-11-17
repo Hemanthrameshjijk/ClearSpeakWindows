@@ -202,6 +202,19 @@ fn card_head<'a>(
 }
 
 /// One setting: title and description at the left, a pill switch at the right.
+/// "Saving CPU (level 2): ... paused" while low-end PC mode is holding stages back.
+fn perf_text(state: &MainState, size: f32) -> Element<'static, Message> {
+    let step = state.handles.perf_step.load();
+    text(format!(
+        "Saving CPU (level {step} of {}): {} paused until this PC catches up",
+        crate::perf_governor::MAX_STEP,
+        crate::perf_governor::step_pauses(step)
+    ))
+    .size(size)
+    .color(amber_text(state.settings.theme_dark))
+    .into()
+}
+
 /// "Ears today: 42% ..." coloured by how close the agent is to the daily limit; says when it is only an estimate.
 fn exposure_text(state: &MainState, size: f32) -> Element<'static, Message> {
     let t = style::tokens_for(state.settings.theme_dark);
@@ -1365,6 +1378,9 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
             if state.settings.exposure_meter_on && state.settings.call_audio_on {
                 body = body.push(exposure_text(state, 12.0));
             }
+            if h.perf_step.load() > 0 {
+                body = body.push(perf_text(state, 12.0));
+            }
             body.into()
         }
     };
@@ -2310,7 +2326,13 @@ fn advanced_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
     }
     processing = processing
         .push(disabled_select(state, "Accent conversion quality", "Balanced"))
-        .push(disabled_select(state, "Processing priority", "Normal"))
+        .push(setting_row(
+            state,
+            "Save CPU automatically",
+            Some("When this PC can't keep up, pause Studio, Transcript, caller voice removal and then Accent, one at a time, and bring them back when it can. Your switches stay as you set them."),
+            h.perf_auto.is_on(),
+            Message::TogglePerfAuto,
+        ))
         .push(
             row![
                 btn(text("Low CPU mode").size(13)).padding([9, 14]).on_press(Message::EnableLowCpuMode).style(style::outline),
@@ -2319,6 +2341,9 @@ fn advanced_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
             .spacing(12)
             .align_y(iced::Alignment::Center),
         );
+    if h.perf_step.load() > 0 {
+        processing = processing.push(perf_text(state, 12.0));
+    }
     if state.show_low_cpu_suggestion {
         processing = processing.push(text("\u{26A0} Your PC is struggling to keep up. Try Low CPU mode.").size(12).color(amber_text(dark)));
     }

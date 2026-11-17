@@ -451,7 +451,7 @@ pub fn alerts(i: &AlertInput) -> Vec<Alert> {
         }
     }
     if i.cpu_struggling {
-        out.push(Alert { key: "cpu", text: "This PC is struggling; audio may crackle. Try the Low CPU option in Advanced.".into() });
+        out.push(Alert { key: "cpu", text: "This PC is struggling; audio may crackle. Turn on Save CPU automatically in Advanced, or try Low CPU mode.".into() });
     }
     out
 }
