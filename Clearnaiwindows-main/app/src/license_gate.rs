@@ -39,6 +39,15 @@ pub fn status_for(settings: &Settings, devices: &[String], now: u64, registry_ma
     license::status(&token, &crate::license_key::PUBLIC_KEY, devices, now)
 }
 
+/// Who the stored license (`token`, already unprotected) was issued to, for naming their log folder. A dev code counts
+/// too. `None` when not signed in or the token is not a correctly signed license.
+pub fn holder_name(token: &str) -> Option<String> {
+    if let Some(Status::Licensed(p)) = crate::dev_code::status(token, 0) {
+        return Some(p.name);
+    }
+    license::token::signed_name(token, &crate::license_key::PUBLIC_KEY)
+}
+
 /// A feature the license allows again (renewed, clock fixed, back on the right PC) comes back as the user had it:
 /// the saved settings were never changed by the gate, so they still say what the user wants.
 pub fn restore(h: &crate::shared::EngineHandles, before: Allowed, now: Allowed, s: &crate::settings::Settings) {

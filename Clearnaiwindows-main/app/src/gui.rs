@@ -972,6 +972,8 @@ fn update_main(state: &mut MainState, message: Message) {
                 }
             }
             state.license_status = if state.clock_wrong { license::Status::Ended } else { compute_license(&state.license_token) };
+            // Signed in or out: this window's log moves to that agent's folder on the share.
+            crate::logging::set_person(crate::license_gate::holder_name(&state.license_token).as_deref());
             state.io_counters_snapshot = IoCountersSnapshot::read(&state.handles.counters);
 
             let speaker_all_off = !state.handles.speaker_noise.is_on()

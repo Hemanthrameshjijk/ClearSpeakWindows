@@ -78,8 +78,16 @@ impl std::fmt::Display for TokenError {
     }
 }
 
-/// Checks `token` against `public_key` for the PC whose component texts are `current`, at `now` (unix seconds).
-pub fn verify(token: &str, public_key: &[u8; 32], current: &[String], now: u64) -> Result<Payload, TokenError> {
+/// The person a correctly signed token was issued to, whether or not it is still valid on this PC (expiry and device
+/// are not checked). For labelling only, e.g. naming this person's log folder; never for deciding access.
+pub fn signed_name(token: &str, public_key: &[u8; 32]) -> Option<String> {
+    let p = signed_payload(token, public_key).ok()?;
+    let name = p.name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The payload of a token whose signature holds (nothing else checked).
+fn signed_payload(token: &str, public_key: &[u8; 32]) -> Result<Payload, TokenError> {
     let t = token.trim();
     let rest = t.strip_prefix(PREFIX).ok_or(TokenError::Malformed)?;
     let (body_b64, sig_b64) = rest.split_once('.').ok_or(TokenError::Malformed)?;
@@ -91,7 +99,16 @@ pub fn verify(token: &str, public_key: &[u8; 32], current: &[String], now: u64) 
     let vk = VerifyingKey::from_bytes(public_key).map_err(|_| TokenError::BadSignature)?;
     vk.verify(&body, &Signature::from_bytes(&sig)).map_err(|_| TokenError::BadSignature)?;
     // Only after the signature holds do we trust the bytes enough to parse them.
-    let p: Payload = serde_json::from_slice(&body).map_err(|_| TokenError::Malformed)?;
+    serde_json::from_slice(&body).map_err(|_| TokenError::Malformed)
+}
+
+/// Checks `token` against `public_key` for the PC whose component texts are `current`, at `now` (unix seconds).
+pub fn verify(token: &str, public_key: &[u8; 32], current: &[String], now: u64) -> Result<Payload, TokenError> {
+    let p = signed_payload(token, public_key)?;
+    check(p, current, now)
+}
+
+fn check(p: Payload, current: &[String], now: u64) -> Result<Payload, TokenError> {
     if p.v != 1 {
         return Err(TokenError::UnsupportedVersion);
     }
@@ -145,6 +162,16 @@ mod tests {
         assert!(matches!(verify(&t, &pk, &me, 400_000), Err(TokenError::Expired(_))));
         assert_eq!(verify(&t, &pk, &me, 200_000 - 86_401), Err(TokenError::NotYetValid));
         assert!(verify(&t, &pk, &me, 200_000 - 86_000).is_ok(), "a clock one day behind is tolerated");
+    }
+
+    #[test]
+    fn signed_name_reads_any_genuine_token_and_nothing_else() {
+        let pk = public_key_of(&SECRET);
+        let t = sign(&payload(texts(&pc("g1")), 1, 2), &SECRET); // long expired, another PC: still names the person
+        assert_eq!(signed_name(&t, &pk).as_deref(), Some("Asha"));
+        assert_eq!(signed_name(&sign(&payload(Vec::new(), 1, 2), &[9u8; 32]), &pk), None, "not our signature");
+        assert_eq!(signed_name("", &pk), None);
+        assert_eq!(signed_name("CLNAI1.a.b", &pk), None);
     }
 
     #[test]

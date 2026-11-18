@@ -213,6 +213,9 @@ fn fail(p: &mut Progress, msg: String) {
 pub fn run_helper() {
     let app = crate::setup::app_data_dir();
     crate::logging::init_named(&app, "clearspeak-voicetest.log");
+    crate::logging::set_person(
+        crate::license_gate::holder_name(&crate::dpapi::unprotect(&crate::settings::load().license_key)).as_deref(),
+    );
     crate::crash::install(&app, "clearspeak-voicetest.log");
     audio_io::initialize_com_for_this_thread();
     audio_io::set_error_sink(|msg| match msg.split_once("] INFO: ") {

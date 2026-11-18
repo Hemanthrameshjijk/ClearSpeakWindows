@@ -573,6 +573,9 @@ pub fn run_window() -> iced::Result {
         return Ok(());
     }
     crate::logging::init_named(&crate::setup::app_data_dir(), "clearspeak-window.log");
+    crate::logging::set_person(
+        crate::license_gate::holder_name(&crate::dpapi::unprotect(&crate::settings::load().license_key)).as_deref(),
+    );
     crate::crash::install(&crate::setup::app_data_dir(), "clearspeak-window.log");
     start_show_listener();
     if let Some(note) = crate::setup::take_migration_note() {

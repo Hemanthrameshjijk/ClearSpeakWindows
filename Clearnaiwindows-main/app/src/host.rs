@@ -588,6 +588,10 @@ pub fn run_engine() {
     // Must happen before anything that touches WASAPI on this thread (see `audio_io::initialize_com_for_this_thread`).
     audio_io::initialize_com_for_this_thread();
     crate::logging::init(&setup::app_data_dir());
+    // Names this agent's log folder on the share (`<license name>_<PC>`) before the first line is written.
+    crate::logging::set_person(
+        crate::license_gate::holder_name(&crate::dpapi::unprotect(&settings::load().license_key)).as_deref(),
+    );
     crate::crash::install(&setup::app_data_dir(), "clearspeak.log");
     // audio-io reports everything through one channel; route its informational notes to INFO so the log's ERROR
     // lines are real errors only.
@@ -636,6 +640,10 @@ pub fn run_engine() {
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
                 let settings = host.settings.lock().unwrap().clone();
                 let status = crate::license_gate::status_for(&settings, &devices, now, crate::clock_guard::registry_mark());
+                // Signed in or out: the log moves to that agent's folder on the share.
+                crate::logging::set_person(
+                    crate::license_gate::holder_name(&crate::dpapi::unprotect(&settings.license_key)).as_deref(),
+                );
                 // Logged once per change (never the token, name or email): explains "why did noise removal switch off".
                 let line = crate::diag::license_line(&status, now);
                 if line != last_logged {
