@@ -135,9 +135,42 @@ fn repeat_count(seen: &mut HashMap<String, (Instant, u64)>, msg: &str, now: Inst
     }
 }
 
-/// Owns the file. Everything queued is written in one `write_all`.
-fn writer(path: &Path, rx: Receiver<String>, max_bytes: u64) {
-    let open = |truncate: bool| {
+/// Shared network folder every PC writes its logs to, so support can read them without asking the agent. Each user
+/// gets their own sub-folder (`<user name>`). Logs go to `%LOCALAPPDATA%\ClearSpeak` only while this is not reachable.
+/// `CLEARSPEAK_LOG_SHARE` overrides it; set it to an empty value to keep logs local only.
+const DEFAULT_LOG_SHARE: &str = r"\\10.11.12.4\Clearspeak log\FileLogs";
+
+/// After the shared folder could not be reached (or a write to it failed), try again this often.
+const SHARE_RETRY: Duration = Duration::from_secs(60);
+
+/// At start, lines are held in memory (up to this much) until it is known whether the share can be used, so they all
+/// end up in one place. If deciding takes longer than `DECIDE_LIMIT` they go to the local log instead.
+const HOLD_BYTES: usize = 4 * 1024 * 1024;
+const DECIDE_LIMIT: Duration = Duration::from_secs(30);
+
+/// `<share>\<user>`, or `None` when the share is switched off.
+pub fn share_dir() -> Option<PathBuf> {
+    let root = std::env::var_os("CLEARSPEAK_LOG_SHARE").unwrap_or_else(|| DEFAULT_LOG_SHARE.into());
+    if root.is_empty() {
+        return None;
+    }
+    let clean = |var: &str, fallback: &str| {
+        let v = std::env::var(var).unwrap_or_default();
+        let v: String = v.chars().filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+        if v.trim().is_empty() { fallback.to_string() } else { v.trim().to_string() }
+    };
+    Some(PathBuf::from(root).join(clean("USERNAME", "user")))
+}
+
+/// One log file with the size cap. The writer keeps one on the local disk and, when reachable, one on the share.
+struct Sink {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+    size: u64,
+}
+
+impl Sink {
+    fn open_file(path: &Path, truncate: bool) -> std::io::Result<std::fs::File> {
         let mut o = OpenOptions::new();
         o.create(true);
         if truncate {
@@ -145,41 +178,171 @@ fn writer(path: &Path, rx: Receiver<String>, max_bytes: u64) {
         } else {
             o.append(true);
         }
-        o.open(path).ok()
-    };
-    let mut file = open(false);
-    let mut size = file.as_ref().and_then(|f| f.metadata().ok()).map_or(0, |m| m.len());
-    let mut batch = String::new();
-    while let Ok(first) = rx.recv() {
-        batch.clear();
-        batch.push_str(&first);
-        batch.push('\n');
-        while let Ok(more) = rx.try_recv() {
-            batch.push_str(&more);
-            batch.push('\n');
-        }
-        if size >= max_bytes {
+        o.open(path)
+    }
+
+    fn open(path: PathBuf) -> std::io::Result<Sink> {
+        let file = Self::open_file(&path, false)?;
+        let size = file.metadata().map_or(0, |m| m.len());
+        Ok(Sink { path, file: Some(file), size })
+    }
+
+    /// Writes `batch` (rolling the file over at `max_bytes` first). `Err` only when the write itself failed.
+    fn write(&mut self, batch: &str, max_bytes: u64) -> std::io::Result<()> {
+        let mut note = String::new();
+        if self.size >= max_bytes {
             // Keep the previous file as `<name>.old` (replacing an older one) so the history before an issue is not
             // lost; fall back to truncating if the rename fails.
-            drop(file.take());
-            let old = path.with_extension("log.old");
+            drop(self.file.take());
+            let old = self.path.with_extension("log.old");
             let _ = std::fs::remove_file(&old);
-            let kept = std::fs::rename(path, &old).is_ok();
-            file = open(true);
-            size = 0;
-            batch.insert_str(
-                0,
-                &format!(
-                    "[{}] (log file reached {max_bytes} bytes; {})\n",
-                    timestamp(),
-                    if kept { "previous part kept as .log.old" } else { "truncated" }
-                ),
+            let kept = std::fs::rename(&self.path, &old).is_ok();
+            self.file = Self::open_file(&self.path, true).ok();
+            self.size = 0;
+            note = format!(
+                "[{}] (log file reached {max_bytes} bytes; {})\n",
+                timestamp(),
+                if kept { "previous part kept as .log.old" } else { "truncated" }
             );
         }
-        if let Some(f) = file.as_mut() {
-            if f.write_all(batch.as_bytes()).is_ok() {
-                size += batch.len() as u64;
+        let Some(f) = self.file.as_mut() else { return Ok(()) };
+        f.write_all(note.as_bytes())?;
+        f.write_all(batch.as_bytes())?;
+        self.size += (note.len() + batch.len()) as u64;
+        Ok(())
+    }
+}
+
+/// Opens `<dir>\<file_name>` on the share on its own thread (an unreachable server can take 20+ s to fail, and the
+/// local log must not wait for that), retrying every `SHARE_RETRY` until it works.
+fn connect_share(dir: PathBuf, file_name: String) -> Receiver<(Sink, Option<String>)> {
+    let (tx, rx) = sync_channel(1);
+    let _ = std::thread::Builder::new().name("clearspeak-log-share".into()).spawn(move || {
+        let mut first_error = true;
+        loop {
+            let opened = std::fs::create_dir_all(&dir).and_then(|_| Sink::open(dir.join(&file_name)));
+            match opened {
+                Ok(sink) => {
+                    let _ = tx.send((sink, None));
+                    return;
+                }
+                Err(e) => {
+                    if first_error {
+                        first_error = false;
+                        // Report the failure once (through the same channel, with no sink) so the local log says why.
+                        let msg = format!("shared log folder {} not reachable ({e}); logging locally only, retrying every {} s", dir.display(), SHARE_RETRY.as_secs());
+                        let _ = tx.send((Sink { path: PathBuf::new(), file: None, size: 0 }, Some(msg)));
+                    }
+                    std::thread::sleep(SHARE_RETRY);
+                }
             }
+        }
+    });
+    rx
+}
+
+/// Owns the files. Lines go to this user's folder on the share; only while the share cannot be used do they go to
+/// the local log (`path`), which then also says why.
+fn writer(path: &Path, rx: Receiver<String>, max_bytes: u64) {
+    writer_with_share(path, rx, max_bytes, share_dir())
+}
+
+fn writer_with_share(path: &Path, rx: Receiver<String>, max_bytes: u64, share: Option<PathBuf>) {
+    use std::sync::mpsc::RecvTimeoutError;
+    let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "clearspeak.log".into());
+    // Opened only when something has to go there, so a PC on the share leaves no local log behind.
+    let mut local: Option<Sink> = None;
+    let write_local = |local: &mut Option<Sink>, text: &str| {
+        let sink = local.get_or_insert_with(|| {
+            Sink::open(path.to_path_buf()).unwrap_or(Sink { path: path.to_path_buf(), file: None, size: 0 })
+        });
+        let _ = sink.write(text, max_bytes);
+    };
+    let mut remote: Option<Sink> = None;
+    let mut pending = share.clone().map(|d| connect_share(d, file_name.clone()));
+    // `Some(start)`: still waiting for the first answer from the share; lines are held in `held` meanwhile.
+    let mut deciding = pending.as_ref().map(|_| Instant::now());
+    let mut held = String::new();
+    let mut retry_at: Option<Instant> = None;
+    let mut batch = String::new();
+    loop {
+        batch.clear();
+        let closed = match rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(first) => {
+                batch.push_str(&first);
+                batch.push('\n');
+                while let Ok(more) = rx.try_recv() {
+                    batch.push_str(&more);
+                    batch.push('\n');
+                }
+                false
+            }
+            Err(RecvTimeoutError::Timeout) => false,
+            Err(RecvTimeoutError::Disconnected) => true,
+        };
+        // The share's thread reports once if it failed, and again when (if ever) it opens the file.
+        let mut note = String::new();
+        if let Some(rx_share) = &pending {
+            while let Ok((sink, failure)) = rx_share.try_recv() {
+                deciding = None;
+                match failure {
+                    Some(msg) => note.push_str(&format!("[{}] [INFO] [log] {msg}\n", timestamp())),
+                    None => {
+                        let line = format!("[{}] [INFO] [log] writing this log to {}\n", timestamp(), sink.path.display());
+                        if local.is_some() {
+                            write_local(&mut local, &line); // so whoever opens the local log knows where the rest went
+                        }
+                        note.push_str(&line);
+                        remote = Some(sink);
+                        pending = None;
+                        break;
+                    }
+                }
+            }
+        }
+        if deciding.is_some_and(|t| t.elapsed() >= DECIDE_LIMIT) {
+            deciding = None;
+            note.push_str(&format!(
+                "[{}] [INFO] [log] shared log folder still not answering after {} s; logging locally for now\n",
+                timestamp(),
+                DECIDE_LIMIT.as_secs()
+            ));
+        }
+        if retry_at.is_some_and(|t| Instant::now() >= t) {
+            retry_at = None;
+            pending = share.clone().map(|d| connect_share(d, file_name.clone()));
+        }
+        if deciding.is_some() && !closed {
+            if held.len() + batch.len() <= HOLD_BYTES {
+                held.push_str(&batch);
+            }
+            continue;
+        }
+        let mut out = note;
+        out.push_str(&std::mem::take(&mut held));
+        out.push_str(&batch);
+        if !out.is_empty() {
+            let failed = match remote.as_mut() {
+                Some(sink) => sink.write(&out, max_bytes).err().map(|e| (e, sink.path.clone())),
+                None => {
+                    write_local(&mut local, &out);
+                    None
+                }
+            };
+            if let Some((e, p)) = failed {
+                remote = None;
+                retry_at = Some(Instant::now() + SHARE_RETRY);
+                out.push_str(&format!(
+                    "[{}] [ERROR] [log] writing to {} failed ({e}); logging locally, retrying in {} s\n",
+                    timestamp(),
+                    p.display(),
+                    SHARE_RETRY.as_secs()
+                ));
+                write_local(&mut local, &out);
+            }
+        }
+        if closed {
+            return;
         }
     }
 }
@@ -241,6 +404,84 @@ mod tests {
     }
 
     #[test]
+    fn writer_uses_the_share_and_falls_back_to_local_when_it_is_missing() {
+        let base = std::env::temp_dir().join(format!("clearspeak-share-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("local")).unwrap();
+        let local = base.join("local").join("clearspeak.log");
+        let share = base.join("share").join("someuser");
+        let (tx, rx) = sync_channel(QUEUE_LINES);
+        let (p, s) = (local.clone(), share.clone());
+        let h = std::thread::spawn(move || writer_with_share(&p, rx, 1_000_000, Some(s)));
+        tx.send("first".into()).unwrap();
+        // The share is opened on its own thread; wait for it like a running app would.
+        let shared = share.join("clearspeak.log");
+        for i in 0..200 {
+            tx.send(format!("line {i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(10));
+            if std::fs::read_to_string(&shared).is_ok_and(|t| t.contains(&format!("line {i}"))) {
+                break;
+            }
+        }
+        tx.send("last".into()).unwrap();
+        drop(tx);
+        h.join().unwrap();
+        let s = std::fs::read_to_string(&shared).unwrap();
+        assert!(s.contains("first") && s.contains("last"), "share has every line, including those from before it opened");
+        assert!(s.contains("writing this log to"), "the log says where it is");
+        assert!(!local.exists(), "nothing is written locally while the share works");
+
+        // An unreachable share: the local log is used and says why.
+        let local2 = base.join("local").join("b.log");
+        let blocker = base.join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let bad = blocker.join("not-a-dir"); // parent is a file -> cannot create
+        let (tx, rx) = sync_channel(QUEUE_LINES);
+        let p = local2.clone();
+        let h = std::thread::spawn(move || writer_with_share(&p, rx, 1_000_000, Some(bad)));
+        for i in 0..50 {
+            tx.send(format!("x {i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(tx);
+        h.join().unwrap();
+        let l2 = std::fs::read_to_string(&local2).unwrap();
+        assert!(l2.contains("x 49"), "local log kept going");
+        assert!(l2.contains("not reachable"), "local log says the share failed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Against the real shared folder (needs the network): `cargo test --lib real_share -- --ignored --nocapture`.
+    /// Writes `<share>\<user>\clearspeak-share-check.log` and removes it again.
+    #[test]
+    #[ignore]
+    fn real_share() {
+        let share = share_dir().expect("share switched off");
+        let local = std::env::temp_dir().join("clearspeak-share-check.log");
+        let _ = std::fs::remove_file(&local);
+        let (tx, rx) = sync_channel(QUEUE_LINES);
+        let (p, s) = (local.clone(), share.clone());
+        let started = Instant::now();
+        let h = std::thread::spawn(move || writer_with_share(&p, rx, 1_000_000, Some(s)));
+        let target = share.join("clearspeak-share-check.log");
+        for i in 0..600 {
+            tx.send(format!("check line {i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            if std::fs::read_to_string(&target).is_ok_and(|t| t.contains(&format!("check line {i}"))) {
+                break;
+            }
+        }
+        drop(tx);
+        h.join().unwrap();
+        let text = std::fs::read_to_string(&target).unwrap_or_default();
+        println!("share file {} after {:?}:\n{text}", target.display(), started.elapsed());
+        println!("local fallback file exists: {}", local.exists());
+        let _ = std::fs::remove_file(&target);
+        assert!(text.contains("check line 0"), "lines reached the share");
+        assert!(!local.exists(), "nothing written locally");
+    }
+
+    #[test]
     fn writer_truncates_at_the_cap_and_keeps_going() {
         let dir = std::env::temp_dir().join(format!("clearspeak-log-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -248,7 +489,7 @@ mod tests {
         std::fs::write(&path, vec![b'@'; 5000]).unwrap(); // already over the cap, like the 200 MB real log
         let (tx, rx) = sync_channel(QUEUE_LINES);
         let p = path.clone();
-        let h = std::thread::spawn(move || writer(&p, rx, 1000));
+        let h = std::thread::spawn(move || writer_with_share(&p, rx, 1000, None));
         for i in 0..200 {
             tx.send(format!("line {i}")).unwrap();
         }
