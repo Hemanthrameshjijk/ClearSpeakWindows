@@ -136,12 +136,12 @@ fn repeat_count(seen: &mut HashMap<String, (Instant, u64)>, msg: &str, now: Inst
     }
 }
 
-/// Shared network folder every PC writes its logs to, so support can read them without asking the agent. Each agent
-/// gets their own sub-folder, `<name on their license>_<PC name>` (just `<PC name>` before anyone signs in), so agents
-/// never write into each other's files even when every PC uses the same Windows account. Logs go to
-/// `%LOCALAPPDATA%\ClearSpeak` only while this is not reachable. `CLEARSPEAK_LOG_SHARE` overrides it; set it to an
-/// empty value to keep logs local only.
-const DEFAULT_LOG_SHARE: &str = r"\\10.11.12.4\Clearspeak log\FileLogs";
+/// Shared network folders the PCs write their logs to, so support can read them without asking the agent. They are
+/// tried in this order and the first one that can be reached is used (the sites are on different networks); logs go
+/// to `%LOCALAPPDATA%\ClearSpeak` only while none of them can be reached. Each agent gets their own sub-folder named
+/// after the user (the name on their license; `<PC name>` before anyone signs in). `CLEARSPEAK_LOG_SHARE` overrides
+/// the list (several folders separated by `;`); set it to an empty value to keep logs local only.
+const DEFAULT_LOG_SHARES: &[&str] = &[r"\\10.11.12.4\Clearspeak log\FileLogs", r"\\192.168.168.4\Clear Voice\Logfiles"];
 
 /// The license holder's name for the folder: `None` = not told yet, `Some(None)` = nobody signed in.
 static PERSON: Mutex<Option<Option<String>>> = Mutex::new(None);
@@ -176,35 +176,45 @@ fn pc_name() -> String {
     if pc.is_empty() { "PC".into() } else { pc }
 }
 
-/// `<name>_<PC>`, or `<PC>` when nobody is signed in.
+/// The user's name, or `<PC>` when nobody is signed in.
 fn folder_name(person: Option<&str>, pc: &str) -> String {
     match person {
-        Some(n) if !n.is_empty() => format!("{n}_{pc}"),
+        Some(n) if !n.is_empty() => n.to_string(),
         _ => pc.to_string(),
     }
 }
 
-fn share_root() -> Option<PathBuf> {
-    let root = std::env::var_os("CLEARSPEAK_LOG_SHARE").unwrap_or_else(|| DEFAULT_LOG_SHARE.into());
-    (!root.is_empty()).then(|| PathBuf::from(root))
+/// The share folders, in the order they are tried (empty: logs stay local).
+fn share_roots() -> Vec<PathBuf> {
+    match std::env::var("CLEARSPEAK_LOG_SHARE") {
+        Ok(list) => list.split(';').map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
+        Err(_) => DEFAULT_LOG_SHARES.iter().map(PathBuf::from).collect(),
+    }
 }
 
-/// This agent's folder on the share as of now, or `None` when the share is switched off. Touches no network.
-pub fn share_dir() -> Option<PathBuf> {
-    Some(share_root()?.join(folder_name(person().as_deref(), &pc_name())))
+/// This agent's folder on each share as of now, in the order they are tried (empty when the share is switched off).
+/// Touches no network.
+pub fn share_dirs() -> Vec<PathBuf> {
+    let folder = folder_name(person().as_deref(), &pc_name());
+    share_roots().into_iter().map(|r| r.join(&folder)).collect()
 }
 
-/// Works out the share folder for one connection attempt (in the real app: from `set_person`; in tests: fixed).
-type ShareDir = Arc<dyn Fn() -> PathBuf + Send + Sync>;
+/// Works out the share folders for one connection attempt, first choice first (in the real app: from `set_person`;
+/// in tests: fixed).
+type ShareDir = Arc<dyn Fn() -> Vec<PathBuf> + Send + Sync>;
 
 fn real_share() -> Option<ShareDir> {
-    let root = share_root()?;
+    let roots = share_roots();
+    if roots.is_empty() {
+        return None;
+    }
     Some(Arc::new(move || {
         let start = Instant::now();
         while PERSON.lock().map(|p| p.is_none()).unwrap_or(false) && start.elapsed() < PERSON_WAIT {
             std::thread::sleep(Duration::from_millis(20));
         }
-        root.join(folder_name(person().as_deref(), &pc_name()))
+        let folder = folder_name(person().as_deref(), &pc_name());
+        roots.iter().map(|r| r.join(&folder)).collect()
     }))
 }
 
@@ -271,27 +281,40 @@ impl Sink {
 /// was worked out for.
 type ShareResult = (Sink, Option<String>, u64);
 
-/// Opens `<dir>\<file_name>` on the share on its own thread (an unreachable server can take 20+ s to fail, and the
-/// local log must not wait for that), retrying every `SHARE_RETRY` until it works. The folder is worked out again on
-/// every attempt, so a retry after a sign-in goes to the new folder.
-fn connect_share(dir: ShareDir, file_name: String) -> Receiver<ShareResult> {
+/// Opens `<dir>\<file_name>` in the first share folder that works, on its own thread (an unreachable server can take
+/// 20+ s to fail, and the local log must not wait for that), retrying all of them every `SHARE_RETRY` until one works.
+/// The folders are worked out again on every attempt, so a retry after a sign-in goes to the new folder.
+fn connect_share(dirs: ShareDir, file_name: String) -> Receiver<ShareResult> {
     let (tx, rx) = sync_channel(1);
     let _ = std::thread::Builder::new().name("clearspeak-log-share".into()).spawn(move || {
         let mut first_error = true;
         loop {
             let gen = PERSON_GEN.load(Ordering::SeqCst);
-            let dir = dir();
-            let opened = std::fs::create_dir_all(&dir).and_then(|_| Sink::open(dir.join(&file_name)));
+            let mut errors = Vec::new();
+            let mut opened = None;
+            for dir in dirs() {
+                match std::fs::create_dir_all(&dir).and_then(|_| Sink::open(dir.join(&file_name))) {
+                    Ok(sink) => {
+                        opened = Some(sink);
+                        break;
+                    }
+                    Err(e) => errors.push(format!("{} ({e})", dir.display())),
+                }
+            }
             match opened {
-                Ok(sink) => {
+                Some(sink) => {
                     let _ = tx.send((sink, None, gen));
                     return;
                 }
-                Err(e) => {
+                None => {
                     if first_error {
                         first_error = false;
                         // Report the failure once (through the same channel, with no sink) so the local log says why.
-                        let msg = format!("shared log folder {} not reachable ({e}); logging locally only, retrying every {} s", dir.display(), SHARE_RETRY.as_secs());
+                        let msg = format!(
+                            "shared log folders not reachable: {}; logging locally only, retrying every {} s",
+                            errors.join(", "),
+                            SHARE_RETRY.as_secs()
+                        );
                         if tx.send((Sink { path: PathBuf::new(), file: None, size: 0 }, Some(msg), gen)).is_err() {
                             return; // the writer has gone
                         }
@@ -468,12 +491,12 @@ mod tests {
     use super::*;
 
     fn fixed(p: PathBuf) -> ShareDir {
-        Arc::new(move || p.clone())
+        Arc::new(move || vec![p.clone()])
     }
 
     #[test]
-    fn folder_is_name_and_pc_and_safe() {
-        assert_eq!(folder_name(Some("Asha Rao"), "PC-07"), "Asha Rao_PC-07");
+    fn folder_is_user_name_and_safe() {
+        assert_eq!(folder_name(Some("Asha Rao"), "PC-07"), "Asha Rao");
         assert_eq!(folder_name(None, "PC-07"), "PC-07", "before sign-in: PC only");
         assert_eq!(folder_name(Some(""), "PC-07"), "PC-07");
         assert_eq!(clean_part(r#" A/B\C:D*E?F"G<H>I|J. "#), "ABCDEFGHIJ", "no characters Windows refuses in a folder name");
@@ -487,7 +510,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let folder = Arc::new(Mutex::new(base.join("PC-07")));
         let f = folder.clone();
-        let dir: ShareDir = Arc::new(move || f.lock().unwrap().clone());
+        let dir: ShareDir = Arc::new(move || vec![f.lock().unwrap().clone()]);
         let local = base.join("local.log");
         let (tx, rx) = sync_channel(QUEUE_LINES);
         let p = local.clone();
@@ -579,35 +602,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Against the real shared folder (needs the network): `cargo test --lib real_share -- --ignored --nocapture`.
-    /// Writes `<share>\Share Check_<PC>\clearspeak-share-check.log` and removes it (and the folder) again.
     #[test]
-    #[ignore]
-    fn real_share() {
-        set_person(Some("Share Check"));
-        let share = share_dir().expect("share switched off");
-        let local = std::env::temp_dir().join("clearspeak-share-check.log");
-        let _ = std::fs::remove_file(&local);
+    fn writer_uses_the_second_share_when_the_first_is_missing() {
+        let base = std::env::temp_dir().join(format!("clearspeak-second-share-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("local")).unwrap();
+        let blocker = base.join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let first = blocker.join("Asha"); // parent is a file -> cannot create, like an unreachable server
+        let second = base.join("second").join("Asha");
+        let local = base.join("local").join("clearspeak.log");
+        let dirs: ShareDir = {
+            let (a, b) = (first.clone(), second.clone());
+            Arc::new(move || vec![a.clone(), b.clone()])
+        };
         let (tx, rx) = sync_channel(QUEUE_LINES);
-        let (p, s) = (local.clone(), share.clone());
-        let started = Instant::now();
-        let h = std::thread::spawn(move || writer_with_share(&p, rx, 1_000_000, Some(fixed(s))));
-        let target = share.join("clearspeak-share-check.log");
-        for i in 0..600 {
-            tx.send(format!("check line {i}")).unwrap();
-            std::thread::sleep(Duration::from_millis(50));
-            if std::fs::read_to_string(&target).is_ok_and(|t| t.contains(&format!("check line {i}"))) {
+        let p = local.clone();
+        let h = std::thread::spawn(move || writer_with_share(&p, rx, 1_000_000, Some(dirs)));
+        let shared = second.join("clearspeak.log");
+        for i in 0..200 {
+            tx.send(format!("line {i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(10));
+            if std::fs::read_to_string(&shared).is_ok_and(|t| t.contains(&format!("line {i}"))) {
                 break;
             }
         }
         drop(tx);
         h.join().unwrap();
+        let s = std::fs::read_to_string(&shared).unwrap();
+        assert!(s.contains("line 0"), "second share has the lines");
+        assert!(!local.exists(), "nothing local while the second share works");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn default_shares_are_tried_in_order() {
+        let d: Vec<PathBuf> = DEFAULT_LOG_SHARES.iter().map(PathBuf::from).collect();
+        assert_eq!(d[0], PathBuf::from(r"\\10.11.12.4\Clearspeak log\FileLogs"));
+        assert_eq!(d[1], PathBuf::from(r"\\192.168.168.4\Clear Voice\Logfiles"));
+    }
+
+    /// Against the real shared folders (needs the network): `cargo test --lib real_share -- --ignored --nocapture`.
+    /// Writes `<first reachable share>\Share Check\clearspeak-share-check.log` and removes it (and the folder) again.
+    #[test]
+    #[ignore]
+    fn real_share() {
+        set_person(Some("Share Check"));
+        let shares = share_dirs();
+        assert!(!shares.is_empty(), "share switched off");
+        let local = std::env::temp_dir().join("clearspeak-share-check.log");
+        let _ = std::fs::remove_file(&local);
+        let (tx, rx) = sync_channel(QUEUE_LINES);
+        let p = local.clone();
+        let list = shares.clone();
+        let started = Instant::now();
+        let h = std::thread::spawn(move || writer_with_share(&p, rx, 1_000_000, Some(Arc::new(move || list.clone()))));
+        let reached = |shares: &[PathBuf], i: usize| {
+            shares.iter().map(|s| s.join("clearspeak-share-check.log")).find(|t| {
+                std::fs::read_to_string(t).is_ok_and(|x| x.contains(&format!("check line {i}")))
+            })
+        };
+        let mut target = None;
+        for i in 0..1200 {
+            tx.send(format!("check line {i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            if let Some(t) = reached(&shares, i) {
+                target = Some(t);
+                break;
+            }
+        }
+        drop(tx);
+        h.join().unwrap();
+        let target = target.expect("no share reachable");
         let text = std::fs::read_to_string(&target).unwrap_or_default();
         println!("share file {} after {:?}:\n{text}", target.display(), started.elapsed());
         println!("local fallback file exists: {}", local.exists());
         let _ = std::fs::remove_file(&target);
-        let _ = std::fs::remove_dir(&share);
-        assert!(share.ends_with(format!("Share Check_{}", pc_name())), "folder is <name>_<PC>");
+        let _ = std::fs::remove_dir(target.parent().unwrap());
+        assert!(target.parent().unwrap().ends_with("Share Check"), "folder is the user name");
         assert!(text.contains("check line 0"), "lines reached the share");
         assert!(!local.exists(), "nothing written locally");
     }
