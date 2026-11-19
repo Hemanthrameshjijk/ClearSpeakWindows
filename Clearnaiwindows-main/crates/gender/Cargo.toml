@@ -1,0 +1,15 @@
+[package]
+name = "gender"
+version.workspace = true
+edition.workspace = true
+
+# Male / female detection from the agent's voice (picks the matching Accent voice). Kept separate from accent-onnx:
+# it only taps the mic signal and never changes it.
+
+[dependencies]
+# Same ort / ONNX Runtime setup as accent-onnx (load-dynamic against the shipped onnxruntime.dll).
+ort = { version = "2.0.0-rc.9", default-features = false, features = ["load-dynamic"] }
+realfft = "3"
+# npz reader, ONNX session helpers and the 48 -> 16 kHz downsampler.
+accent-onnx = { path = "../accent-onnx" }
+dsp-core = { path = "../dsp-core" }

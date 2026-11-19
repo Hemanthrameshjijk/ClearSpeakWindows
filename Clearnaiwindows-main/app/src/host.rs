@@ -240,6 +240,7 @@ impl Host {
             input_level: h.input_level.load(),
             mic_counters: shared::counters_to_array(&h.counters),
             mic_hands_free: h.counters.hands_free.load(std::sync::atomic::Ordering::Relaxed),
+            voice_auto: [h.voice_auto.state.load(Ordering::Relaxed), h.voice_auto.gender.load(Ordering::Relaxed)],
             speaker_counters: shared::counters_to_array(&h.speaker_counters),
             mic_pct: dsp_core::compute_percentiles(h.latency_log.snapshot()).into(),
             speaker_pct: dsp_core::compute_percentiles(h.speaker_latency_log.snapshot()).into(),
@@ -622,6 +623,15 @@ pub fn run_engine() {
         writers: Mutex::new(Vec::new()),
         cpu_tenths: AtomicU32::new(u32::MAX),
     });
+
+    // Accent voice "Auto": male / female detection picks the matching voice (see `voice_auto`).
+    {
+        let host = host.clone();
+        let handles = host.handles.clone();
+        let _ = thread::Builder::new()
+            .name("clearspeak-voice-auto".into())
+            .spawn(move || crate::voice_auto::run(handles, move || host.settings.lock().unwrap().clone()));
+    }
 
     // License gate: every few seconds, switch off the features this PC's license does not allow (nothing without a working license).
     {

@@ -1,6 +1,46 @@
 //! Pure, platform-independent logic behind the tabbed window: tab list, header status chip, the three profiles,
 //! transcript search/format helpers. Nothing here touches iced, the engine or the OS, so it is all unit-tested.
 
+/// The Accent voice picker: "Auto" first, then the six voices (`accent_onnx::VOICE_CHOICES`).
+pub const VOICE_AUTO_LABEL: &str = "Auto (match my voice)";
+pub const VOICE_PICKS: [&str; 7] = [
+    VOICE_AUTO_LABEL,
+    accent_onnx::VOICE_CHOICES[0],
+    accent_onnx::VOICE_CHOICES[1],
+    accent_onnx::VOICE_CHOICES[2],
+    accent_onnx::VOICE_CHOICES[3],
+    accent_onnx::VOICE_CHOICES[4],
+    accent_onnx::VOICE_CHOICES[5],
+];
+
+/// What the picker shows as chosen.
+pub fn voice_pick_label(s: &crate::settings::Settings) -> &'static str {
+    if s.accent_voice_auto { VOICE_AUTO_LABEL } else { accent_onnx::VOICE_CHOICES[(s.accent_voice_index() - 1) as usize] }
+}
+
+/// The voice Accent should use now (`0` = off): in Auto, the detected gender's voice with the chosen number, or the
+/// chosen voice until something is detected.
+pub fn accent_voice_now(s: &crate::settings::Settings, detected: Option<gender::Gender>) -> u8 {
+    if !s.accent_on {
+        return 0;
+    }
+    crate::voice_auto::auto_voice(s, detected).unwrap_or_else(|| s.accent_voice_index())
+}
+
+/// The line under the picker in Auto: what was detected (or that it is still listening).
+pub fn voice_auto_note(s: &crate::settings::Settings, state: u8, detected: Option<gender::Gender>) -> Option<String> {
+    if !s.accent_voice_auto {
+        return None;
+    }
+    Some(match (detected, state) {
+        (Some(g), _) => format!("Detected: {} \u{2192} {}", if g == gender::Gender::Male { "Male" } else { "Female" },
+            accent_onnx::VOICE_CHOICES[(g.voice_like(s.accent_voice_index()) - 1) as usize]),
+        (None, gender::pipeline::S_UNAVAILABLE) => "Voice detection unavailable: pick a voice".into(),
+        (None, gender::pipeline::S_LISTENING | gender::pipeline::S_LOADING) => "Listening to your voice\u{2026}".into(),
+        (None, _) => "Detects your voice when Accent is on".into(),
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Home,

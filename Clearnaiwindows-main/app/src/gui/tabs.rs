@@ -1282,7 +1282,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                 (accent.line(), color)
             };
 
-            let voice_label = accent_onnx::VOICE_CHOICES[(state.settings.accent_voice_index() - 1) as usize];
+            let voice_label = crate::ui_logic::voice_pick_label(&state.settings);
             let selected_profile = ui_logic::active_profile(&state.settings.profile, &mic_snapshot(state));
             let profile_row = row![
                 glyph_icon(icons::USER, 15.0, t.muted),
@@ -1341,7 +1341,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                     row![
                         text("Accent voice").size(13).color(t.muted),
                         container(text("")).width(Length::Fill),
-                        pick_list(&accent_onnx::VOICE_CHOICES[..], Some(voice_label), Message::SelectAccentVoice)
+                        pick_list(&crate::ui_logic::VOICE_PICKS[..], Some(voice_label), Message::SelectAccentVoice)
                             .width(Length::Fixed(170.0))
                             .padding([7, 10])
                             .text_size(13)
@@ -1919,7 +1919,12 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
     // What the accent stage is REALLY doing (the switch only records the click): green = converting, amber = starting,
     // red = on but not converting, grey = off.
     let status = h.accent.status();
-    let label = accent_onnx::VOICE_CHOICES[(state.settings.accent_voice_index() - 1) as usize];
+    let label = crate::ui_logic::voice_pick_label(&state.settings);
+    let auto_note = crate::ui_logic::voice_auto_note(
+        &state.settings,
+        h.voice_auto.state.load(std::sync::atomic::Ordering::Relaxed),
+        h.voice_auto.gender(),
+    );
     let accent_color = match status.state {
         accent_onnx::pipeline::AccentState::Active => t.success,
         accent_onnx::pipeline::AccentState::Loading | accent_onnx::pipeline::AccentState::Starting => t.warning,
@@ -1931,9 +1936,15 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
             select_row(
                 state,
                 "Accent voice",
-                pick_list(&accent_onnx::VOICE_CHOICES[..], Some(label), Message::SelectAccentVoice).padding([9, 12]).text_size(13).style(style::select).into(),
+                pick_list(&crate::ui_logic::VOICE_PICKS[..], Some(label), Message::SelectAccentVoice).padding([9, 12]).text_size(13).style(style::select).into(),
             ),
-            text(status.line()).size(12).color(accent_color).into(),
+            text(match &auto_note {
+                Some(n) => format!("{} \u{00B7} {n}", status.line()),
+                None => status.line(),
+            })
+            .size(12)
+            .color(accent_color)
+            .into(),
     ));
     col = col.push(setting_row(state, "Studio voice", Some("Fuller, clearer tone"), h.mic_studio.is_on(), Message::ToggleMicStudio));
     col = col.push(select_row(

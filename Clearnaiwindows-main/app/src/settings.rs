@@ -206,6 +206,11 @@ pub struct Settings {
     /// [`Settings::accent_voice_index`] rather than reading this directly.
     #[serde(default)]
     pub accent_voice: u8,
+    /// Accent voice "Auto": the engine detects whether the agent is male or female and uses the voice of that gender
+    /// with the same number as `accent_voice` (male 2 <-> female 2). A voice picked by hand turns it off. On for new
+    /// installs; `#[serde(default)]` = off for an older `settings.json`, so an existing hand-picked voice stays.
+    #[serde(default)]
+    pub accent_voice_auto: bool,
     /// Live transcript (speech-to-text of your own mic). Default OFF; `#[serde(default)]` keeps older files loading.
     #[serde(default)]
     pub transcript_on: bool,
@@ -313,6 +318,7 @@ impl Default for Settings {
             setup_acknowledged: false,
             accent_on: false,
             accent_voice: 1,
+            accent_voice_auto: true,
             transcript_on: false,
             compact_mode: false,
             theme_dark: false,

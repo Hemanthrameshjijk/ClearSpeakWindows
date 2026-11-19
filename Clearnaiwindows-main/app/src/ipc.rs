@@ -152,6 +152,9 @@ pub struct Status {
     /// Listening exposure today (see `shared::ExposureShared`).
     #[serde(default)]
     pub exposure: ExposureWire,
+    /// Accent voice "Auto": detector state (`gender::pipeline::S_*`) and answer (0 unknown, 1 male, 2 female).
+    #[serde(default)]
+    pub voice_auto: [u8; 2],
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

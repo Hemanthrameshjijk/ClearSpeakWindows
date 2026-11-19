@@ -59,6 +59,8 @@ tse-engine = { path = "../crates/tse-engine" }
 # the mic pipeline only exchanges samples with it through two lock-free rings (see that crate's `pipeline` docs).
 accent-onnx = { path = "../crates/accent-onnx" }
 asr-onnx = { path = "../crates/asr-onnx" }
+# Male / female detection for the Accent voice (Auto).
+gender = { path = "../crates/gender" }
 
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

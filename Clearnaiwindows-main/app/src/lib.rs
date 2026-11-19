@@ -38,6 +38,7 @@ pub mod sysutil;
 pub mod tray;
 pub mod ui_logic;
 pub mod voice_test;
+pub mod voice_auto;
 
 #[cfg(windows)]
 pub mod driver_pipe;

@@ -725,6 +725,19 @@ pub fn start(
         stage
     };
 
+    // Male / female detection for the Accent voice "Auto": a pure tap right before Accent. Off (one atomic load per
+    // frame, nothing loaded) until `host::run_voice_auto` switches it on while Accent runs in Auto.
+    let gender_stage = {
+        let (stage, h) = gender::pipeline::start(gender::pipeline::GenderConfig {
+            models_dir: None,
+            onnxruntime_dll: crate::setup::onnxruntime_dll_path(bvc_assets_dir),
+            known: None,
+            enabled: false,
+        });
+        *handles.voice_auto.detector.lock().unwrap() = Some(h);
+        stage
+    };
+
     // Live transcript: a pure tap (never changes the audio) right before the Accent stage; the speech model is
     // loaded lazily the first time the toggle is switched on.
     let transcript_stage = {
@@ -889,6 +902,7 @@ pub fn start(
         mic_bvc_stage,
         accent_stage,
         transcript_stage,
+        gender_stage,
         mic_studio_stage,
         driver_writer,
         driver_pipe,
@@ -1117,6 +1131,7 @@ fn spawn_mic_pipeline(
     mut bvc_stage: Box<dyn Stage>,
     mut accent_stage: accent_onnx::pipeline::AccentStage,
     mut transcript_stage: asr_onnx::pipeline::TranscriptStage,
+    mut gender_stage: gender::pipeline::GenderStage,
     mut studio_stage: Box<dyn Stage>,
     driver_writer: Option<driver_transport::SharedRingWriter>,
     mut driver_pipe: Option<crate::driver_pipe::DriverSink>,
@@ -1246,6 +1261,8 @@ fn spawn_mic_pipeline(
                     if !crate::perf_governor::skip_transcript(perf) {
                         transcript_stage.process(&mut frame); // tap only: what you said, after BVC cleanup
                     }
+                    // Tap only: the cleaned voice, for the Accent voice "Auto" (off = one atomic load).
+                    gender_stage.process(&mut frame);
                     // Accent conversion sits right after BVC (which does the cleanup) and before AutoGain.
                     // Off = one atomic load, frame untouched. It is its own switch, independent of BVC.
                     accent_stage.process(&mut frame);
@@ -1257,6 +1274,7 @@ fn spawn_mic_pipeline(
                     if !crate::perf_governor::skip_transcript(perf) {
                         transcript_stage.process(&mut frame);
                     }
+                    gender_stage.process(&mut frame);
                     accent_stage.process(&mut frame);
                     auto_gain.process(&mut frame);
                     if light && handles.mic_bvc.is_on() {

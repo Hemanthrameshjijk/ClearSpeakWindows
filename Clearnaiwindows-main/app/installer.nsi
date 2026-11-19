@@ -142,6 +142,11 @@ Section "Install"
   File /nonfatal "assets\app_models\converter_best_v6dmel.dec.onnx"
   File /nonfatal "assets\app_models\vocoder_causal_hifigan_best.npz"
   File /nonfatal "assets\app_models\vocoder_causal_hifigan_best.onnx"
+  ; Accent voice "Auto" (male / female detection, crates/gender): the int8 ECAPA voice fingerprint model (~21 MB) and
+  ; the trained classifier (crates/gender/tools/train_gender.py). Without them Auto says "unavailable" and the agent
+  ; picks a voice by hand.
+  File /nonfatal "assets\app_models\ecapa.onnx"
+  File /nonfatal "assets\app_models\gender.npz"
   SetOutPath "$INSTDIR"
 
   ; Live-transcript speech model (~210 MB). The app looks for it in %LOCALAPPDATA%\ClearSpeak\asr_models (this

@@ -206,6 +206,24 @@ impl LiveDeviceSwitcher for NoOpDeviceSwitcher {
     }
 }
 
+/// The male / female detector's state for the Accent voice "Auto" (see `gender::pipeline`): written by the engine,
+/// mirrored to the window through `ipc::Status`.
+#[derive(Default)]
+pub struct VoiceAuto {
+    /// `gender::pipeline::S_*`: 0 off, 1 loading, 2 listening, 3 unavailable.
+    pub state: std::sync::atomic::AtomicU8,
+    /// 0 not known yet, 1 male, 2 female (`gender::Gender::code`).
+    pub gender: std::sync::atomic::AtomicU8,
+    /// The running detector (engine process only; `None` in the window and in tests).
+    pub detector: std::sync::Mutex<Option<gender::pipeline::GenderHandle>>,
+}
+
+impl VoiceAuto {
+    pub fn gender(&self) -> Option<gender::Gender> {
+        gender::Gender::from_code(self.gender.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 /// Live handles shared between the audio engine thread(s) and the GUI.
 /// Constructed exactly once at startup and cloned (cheap: everything inside
 /// is an `Arc`/`StageToggle`, itself an `Arc<AtomicBool>`) into the GUI's
@@ -365,6 +383,8 @@ pub struct EngineHandles {
     pub accent: accent_onnx::pipeline::AccentHandle,
     /// Live transcript (lines + status). Inert until the real engine replaces it.
     pub transcript: asr_onnx::pipeline::TranscriptHandle,
+    /// Accent voice "Auto": what the engine's male / female detector says (mirrored to the window).
+    pub voice_auto: Arc<VoiceAuto>,
     pub latency_log: Arc<LatencyLog>,
     /// Read by the real Windows engine's mic pipeline thread only
     /// (`engine.rs`); not yet surfaced in the GUI beyond the derived
@@ -458,6 +478,7 @@ impl EngineHandles {
             mic_bpo_v1_status: None,
             accent: accent_onnx::pipeline::AccentHandle::unavailable("accent engine not started"),
             transcript: asr_onnx::pipeline::TranscriptHandle::unavailable("transcript engine not started"),
+            voice_auto: Arc::new(VoiceAuto::default()),
             warnings: Arc::new(warnings),
             latency_log: Arc::new(LatencyLog::new(1024)),
             counters: Arc::new(FrameCounters::default()),

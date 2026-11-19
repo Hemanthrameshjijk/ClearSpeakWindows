@@ -935,7 +935,7 @@ fn update_main(state: &mut MainState, message: Message) {
                 if !a.accent && state.handles.accent.voice() != 0 {
                     state.handles.accent.set_voice(0);
                 } else if a.accent && state.settings.accent_on && state.handles.accent.voice() == 0 {
-                    state.handles.accent.set_voice(state.settings.accent_effective_voice());
+                    state.handles.accent.set_voice(crate::ui_logic::accent_voice_now(&state.settings, state.handles.voice_auto.gender()));
                 }
             }
             // The window mirrors the engine: latency percentiles are computed there and sent over.
@@ -1280,7 +1280,7 @@ fn update_main(state: &mut MainState, message: Message) {
         }
         Message::ToggleAccent(on) => {
             state.settings.accent_on = on;
-            state.handles.accent.set_voice(state.settings.accent_effective_voice());
+            state.handles.accent.set_voice(crate::ui_logic::accent_voice_now(&state.settings, state.handles.voice_auto.gender()));
             persist(&state.settings);
         }
         Message::ToggleTranscript(on) => {
@@ -1293,11 +1293,18 @@ fn update_main(state: &mut MainState, message: Message) {
             crate::remote::send(crate::ipc::ClientMsg::TranscriptClear);
         }
         Message::SelectAccentVoice(label) => {
-            if let Some(i) = accent_onnx::VOICE_CHOICES.iter().position(|l| *l == label) {
+            if label == crate::ui_logic::VOICE_AUTO_LABEL {
+                // Auto keeps the voice number chosen so far (male 2 <-> female 2).
+                state.settings.accent_voice_auto = true;
+            } else if let Some(i) = accent_onnx::VOICE_CHOICES.iter().position(|l| *l == label) {
+                // A voice picked by hand is used as it is; detection stops changing it.
+                state.settings.accent_voice_auto = false;
                 state.settings.accent_voice = i as u8 + 1;
-                state.handles.accent.set_voice(state.settings.accent_effective_voice());
-                persist(&state.settings);
+            } else {
+                return;
             }
+            state.handles.accent.set_voice(crate::ui_logic::accent_voice_now(&state.settings, state.handles.voice_auto.gender()));
+            persist(&state.settings);
         }
         Message::SelectMicTarget(device) => {
             state.settings.virtual_mic_target_id = Some(device.id.clone());
@@ -1638,7 +1645,7 @@ fn reset_to_defaults(state: &mut MainState) {
     update_main(state, Message::SelectMicStudioPreset(preset(d.mic_studio_preset)));
     update_main(state, Message::SelectBvcBackend(BvcBackend::from_index(d.mic_bvc_backend).name()));
     update_main(state, Message::ToggleAccent(d.accent_on));
-    update_main(state, Message::SelectAccentVoice(accent_onnx::VOICE_CHOICES[(d.accent_voice_index() - 1) as usize]));
+    update_main(state, Message::SelectAccentVoice(crate::ui_logic::voice_pick_label(&d)));
     update_main(state, Message::ToggleTranscript(d.transcript_on));
     update_main(state, Message::ToggleMonitor(d.monitor_enabled));
     update_main(state, Message::ToggleSpeakerNoise(d.speaker_noise_on));
