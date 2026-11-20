@@ -201,8 +201,8 @@ pub struct Settings {
     /// OFF; `#[serde(default)]` keeps every older `settings.json` loading.
     #[serde(default)]
     pub accent_on: bool,
-    /// Which American voice Accent uses: `1..=3` = male 1-3, `4..=6` = female
-    /// 1-3 (see `accent_onnx::VOICE_NAMES`); `0`/out of range = male 1. Use
+    /// Which American voice Accent uses: an index into `accent_onnx::VOICE_NAMES` (1-3 male 1-3, 4-6 female 1-3,
+    /// 7-8 male 4-5, 9-10 female 4-5); `0`/out of range = male 1. Use
     /// [`Settings::accent_voice_index`] rather than reading this directly.
     #[serde(default)]
     pub accent_voice: u8,
@@ -234,9 +234,9 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// The voice index to use when Accent is on (always `1..=6`).
+    /// The voice index to use when Accent is on (always `1..=VOICE_NAMES.len()`).
     pub fn accent_voice_index(&self) -> u8 {
-        if (1..=6).contains(&self.accent_voice) { self.accent_voice } else { 1 }
+        if (1..=accent_onnx::VOICE_NAMES.len() as u8).contains(&self.accent_voice) { self.accent_voice } else { 1 }
     }
     /// The value for `AccentHandle::set_voice`: `0` (off) unless the toggle is on.
     pub fn accent_effective_voice(&self) -> u8 {

@@ -45,12 +45,14 @@ impl Gender {
         }
     }
 
-    /// The Accent voice (1..=6: male 1-3, female 1-3) of this gender with the same number (1-3) as `voice`.
+    /// The Accent voice of this gender in the same position as `voice` (male 2 <-> female 2, male 4 <-> female 4; see
+    /// `accent_onnx::MALE_VOICES` / `FEMALE_VOICES`). An unknown `voice` counts as position 1.
     pub fn voice_like(self, voice: u8) -> u8 {
-        let n = if (1..=6).contains(&voice) { (voice - 1) % 3 + 1 } else { 1 };
+        use accent_onnx::{FEMALE_VOICES, MALE_VOICES};
+        let p = MALE_VOICES.iter().chain(FEMALE_VOICES.iter()).position(|&v| v == voice).unwrap_or(0) % MALE_VOICES.len();
         match self {
-            Gender::Male => n,
-            Gender::Female => n + 3,
+            Gender::Male => MALE_VOICES[p],
+            Gender::Female => FEMALE_VOICES[p],
         }
     }
 }
@@ -65,6 +67,15 @@ mod tests {
         assert_eq!(Gender::Male.voice_like(6), 3, "female 3 -> male 3");
         assert_eq!(Gender::Male.voice_like(1), 1);
         assert_eq!(Gender::Female.voice_like(0), 4, "no voice yet -> female 1");
+        assert_eq!(Gender::Female.voice_like(7), 9, "male 4 -> female 4");
+        assert_eq!(Gender::Male.voice_like(10), 8, "female 5 -> male 5");
+        assert_eq!(Gender::Male.voice_like(8), 8);
+        // The lists match the voice names, so Auto never picks a voice of the wrong gender.
+        for (&m, &f) in accent_onnx::MALE_VOICES.iter().zip(accent_onnx::FEMALE_VOICES.iter()) {
+            assert!(accent_onnx::VOICE_NAMES[m as usize - 1].contains("_male_"), "voice {m}");
+            assert!(accent_onnx::VOICE_NAMES[f as usize - 1].contains("_female_"), "voice {f}");
+        }
+        assert_eq!(accent_onnx::MALE_VOICES.len() + accent_onnx::FEMALE_VOICES.len(), accent_onnx::VOICE_NAMES.len());
         assert_eq!(Gender::from_code(Gender::Female.code()), Some(Gender::Female));
         assert_eq!(Gender::from_code(0), None);
     }

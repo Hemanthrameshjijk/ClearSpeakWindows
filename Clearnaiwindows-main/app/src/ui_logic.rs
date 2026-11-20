@@ -1,17 +1,20 @@
 //! Pure, platform-independent logic behind the tabbed window: tab list, header status chip, the three profiles,
 //! transcript search/format helpers. Nothing here touches iced, the engine or the OS, so it is all unit-tested.
 
-/// The Accent voice picker: "Auto" first, then the six voices (`accent_onnx::VOICE_CHOICES`).
+/// The Accent voice picker: "Auto" first, then the male voices, then the female ones (`accent_onnx::MALE_VOICES`,
+/// `FEMALE_VOICES`; labels from `VOICE_CHOICES`).
 pub const VOICE_AUTO_LABEL: &str = "Auto (match my voice)";
-pub const VOICE_PICKS: [&str; 7] = [
-    VOICE_AUTO_LABEL,
-    accent_onnx::VOICE_CHOICES[0],
-    accent_onnx::VOICE_CHOICES[1],
-    accent_onnx::VOICE_CHOICES[2],
-    accent_onnx::VOICE_CHOICES[3],
-    accent_onnx::VOICE_CHOICES[4],
-    accent_onnx::VOICE_CHOICES[5],
-];
+pub const VOICE_PICKS: [&str; 11] = {
+    let mut out = [VOICE_AUTO_LABEL; 11];
+    let (m, f) = (accent_onnx::MALE_VOICES, accent_onnx::FEMALE_VOICES);
+    let mut i = 0;
+    while i < m.len() {
+        out[1 + i] = accent_onnx::VOICE_CHOICES[m[i] as usize - 1];
+        out[1 + m.len() + i] = accent_onnx::VOICE_CHOICES[f[i] as usize - 1];
+        i += 1;
+    }
+    out
+};
 
 /// What the picker shows as chosen.
 pub fn voice_pick_label(s: &crate::settings::Settings) -> &'static str {
