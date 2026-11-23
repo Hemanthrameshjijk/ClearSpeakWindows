@@ -2007,6 +2007,27 @@ fn call_audio_tab(state: &MainState) -> Element<'_, Message> {
     if let Some(n) = note {
         col = col.push(n);
     }
+    // Strength only matters for Hush (DeepFilterNet and Off ignore it).
+    if selected == tse_engine::SpeakerBvcBackend::Hush {
+        col = col.push(select_row(
+            state,
+            "Background voice strength",
+            pick_list(
+                &ui_logic::NR_STRENGTH_NAMES[..],
+                Some(ui_logic::nr_strength_name(h.speaker_nr_strength.load())),
+                Message::SelectSpeakerNrStrength,
+            )
+            .padding([9, 12])
+            .text_size(13)
+            .style(style::select)
+            .into(),
+        ));
+        col = col.push(
+            text("Gentle keeps soft caller voices. Stronger settings remove more background but can make the caller quieter.")
+                .size(12)
+                .color(t.muted),
+        );
+    }
     col = col
         .push(setting_row(state, "Studio voice", None, h.speaker_studio.is_on(), Message::ToggleSpeakerStudio))
         .push(select_row(

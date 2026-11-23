@@ -380,6 +380,8 @@ pub enum Message {
     /// Headset loudness for the exposure estimate (label from `ui_logic::HEADSET_DB_NAMES`).
     SelectHeadsetDb(&'static str),
     SelectSpeakerBvcBackend(&'static str),
+    /// Strength of the caller-side Hush (label from `ui_logic::NR_STRENGTH_NAMES`).
+    SelectSpeakerNrStrength(&'static str),
     SelectSpeakerSource(DeviceOption),
     SelectRealSpeakerOutput(DeviceOption),
     ToggleSpeakerMasterEnabled(bool),
@@ -1261,6 +1263,13 @@ fn update_main(state: &mut MainState, message: Message) {
             state.license_note = Some("Signed out. Paste a license to sign in again.".to_string());
             state.license_status = compute_license(&state.license_token);
             persist(&state.settings);
+        }
+        Message::SelectSpeakerNrStrength(name) => {
+            if let Some(strength) = crate::ui_logic::nr_strength_from_name(name) {
+                state.handles.speaker_nr_strength.store(strength);
+                state.settings.speaker_nr_strength = strength;
+                persist(&state.settings);
+            }
         }
         Message::SelectNrStrength(name) => {
             if let Some(strength) = crate::ui_logic::nr_strength_from_name(name) {

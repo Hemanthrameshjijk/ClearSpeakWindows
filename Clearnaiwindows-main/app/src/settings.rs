@@ -175,6 +175,10 @@ pub struct Settings {
     /// instance already exists, if ever needed).
     #[serde(default = "default_speaker_bvc_backend")]
     pub speaker_bvc_backend: u8,
+    /// Strength of the caller-side Hush (0 Maximum, 1 Balanced, 2 Gentle; see `bvc_hush::STRENGTH_ATTEN_LIM_DB`).
+    /// Default Gentle (see `default_speaker_nr_strength`).
+    #[serde(default = "default_speaker_nr_strength")]
+    pub speaker_nr_strength: u8,
     /// Which BVC backend is selected for the mic path - Off/Hush/DeepFilterNet/
     /// Hush-bpo_v1 (see `tse_engine::BvcBackend`), encoded the same "plain
     /// `u8` index" way `mic_studio_preset` already is. Default `1` (Hush),
@@ -272,8 +276,15 @@ fn default_bvc_backend() -> u8 {
     tse_engine::BvcBackend::Hush.to_index()
 }
 
+/// Off: on real calls (Phase 0, docs/SPEAKER_CLEANUP.md) Hush cut the customer's voice by 5-8 dB while removing only
+/// 2.5-3.4 dB of their background, so caller cleanup is RNNoise alone unless a BVC model is picked by hand.
 fn default_speaker_bvc_backend() -> u8 {
-    tse_engine::SpeakerBvcBackend::Hush.to_index()
+    tse_engine::SpeakerBvcBackend::Off.to_index()
+}
+
+/// Gentle: phone audio is quiet and narrowband, and stronger settings cut the customer's soft words.
+fn default_speaker_nr_strength() -> u8 {
+    2
 }
 
 impl Default for Settings {
@@ -314,6 +325,7 @@ impl Default for Settings {
             monitor_device_id: None,
             real_speaker_output_device_id: None,
             speaker_bvc_backend: default_speaker_bvc_backend(),
+            speaker_nr_strength: default_speaker_nr_strength(),
             mic_bvc_backend: default_bvc_backend(),
             setup_acknowledged: false,
             accent_on: false,
@@ -421,9 +433,10 @@ mod tests {
         assert!(s.real_speaker_output_device_id.is_none(), "real speaker output defaults to auto/default");
         assert_eq!(
             s.speaker_bvc_backend,
-            tse_engine::SpeakerBvcBackend::Hush.to_index(),
-            "speaker BVC backend defaults to Hush, same as the mic path"
+            tse_engine::SpeakerBvcBackend::Off.to_index(),
+            "caller BVC defaults to Off: on real calls Hush cut the customer's voice more than their background"
         );
+        assert_eq!(s.speaker_nr_strength, 2, "caller strength defaults to Gentle");
         assert!(!s.setup_acknowledged, "setup screen must not be pre-acknowledged by default");
     }
 
@@ -488,7 +501,9 @@ mod tests {
         }"#;
         let s: Settings = serde_json::from_str(json).expect("old-format settings.json must still parse");
         assert!(s.real_speaker_output_device_id.is_none());
-        assert_eq!(s.speaker_bvc_backend, tse_engine::SpeakerBvcBackend::Hush.to_index());
+        // A settings file from before the field existed gets today's default: caller BVC off (RNNoise only).
+        assert_eq!(s.speaker_bvc_backend, tse_engine::SpeakerBvcBackend::Off.to_index());
+        assert_eq!(s.speaker_nr_strength, 2, "caller strength defaults to Gentle");
     }
 
     #[test]

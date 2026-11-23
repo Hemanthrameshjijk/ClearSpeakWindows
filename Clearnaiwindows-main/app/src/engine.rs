@@ -98,11 +98,36 @@ fn swap_producer(initial: Option<Producer<f32>>) -> SwapProducer {
 /// handles below instead of owning a `Consumer`/`Producer` directly, so a
 /// device switch can point them at a freshly-created ring buffer half
 /// without the pipeline thread itself needing to know a switch happened.
+/// Where the call audio comes from: a virtual cable's capture end (WASAPI), or the ClearSpeak driver's
+/// "ClearSpeak Speaker" endpoint read back through `driver_speaker` (no second cable needed).
+pub enum SpeakerSource {
+    Wasapi(MicCapture),
+    Driver(crate::driver_speaker::DriverSpeakerSource),
+}
+
+impl SpeakerSource {
+    /// Starts the source picked as `id` (`driver_speaker::DRIVER_SPEAKER_ID` or a Windows capture endpoint id).
+    fn start(id: &str, producer: Producer<f32>, counters: Arc<dsp_core::FrameCounters>) -> Result<Self> {
+        if crate::driver_speaker::is_driver_speaker(id) {
+            Ok(Self::Driver(crate::driver_speaker::DriverSpeakerSource::start(producer, counters)?))
+        } else {
+            Ok(Self::Wasapi(MicCapture::start_on_device_id_no_fallback(id, producer, counters)?))
+        }
+    }
+
+    fn stop(self) {
+        match self {
+            Self::Wasapi(c) => c.stop(),
+            Self::Driver(d) => d.stop(),
+        }
+    }
+}
+
 pub struct LiveAudioSwitcher {
     physical_mic: Mutex<Option<MicCapture>>,
     virtual_mic_render: Mutex<Option<HardwareRender>>,
     monitor_render: Mutex<Option<HardwareRender>>,
-    speaker_capture: Mutex<Option<MicCapture>>,
+    speaker_capture: Mutex<Option<SpeakerSource>>,
     speaker_render: Mutex<Option<HardwareRender>>,
     /// Real speaker/headphone output chosen for the speaker path (`None` =
     /// system default). The speaker render only runs while a speaker source
@@ -130,6 +155,13 @@ pub struct LiveAudioSwitcher {
 
 impl LiveAudioSwitcher {
     fn stop_and_replace_render(slot: &Mutex<Option<HardwareRender>>, new: Option<HardwareRender>) {
+        let old = std::mem::replace(&mut *slot.lock().unwrap(), new);
+        if let Some(old) = old {
+            old.stop();
+        }
+    }
+
+    fn stop_and_replace_speaker_source(slot: &Mutex<Option<SpeakerSource>>, new: Option<SpeakerSource>) {
         let old = std::mem::replace(&mut *slot.lock().unwrap(), new);
         if let Some(old) = old {
             old.stop();
@@ -215,10 +247,10 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
         match device_id {
             Some(id) => {
                 let (producer, consumer) = make_ring_buffer(2.0);
-                match MicCapture::start_on_device_id_no_fallback(&id, producer, self.speaker_counters.clone()) {
+                match SpeakerSource::start(&id, producer, self.speaker_counters.clone()) {
                     Ok(capture) => {
                         *self.speaker_in_swap.lock().unwrap() = Some(consumer);
-                        Self::stop_and_replace_mic(&self.speaker_capture, Some(capture));
+                        Self::stop_and_replace_speaker_source(&self.speaker_capture, Some(capture));
                         log_switch("call audio source", Some(&id), t);
                         if self.speaker_render.lock().unwrap().is_none() {
                             let output = self.real_speaker_output_id.lock().unwrap().clone();
@@ -235,7 +267,7 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
             }
             None => {
                 *self.speaker_in_swap.lock().unwrap() = None;
-                Self::stop_and_replace_mic(&self.speaker_capture, None);
+                Self::stop_and_replace_speaker_source(&self.speaker_capture, None);
                 *self.speaker_out_swap.lock().unwrap() = None;
                 Self::stop_and_replace_render(&self.speaker_render, None);
                 crate::log_info!("[device] call audio path stopped");
@@ -260,7 +292,10 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
         let (producer, consumer) = make_ring_buffer(2.0);
         let started = match device_id.as_deref() {
             Some(id) => HardwareRender::start_on_device_id(id, consumer, self.speaker_counters.clone()),
-            None => HardwareRender::start_default(consumer, self.speaker_counters.clone()),
+            None => match real_speaker_output(None) {
+                Some(id) => HardwareRender::start_on_device_id(&id, consumer, self.speaker_counters.clone()),
+                None => HardwareRender::start_default(consumer, self.speaker_counters.clone()),
+            },
         };
         match started {
             Ok(render) => {
@@ -326,6 +361,27 @@ pub struct BootstrapOutcome {
     pub devices: DeviceList,
 }
 
+/// The real output for the call audio. `None` (system default) is resolved here when the default is a virtual device:
+/// with call apps set to play into "ClearSpeak Speaker" (or a cable), that is easily made the Windows default too, and
+/// playing the cleaned call there would loop it back into its own source. Uses the first real output instead.
+fn real_speaker_output(requested: Option<String>) -> Option<String> {
+    if requested.is_some() {
+        return requested;
+    }
+    let render = devices::list_render_devices().unwrap_or_default();
+    let default = devices::default_render_device_id()?;
+    let label = render.iter().find(|(id, _)| *id == default).map(|(_, l)| l.clone()).unwrap_or_default();
+    if !crate::device_rules::is_virtual_label(&label) {
+        return None;
+    }
+    let real = render.into_iter().find(|(_, l)| !crate::device_rules::is_virtual_label(l));
+    match &real {
+        Some((_, l)) => crate::log_info!("[device] Windows default output '{label}' is virtual; call audio plays on '{l}'"),
+        None => crate::log_error!("[device] Windows default output '{label}' is virtual and no real output was found"),
+    }
+    real.map(|(id, _)| id)
+}
+
 /// Enumerates render/capture devices for the GUI's device pickers. Returns
 /// empty lists (never an error to the caller) if enumeration itself fails -
 /// the GUI must still come up, just with no devices to pick from.
@@ -338,7 +394,7 @@ pub fn enumerate_devices() -> DeviceList {
         .into_iter()
         .map(|(id, label)| DeviceOption { id, label })
         .collect();
-    let capture = devices::list_capture_devices()
+    let mut capture: Vec<DeviceOption> = devices::list_capture_devices()
         .unwrap_or_else(|e| {
             crate::log_error!("[clearspeakrt] WARNING: failed to enumerate capture devices: {e:#}");
             Vec::new()
@@ -346,6 +402,13 @@ pub fn enumerate_devices() -> DeviceList {
         .into_iter()
         .map(|(id, label)| DeviceOption { id, label })
         .collect();
+    // Call audio straight from the ClearSpeak driver (no second cable), when the installed driver can pass it on.
+    if crate::driver_speaker::available() {
+        capture.push(DeviceOption {
+            id: crate::driver_speaker::DRIVER_SPEAKER_ID.to_string(),
+            label: crate::driver_speaker::DRIVER_SPEAKER_LABEL.to_string(),
+        });
+    }
     DeviceList {
         render,
         capture,
@@ -580,8 +643,13 @@ pub fn start(
     // for this), DeepFilterNet via a second `load_bundled_deep_filter()`
     // call (a fresh parse, no shared global state) - so a failure or a
     // wedged call on one path never affects the other.
+    let speaker_nr_strength = dsp_core::SharedPreset::new(settings.speaker_nr_strength);
     let speaker_bvc_load = timed_load("caller Hush (BVC)", || {
-        bvc_hush::HushBvcStage::try_load_named(bvc_assets_dir, bvc_hush::SPEAKER_DLL_FILE_NAME)
+        bvc_hush::HushBvcStage::try_load_named(bvc_assets_dir, bvc_hush::SPEAKER_DLL_FILE_NAME).map(|mut stage| {
+            // Caller strength is its own setting (default Gentle), not the mic's.
+            stage.set_strength_source(speaker_nr_strength.clone());
+            stage
+        })
     });
     let (speaker_bvc_available, speaker_bvc_unavailable_reason) = match &speaker_bvc_load {
         Ok(_) => (true, None),
@@ -689,6 +757,7 @@ pub fn start(
         mic_bpo_v1_unavailable_reason,
     );
     handles.mic_nr_strength = mic_nr_strength.clone();
+    handles.speaker_nr_strength = speaker_nr_strength.clone();
     // See `bvc_backend_selector`'s docs above - overwrite the freshly
     // constructed (otherwise-unread) `SharedPreset` `new_from_settings`
     // builds internally with the one actually shared with the router, the
@@ -921,7 +990,7 @@ pub fn start(
     let (speaker_capture, speaker_in_p) = match virtual_speaker_source_id {
         Some(id) => {
             let (p, c) = make_ring_buffer(2.0);
-            match MicCapture::start_on_device_id_no_fallback(id, p, handles.speaker_counters.clone()) {
+            match SpeakerSource::start(id, p, handles.speaker_counters.clone()) {
                 Ok(capture) => (Some(capture), Some(c)),
                 Err(e) => {
                     warnings.push(format!(
@@ -946,8 +1015,8 @@ pub fn start(
         (None, None)
     } else {
         let (p, c) = make_ring_buffer(2.0);
-        let started = match real_speaker_output_id {
-            Some(id) => HardwareRender::start_on_device_id(id, c, handles.speaker_counters.clone()),
+        let started = match real_speaker_output(real_speaker_output_id.map(str::to_string)) {
+            Some(id) => HardwareRender::start_on_device_id(&id, c, handles.speaker_counters.clone()),
             None => HardwareRender::start_default(c, handles.speaker_counters.clone()),
         };
         match started {
@@ -1499,8 +1568,18 @@ fn spawn_speaker_pipeline(
             let mut exposure = dsp_core::ExposureMeter::new();
             let mut exposure_frames = 0u32;
             let (mut second_energy, mut second_frames) = (0.0f64, 0u32);
+            // Clock-drift compensation, as on the mic path: the call source (a cable, or the ClearSpeak driver) and
+            // the headset run on different clocks, so without it the headset buffer slowly runs dry (gaps) or fills
+            // up (growing delay) over a long call.
+            let mut drift = dsp_core::DriftCompensator::new();
+            let mut synced = vec![0.0f32; FRAME_SAMPLES];
+            let sync_clock = Instant::now();
             loop {
-                pull_frame_blocking(&speaker_in, &mut frame, &handles.speaker_counters);
+                let trimmed = pull_frame_blocking(&speaker_in, &mut frame, &handles.speaker_counters);
+                if trimmed > 0 {
+                    // Dropped on purpose to cut the delay: drift correction must not stretch it back in.
+                    drift.skip(trimmed);
+                }
                 let started = Instant::now();
                 let in_peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
 
@@ -1554,14 +1633,21 @@ fn spawn_speaker_pipeline(
                     let (shock_events, deepest_cut) = shock.take_stats();
                     shocks_seen = 0;
                     let t = exposure.totals();
+                    let sync = drift.take_stats();
                     crate::log_info!(
-                        "[health] caller audio last 60s: {} | noise {}, voices {}, studio {} | loud-sound protection {}: \
+                        "[health] caller audio last 60s: {} | noise {}, voices {} ({}, strength {}), studio {} | \
+                         sync ratio {:.4}..{:.4}, {} restart(s) | loud-sound protection {}: \
                          {shock_events} blocked, deepest cut {deepest_cut:.0} dB | exposure today {:.0}%, avg {:.0} dB \
                          over {:.0} min",
                         health.take_line(crate::shared::counters_to_array(&handles.speaker_counters)),
                         if handles.speaker_noise.is_on() { "on" } else { "off" },
                         if handles.speaker_bvc.is_on() { "on" } else { "off" },
+                        crate::diag::speaker_bvc_backend_name(handles.speaker_bvc_backend.load()),
+                        crate::ui_logic::nr_strength_name(handles.speaker_nr_strength.load()),
                         if handles.speaker_studio.is_on() { "on" } else { "off" },
+                        sync.min_ratio,
+                        sync.max_ratio,
+                        sync.resets,
                         if handles.speaker_shock_guard.is_on() { "on" } else { "off" },
                         t.dose * 100.0,
                         t.avg_db(),
@@ -1572,16 +1658,18 @@ fn spawn_speaker_pipeline(
                 // Master mute - see `spawn_mic_pipeline`'s matching comment
                 // for why this exists as a genuine silence, separate from
                 // the individual Noise/BVC/Studio toggles above.
-                if handles.speaker_master_enabled.is_on() {
-                    push_frame(&speaker_out, &frame);
-                    // What the speakers are about to play, for the mic pipeline's echo canceller. Drop on full.
-                    for &sample in &frame {
-                        if echo_ref.push(sample).is_err() {
-                            break;
+                let playing = handles.speaker_master_enabled.is_on();
+                drift.push(if playing { &frame } else { &silence }, started.duration_since(sync_clock).as_secs_f64());
+                while drift.pop_frame(&mut synced) {
+                    push_frame(&speaker_out, &synced);
+                    if playing {
+                        // What the speakers are about to play, for the mic pipeline's echo canceller. Drop on full.
+                        for &sample in &synced {
+                            if echo_ref.push(sample).is_err() {
+                                break;
+                            }
                         }
                     }
-                } else {
-                    push_frame(&speaker_out, &silence);
                 }
             }
         })

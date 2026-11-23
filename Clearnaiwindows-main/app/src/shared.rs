@@ -252,6 +252,8 @@ pub struct EngineHandles {
     /// Noise reduction strength of the mic path (0 Maximum, 1 Balanced, 2 Gentle), see
     /// `bvc_hush::STRENGTH_ATTEN_LIM_DB`. The mic Hush stages read it once per frame.
     pub mic_nr_strength: SharedPreset,
+    /// Same for the caller-side Hush (call audio path). Default Gentle.
+    pub speaker_nr_strength: SharedPreset,
     /// Mic boost in dB the mic chain applies before noise cleanup: the slider value while the switch is on, else 0
     /// (`dsp_core::mic_boost_effective`). Read once per frame.
     pub mic_boost: SharedPreset,
@@ -467,6 +469,7 @@ impl EngineHandles {
             bvc_backend: SharedPreset::new(settings.mic_bvc_backend),
             speaker_bvc_backend: SharedPreset::new(settings.speaker_bvc_backend),
             mic_nr_strength: SharedPreset::new(settings.mic_nr_strength),
+            speaker_nr_strength: SharedPreset::new(settings.speaker_nr_strength),
             mic_boost: SharedPreset::new(dsp_core::mic_boost_effective(settings.mic_boost_on, settings.mic_boost_db)),
             mic_deep_filter_available,
             mic_deep_filter_unavailable_reason,
@@ -521,6 +524,7 @@ impl EngineHandles {
             &self.mic_nr_strength,
             &self.mic_boost,
             &self.perf_step,
+            &self.speaker_nr_strength,
         ]
     }
 }

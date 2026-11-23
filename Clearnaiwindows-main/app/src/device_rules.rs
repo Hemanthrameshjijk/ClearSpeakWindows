@@ -6,6 +6,11 @@ use crate::settings::Settings;
 use crate::shared::{DeviceList, DeviceOption};
 
 /// True for virtual-cable style endpoints (VB-CABLE and similar).
+/// A virtual cable or virtual audio device (by its name), not real speakers/mic.
+pub fn is_virtual_label(label: &str) -> bool {
+    is_virtual(label)
+}
+
 fn is_virtual(label: &str) -> bool {
     let l = label.to_ascii_lowercase();
     l.contains("cable") || l.contains("vb-audio") || l.contains("virtual")
@@ -231,6 +236,22 @@ mod tests {
             ],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_driver_speaker_is_a_valid_call_audio_source() {
+        // Listed by the engine as a capture "device" when the driver can pass call audio on (engine::enumerate_devices).
+        let mut l = list();
+        l.capture.push(dev("clearspeak-driver:speaker", "ClearSpeak Speaker (virtual, from the call app)"));
+        let choices = call_source_choices(&l, Some("cable-in"));
+        assert!(choices.iter().any(|d| d.id == "clearspeak-driver:speaker"), "offered as a call audio source");
+        assert!(!only_virtual(&l.capture, false).iter().any(|d| d.id == "clearspeak-driver:speaker"), "never offered as a mic");
+        let mut s = Settings::default();
+        s.virtual_speaker_source_id = Some("clearspeak-driver:speaker".into());
+        let r = resolve(&s, &l, None);
+        assert_eq!(r.speaker_source.as_deref(), Some("clearspeak-driver:speaker"), "kept at start");
+        // The driver's own render endpoint is virtual, so it is never offered as the real headset (no loop).
+        assert!(is_virtual_label("ClearSpeak Speaker (ClearSpeak Virtual Audio Device)"));
     }
 
     #[test]
