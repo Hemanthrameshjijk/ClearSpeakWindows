@@ -4,12 +4,21 @@
 //!
 //! Runs once a second in the engine (`host.rs`), so it works with no window open.
 //!
-//! The accent is left out on purpose: it manages its own pause and resume exactly as before (pause above RTF 0.97
-//! for 5 s, resume below 0.80 for 3 s, see `accent_onnx::pipeline`). Reacting to that pause here as well paused
+//! The accent is never paused here: it manages its own pause and resume exactly as before (pause above RTF 0.97
+//! for 5 s, resume below 0.90 for 3 s, see `accent_onnx::pipeline`). Reacting to that pause here as well paused
 //! unrelated features and then switched the accent off, which made it flap on a busy PC.
+//!
+//! But the accent shares the CPU with the caller-side cleanup (both sides run at once). So while the accent runs
+//! close to its limit (`ACCENT_STRAINED_RTF` and up), that counts as "not keeping up" too - only up to
+//! `ACCENT_MAX_STEP` (Studio, Transcript, caller voice removal), so the extras give way before the accent has to
+//! pause, and the agent's own voice cleanup (step 3) is only ever lightened by a real audio overload.
 
 /// Highest step.
 pub const MAX_STEP: u8 = 3;
+/// Accent speed (RTF, smoothed over ~5 s) from which it counts as straining; its own pause is at 0.97.
+pub const ACCENT_STRAINED_RTF: f32 = 0.90;
+/// Highest step an accent under strain can cause: up to pausing caller voice removal, never the agent's own.
+pub const ACCENT_MAX_STEP: u8 = 2;
 
 /// Overloaded for this many seconds in a row steps down.
 pub const DOWN_AFTER_SECS: u32 = 5;
@@ -54,6 +63,19 @@ pub fn light_mic_noise(step: u8) -> bool {
 pub struct Signals {
     /// Either audio path is over its time budget (`RealtimeStatus::Overloaded`).
     pub overloaded: bool,
+    /// The accent is running and its speed is at `ACCENT_STRAINED_RTF` or above.
+    pub accent_strained: bool,
+}
+
+impl Signals {
+    /// Whether this second counts against keeping up at `step`.
+    fn bad_at(self, step: u8) -> bool {
+        self.overloaded || (self.accent_strained && step < ACCENT_MAX_STEP)
+    }
+    /// Whether this second counts as keeping up (an accent under strain keeps the extras paused).
+    fn good(self) -> bool {
+        !self.overloaded && !self.accent_strained
+    }
 }
 
 #[derive(Debug, Default)]
@@ -93,8 +115,8 @@ impl Governor {
         if let Some(t) = self.since_up.as_mut() {
             *t += 1;
         }
-        self.bad = if s.overloaded { self.bad + 1 } else { 0 };
-        self.good = if s.overloaded { 0 } else { self.good + 1 };
+        self.bad = if s.bad_at(self.step) { self.bad + 1 } else { 0 };
+        self.good = if s.good() { self.good + 1 } else { 0 };
 
         if self.since_change < MIN_GAP_SECS {
             return None;
@@ -105,7 +127,11 @@ impl Governor {
             if self.since_up.is_some_and(|t| t < 5 * 60) {
                 self.backoff += 1;
             }
-            let reason = format!("audio over its time budget for {} s", self.bad);
+            let reason = if s.overloaded {
+                format!("audio over its time budget for {} s", self.bad)
+            } else {
+                format!("the accent near its CPU limit for {} s", self.bad)
+            };
             self.step += 1;
             self.since_change = 0;
             self.bad = 0;
@@ -128,8 +154,29 @@ impl Governor {
 mod tests {
     use super::*;
 
-    const BAD: Signals = Signals { overloaded: true };
-    const OK: Signals = Signals { overloaded: false };
+    const BAD: Signals = Signals { overloaded: true, accent_strained: false };
+    const OK: Signals = Signals { overloaded: false, accent_strained: false };
+    const ACCENT: Signals = Signals { overloaded: false, accent_strained: true };
+
+    #[test]
+    fn an_accent_under_strain_pauses_the_extras_but_never_the_agents_voice_cleanup() {
+        let mut g = Governor::new();
+        assert_eq!(run(&mut g, ACCENT, 5), vec![(0, 1)], "Studio and Transcript first");
+        assert_eq!(run(&mut g, ACCENT, 30), vec![(1, 2)], "then caller voice removal");
+        assert_eq!(run(&mut g, ACCENT, 600), vec![], "never step 3 for the accent alone");
+        assert!(skip_speaker_bvc(g.step()) && !light_mic_noise(g.step()));
+        // Still straining: the extras stay paused; once it is comfortable they come back one by one.
+        assert_eq!(run(&mut g, OK, 60), vec![(2, 1)]);
+        assert_eq!(run(&mut g, OK, 60), vec![(1, 0)]);
+    }
+
+    #[test]
+    fn a_real_overload_still_reaches_step_3() {
+        let mut g = Governor::new();
+        run(&mut g, ACCENT, 35);
+        assert_eq!(g.step(), 2);
+        assert_eq!(run(&mut g, BAD, 30), vec![(2, 3)]);
+    }
 
     fn run(g: &mut Governor, s: Signals, secs: u32) -> Vec<(u8, u8)> {
         (0..secs).filter_map(|_| g.tick(s).map(|(a, b, _)| (a, b))).collect()

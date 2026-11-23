@@ -48,6 +48,44 @@ calls had little customer-side background to remove. So for new installs:
 
 Existing settings files keep whatever the agent chose.
 
+## Mic-only vs both sides
+
+| | Mic only (fallback) | Both sides |
+|---|---|---|
+| Build | tag `mic-only-baseline` (4d905b1), installer `...-20Nov-FULL-MICONLY-devcode.exe` | branch `feature/speaker-cleanup` |
+| Driver | any ClearSpeak driver (uses `IOCTL_CLEARSPEAK_WRITE` only) | driver with `IOCTL_CLEARSPEAK_READ` (Diver `feature/speaker-read`) |
+| Call app microphone | ClearSpeak Microphone | ClearSpeak Microphone |
+| Call app speaker | the real headset | **ClearSpeak Speaker** |
+| ClearSpeak call audio | off | source "ClearSpeak Speaker (virtual, from the call app)", output = headset |
+
+The new driver keeps the mic contract unchanged (WRITE as before, STATS only grows at the end), so the mic-only
+build runs on it too: one driver for both setups, and an agent can go back to mic-only by pointing the call app's
+speaker at the headset again.
+
+## Both sides at once: how the CPU is shared
+
+- Two independent real-time threads (mic and caller), each with its own model instances (mic Hush = `weya_nc.dll`,
+  caller Hush = `weya_nc_speaker.dll`, separate RNNoise/DeepFilterNet), each BVC behind its own 50 ms watchdog.
+- The driver keeps the two directions apart: mic ring (`g_PipeLock`) and speaker ring (`g_SpkLock`).
+- When the PC cannot keep up, the caller side gives way first (`perf_governor.rs`): step 1 Studio + Transcript, step 2
+  caller voice removal, step 3 (only on a real audio overload) the agent's voice removal becomes light RNNoise.
+  Caller RNNoise (~0.1 ms per frame) is never paused.
+- The accent counts too: running at RTF 0.90 or above for 5 s steps the governor down to at most step 2, so the
+  extras pause before the accent reaches its own pause at 0.97, and never the agent's own voice removal.
+
+Measured (23 Nov, dev PC pinned to 4 logical cores, plugged in; agent side = mic Hush + accent with 2 ORT threads,
+both sides paced at 10 ms for 60 s each):
+
+| Caller side | Agent side per frame avg / p99 / max | Caller side avg / p99 / max | Accent RTF (worst) | Frames > 10 ms |
+|---|---|---|---|---|
+| off | 1.11 / 2.56 / 18.8 ms | - | 0.47 | 1 |
+| RNNoise | 1.19 / 2.66 / 4.0 ms | 0.14 / 0.34 / 0.9 ms | 0.48 | 0 |
+| RNNoise + Hush Gentle | 1.23 / 2.75 / 4.3 ms | 0.81 / 2.81 / 4.3 ms | 0.46 | 0 |
+
+The caller side adds ~0.1 ms per frame to the agent side and does not move the accent. Agent PCs ran the accent at a
+median RTF 0.56 vs 0.44 here (Nov 20 logs), i.e. roughly 1.3x slower cores: still far inside the budget. Their
+gaps came from other apps' CPU spikes, which the accent signal in the governor now answers by pausing the extras.
+
 ## Agent setup with the driver (no second cable)
 
 1. Install the ClearSpeak driver build that has `IOCTL_CLEARSPEAK_READ` (ClearnaiWindows-Diver, branch
