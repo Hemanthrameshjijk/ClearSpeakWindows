@@ -22,18 +22,38 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use vocoder::CausalStreamer;
 
-pub const VOICE_NAMES: [&str; 6] =
-    ["american_male_1", "american_male_2", "american_male_3", "american_female_1", "american_female_2", "american_female_3"];
+/// Voice index `i + 1` is `VOICE_NAMES[i]` (the key in `american_voices.npz`). Saved settings store the index, so
+/// new voices are only ever added at the end: 1-3 male 1-3, 4-6 female 1-3, 7-8 male 4-5, 9-10 female 4-5.
+pub const VOICE_NAMES: [&str; 10] = [
+    "american_male_1",
+    "american_male_2",
+    "american_male_3",
+    "american_female_1",
+    "american_female_2",
+    "american_female_3",
+    "american_male_4",
+    "american_male_5",
+    "american_female_4",
+    "american_female_5",
+];
 
-/// Voice picker labels (without "Off"): choice `i` (0..6) is voice index `i + 1`.
-pub const VOICE_CHOICES: [&str; 6] = [
+/// Voice picker labels (without "Off"): choice `i` is voice index `i + 1`.
+pub const VOICE_CHOICES: [&str; 10] = [
     "American male 1",
     "American male 2",
     "American male 3",
     "American female 1",
     "American female 2",
     "American female 3",
+    "American male 4",
+    "American male 5",
+    "American female 4",
+    "American female 5",
 ];
+
+/// Voice indexes by gender, in picker order; position `p` in one list pairs with position `p` in the other.
+pub const MALE_VOICES: [u8; 5] = [1, 2, 3, 7, 8];
+pub const FEMALE_VOICES: [u8; 5] = [4, 5, 6, 9, 10];
 
 /// Files that make up the model bundle (what `setup.rs` ships / compares). ECAPA and RNNoise are not needed.
 pub const BUNDLE_FILES: [&str; 8] = [

@@ -34,7 +34,13 @@ pub const PRESET_NAMES: [&str; crate::ipc::PRESET_COUNT] = [
     "noise reduction strength",
     "mic boost dB",
     "CPU-saving step",
+    "caller noise reduction strength",
 ];
+
+/// Name of a caller-side BVC model index (`tse_engine::SpeakerBvcBackend`), for the log.
+pub fn speaker_bvc_backend_name(index: u8) -> &'static str {
+    tse_engine::SpeakerBvcBackend::from_index(index).name()
+}
 
 pub fn role_name(role: u8) -> &'static str {
     match role {

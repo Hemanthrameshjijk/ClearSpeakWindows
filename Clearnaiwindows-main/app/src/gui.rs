@@ -384,6 +384,8 @@ pub enum Message {
     SelectSpeakerBvcBackend(&'static str),
     /// Caller-side background voice removal on/off (keeps the chosen model).
     ToggleSpeakerBvc(bool),
+    /// Strength of the caller-side Hush (label from `ui_logic::NR_STRENGTH_NAMES`).
+    SelectSpeakerNrStrength(&'static str),
     SelectSpeakerSource(DeviceOption),
     SelectRealSpeakerOutput(DeviceOption),
     ToggleSpeakerMasterEnabled(bool),
@@ -1140,11 +1142,14 @@ fn update_main(state: &mut MainState, message: Message) {
             let app_dir = crate::setup::app_data_dir();
             let dest_dir = crate::sysutil::export_dir(&app_dir);
             let local_log = app_dir.join("clearspeak.log");
-            // While the shared log folder works, nothing is written locally (see `logging::share_dir`); say where the
-            // log is rather than "no log file yet". (Not opened from here: an unreachable server can hang for 20+ s.)
+            // While a shared log folder works, nothing is written locally (see `logging::share_dirs`); say where the
+            // log is rather than "no log file yet". (Not opened from here: an unreachable server can hang for 20+ s,
+            // so the note names every folder it may be in, first choice first.)
             if !local_log.is_file() {
-                if let Some(share) = crate::logging::share_dir() {
-                    state.diag_note = Some(format!("Logs from this PC are saved in {}", share.display()));
+                let shares = crate::logging::share_dirs();
+                if !shares.is_empty() {
+                    let list: Vec<String> = shares.iter().map(|s| s.display().to_string()).collect();
+                    state.diag_note = Some(format!("Logs from this PC are saved in {}", list.join(" or ")));
                     return;
                 }
             }
@@ -1262,6 +1267,13 @@ fn update_main(state: &mut MainState, message: Message) {
             state.license_note = Some("Signed out. Paste a license to sign in again.".to_string());
             state.license_status = compute_license(&state.license_token);
             persist(&state.settings);
+        }
+        Message::SelectSpeakerNrStrength(name) => {
+            if let Some(strength) = crate::ui_logic::nr_strength_from_name(name) {
+                state.handles.speaker_nr_strength.store(strength);
+                state.settings.speaker_nr_strength = strength;
+                persist(&state.settings);
+            }
         }
         Message::SelectNrStrength(name) => {
             if let Some(strength) = crate::ui_logic::nr_strength_from_name(name) {

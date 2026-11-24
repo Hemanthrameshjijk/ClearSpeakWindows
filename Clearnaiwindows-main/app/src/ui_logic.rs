@@ -3,9 +3,20 @@
 
 /// False in builds made with `--features no-voice-auto`: no "Auto voice" switch, and Auto is never on.
 pub const VOICE_AUTO_OFFERED: bool = !cfg!(feature = "no-voice-auto");
-/// The Accent voice picker: the six voices. "Auto" is a switch of its own; while it is on the picker is hidden
+/// The Accent voice picker: the male voices, then the female ones (`accent_onnx::MALE_VOICES`, `FEMALE_VOICES`;
+/// labels from `VOICE_CHOICES`). "Auto" is a switch of its own; while it is on the picker is hidden
 /// (`voice_picker_shown`), and switching it on listens to the voice from scratch.
-pub const VOICE_PICKS: &[&str] = &accent_onnx::VOICE_CHOICES;
+pub const VOICE_PICKS: [&str; accent_onnx::VOICE_CHOICES.len()] = {
+    let mut out = [""; accent_onnx::VOICE_CHOICES.len()];
+    let (m, f) = (accent_onnx::MALE_VOICES, accent_onnx::FEMALE_VOICES);
+    let mut i = 0;
+    while i < m.len() {
+        out[i] = accent_onnx::VOICE_CHOICES[m[i] as usize - 1];
+        out[m.len() + i] = accent_onnx::VOICE_CHOICES[f[i] as usize - 1];
+        i += 1;
+    }
+    out
+};
 
 /// What the picker shows as chosen.
 pub fn voice_pick_label(s: &crate::settings::Settings) -> &'static str {
@@ -553,7 +564,9 @@ mod tests {
         s.accent_voice_auto = false;
         assert!(voice_picker_shown(&s), "Auto off: pick a voice");
         assert_eq!(voice_pick_label(&s), "American female 2");
-        assert_eq!(VOICE_PICKS, &accent_onnx::VOICE_CHOICES[..], "only real voices in the list; Auto is a switch");
+        assert_eq!(VOICE_PICKS.len(), accent_onnx::VOICE_CHOICES.len(), "only real voices in the list; Auto is a switch");
+        assert!(VOICE_PICKS.iter().all(|p| accent_onnx::VOICE_CHOICES.contains(p)), "{VOICE_PICKS:?}");
+        assert_eq!((VOICE_PICKS[0], VOICE_PICKS[5]), ("American male 1", "American female 1"), "males first, then females");
     }
 
     #[test]

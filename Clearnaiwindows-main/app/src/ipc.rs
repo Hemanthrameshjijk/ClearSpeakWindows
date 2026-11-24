@@ -24,7 +24,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const TOGGLE_COUNT: usize = 14;
 /// Order of the small-number selectors in [`Status::presets`] and [`ClientMsg::Preset::key`]
 /// (see `EngineHandles::presets`).
-pub const PRESET_COUNT: usize = 7;
+pub const PRESET_COUNT: usize = 8;
 
 /// How the window should appear when it is opened or brought to the front.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

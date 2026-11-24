@@ -471,8 +471,12 @@ fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor, last: 
         let over = |log: &dsp_core::LatencyLog| {
             classify_status(&compute_percentiles(log.snapshot()), DEADLINE_NS, false) == RealtimeStatus::Overloaded
         };
+        let accent = h.accent.status();
         g.tick(crate::perf_governor::Signals {
             overloaded: (running[0] && over(&h.latency_log)) || (running[1] && over(&h.speaker_latency_log)),
+            accent_strained: running[0]
+                && accent.state == accent_onnx::pipeline::AccentState::Active
+                && accent.rtf >= crate::perf_governor::ACCENT_STRAINED_RTF,
         })
     } else {
         g.reset()

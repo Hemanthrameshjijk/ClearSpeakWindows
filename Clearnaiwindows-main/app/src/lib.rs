@@ -43,6 +43,8 @@ pub mod voice_auto;
 #[cfg(windows)]
 pub mod driver_pipe;
 #[cfg(windows)]
+pub mod driver_speaker;
+#[cfg(windows)]
 pub mod test_input;
 #[cfg(windows)]
 pub mod engine;
