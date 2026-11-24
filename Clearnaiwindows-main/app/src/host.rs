@@ -639,7 +639,7 @@ pub fn run_engine() {
         let handles = host.handles.clone();
         let _ = thread::Builder::new()
             .name("clearspeak-voice-auto".into())
-            .spawn(move || crate::voice_auto::run(handles, move || host.settings.lock().unwrap().clone()));
+            .spawn(move || crate::voice_auto::run(handles, move || host.settings.lock().unwrap_or_else(|p| p.into_inner()).clone()));
     }
 
     // License gate: every few seconds, switch off the features this PC's license does not allow (nothing without a working license).

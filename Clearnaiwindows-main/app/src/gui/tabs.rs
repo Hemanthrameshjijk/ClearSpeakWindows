@@ -1352,6 +1352,9 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                             )
                             .unwrap_or_else(|| "Picks a male or female voice to match the speaker".to_string());
                             c = c.push(switch_row("Auto voice", note, t.muted, state.settings.accent_voice_auto, Message::ToggleVoiceAuto));
+                            if let Some(r) = detected_voice_row(state) {
+                                c = c.push(r);
+                            }
                         }
                         if crate::ui_logic::voice_picker_shown(&state.settings) {
                             c = c.push(
@@ -1889,6 +1892,29 @@ fn bvc_note(state: &MainState, technical: bool) -> Option<Element<'_, Message>> 
     }
 }
 
+/// "Detected voice: Male → American male 1" under the Auto switch (green once this session's speech decided it).
+fn detected_voice_row<'a>(state: &MainState) -> Option<Element<'a, Message>> {
+    let t = style::tokens_for(state.settings.theme_dark);
+    let va = &state.handles.voice_auto;
+    let (value, decided) = crate::ui_logic::voice_auto_detected(
+        &state.settings,
+        va.state.load(std::sync::atomic::Ordering::Relaxed),
+        va.gender(),
+        va.confirmed.load(std::sync::atomic::Ordering::Relaxed),
+    )?;
+    Some(
+        row![
+            text("Detected voice").size(13).color(t.muted),
+            container(text("")).width(Length::Fill),
+            text(value).size(13).color(if decided { t.success } else { t.warning }),
+            btn(text("Re-detect").size(12).font(bold()).color(t.primary)).padding([4, 6]).on_press(Message::RedetectVoice).style(style::text_button),
+        ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center)
+        .into(),
+    )
+}
+
 /// Select and its status line: side by side when there is room, stacked otherwise.
 fn accent_row<'a>(wide: bool, select: Element<'a, Message>, line: Element<'a, Message>) -> Element<'a, Message> {
     if wide {
@@ -1957,10 +1983,13 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         col = col.push(setting_row(
             state,
             "Auto voice",
-            Some("Detects a male or female voice and picks the matching Accent voice. Switch it on again to re-detect."),
+            Some("Detects a male or female voice and picks the matching Accent voice."),
             state.settings.accent_voice_auto,
             Message::ToggleVoiceAuto,
         ));
+        if let Some(r) = detected_voice_row(state) {
+            col = col.push(r);
+        }
     }
     let line: Element<'_, Message> = text(match &auto_note {
         Some(n) => format!("{} \u{00B7} {n}", status.line()),

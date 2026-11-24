@@ -53,7 +53,29 @@ pub fn voice_auto_note(s: &crate::settings::Settings, state: u8, detected: Optio
         (Some(g), _) => format!("Last time: {} \u{2192} {}", name(g), voice(g)),
         (None, gender::pipeline::S_UNAVAILABLE) => "Voice detection unavailable: pick a voice".into(),
         (None, gender::pipeline::S_LISTENING | gender::pipeline::S_LOADING) => "Listening to your voice\u{2026}".into(),
+        (None, _) if s.accent_on => "Voice detection not started yet".into(),
         (None, _) => "Detects your voice when Accent is on".into(),
+    })
+}
+
+/// The "Detected voice" row shown under the Auto switch: `(value, decided)`. `decided` = this session's speech gave
+/// the answer (shown in green); otherwise it is still listening or showing the answer saved last time.
+pub fn voice_auto_detected(s: &crate::settings::Settings, state: u8, detected: Option<gender::Gender>, confirmed: bool) -> Option<(String, bool)> {
+    if !(VOICE_AUTO_OFFERED && s.accent_voice_auto) {
+        return None;
+    }
+    let name = |g: gender::Gender| if g == gender::Gender::Male { "Male" } else { "Female" };
+    let voice = |g: gender::Gender| accent_onnx::VOICE_CHOICES[(g.voice_like(s.accent_voice_index()) - 1) as usize];
+    Some(match (detected, state) {
+        (Some(g), _) if confirmed => (format!("{} \u{2192} {}", name(g), voice(g)), true),
+        (Some(g), gender::pipeline::S_LISTENING | gender::pipeline::S_LOADING) => {
+            (format!("{} \u{2192} {} (last time, checking\u{2026})", name(g), voice(g)), false)
+        }
+        (Some(g), _) => (format!("{} \u{2192} {} (last time)", name(g), voice(g)), false),
+        (None, gender::pipeline::S_UNAVAILABLE) => ("Unavailable".into(), false),
+        (None, gender::pipeline::S_LISTENING | gender::pipeline::S_LOADING) => ("Listening\u{2026}".into(), false),
+        (None, _) if s.accent_on => ("Not started yet (press Re-detect)".into(), false),
+        (None, _) => ("Not yet (turn Accent on)".into(), false),
     })
 }
 
@@ -553,6 +575,30 @@ mod tests {
         assert_eq!(note(S_LISTENING, None, false), "Listening to your voice\u{2026}");
         s.accent_voice_auto = false;
         assert_eq!(voice_auto_note(&s, S_LISTENING, Some(Male), true), None, "hand-picked voice: no note");
+    }
+
+    #[test]
+    fn the_detected_row_names_the_gender_and_the_voice() {
+        use gender::pipeline::{S_LISTENING, S_OFF};
+        use gender::Gender::{Female, Male};
+        let mut s = crate::settings::Settings::default();
+        s.accent_voice = 2;
+        s.accent_voice_auto = true;
+        if !VOICE_AUTO_OFFERED {
+            assert_eq!(voice_auto_detected(&s, S_LISTENING, Some(Male), true), None);
+            return;
+        }
+        let row = |s: &crate::settings::Settings, state, g, confirmed| voice_auto_detected(s, state, g, confirmed).unwrap();
+        assert_eq!(row(&s, S_LISTENING, Some(Female), true), ("Female \u{2192} American female 2".into(), true));
+        assert_eq!(row(&s, S_OFF, Some(Male), true), ("Male \u{2192} American male 2".into(), true));
+        assert_eq!(row(&s, S_OFF, Some(Male), false), ("Male \u{2192} American male 2 (last time)".into(), false));
+        assert_eq!(row(&s, S_LISTENING, None, false), ("Listening\u{2026}".into(), false));
+        s.accent_on = true;
+        assert_eq!(row(&s, S_OFF, None, false), ("Not started yet (press Re-detect)".into(), false));
+        s.accent_on = false;
+        assert_eq!(row(&s, S_OFF, None, false), ("Not yet (turn Accent on)".into(), false));
+        s.accent_voice_auto = false;
+        assert_eq!(voice_auto_detected(&s, S_LISTENING, Some(Male), true), None, "Auto off: no row");
     }
 
     #[test]

@@ -326,6 +326,8 @@ pub enum Message {
     ToggleAccent(bool),
     /// Accent voice picker (label from `accent_onnx::VOICE_CHOICES`).
     SelectAccentVoice(&'static str),
+    /// "Re-detect" in Auto: listen to the voice again from scratch.
+    RedetectVoice,
     /// Live transcript on/off.
     ToggleTranscript(bool),
     /// Empty the transcript box (the saved file is kept).
@@ -1320,6 +1322,14 @@ fn update_main(state: &mut MainState, message: Message) {
                 // Off: back to the hand-picked voice shown in the list.
                 state.handles.accent.set_voice(crate::ui_logic::accent_voice_now(&state.settings, None));
             }
+            persist(&state.settings);
+        }
+        Message::RedetectVoice => {
+            // "Re-detect" beside the detected voice: forget the answer and listen from scratch (Auto stays on).
+            crate::log_info!("[action] accent voice Auto: re-detect");
+            state.handles.voice_auto.relisten.store(true, std::sync::atomic::Ordering::Relaxed);
+            crate::remote::send(crate::ipc::ClientMsg::VoiceAutoRelisten);
+            // Also re-send the settings, so the engine surely has Auto on (it decides when detection runs).
             persist(&state.settings);
         }
         Message::SelectAccentVoice(label) => {

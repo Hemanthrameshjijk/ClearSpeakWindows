@@ -83,10 +83,18 @@ pub fn auto_voice(s: &Settings, answer: Option<Gender>) -> Option<u8> {
     answer.map(|g| g.voice_like(s.accent_voice_index()))
 }
 
-/// Runs for the life of the engine. `settings` returns the current settings.
+/// Runs for the life of the engine. `settings` returns the current settings. Every switch of detection on / off is
+/// logged with the reason (Auto switch, Accent voice), so "not started" in the window can be explained from the log.
 pub fn run(handles: EngineHandles, settings: impl Fn() -> Settings) {
     let va = handles.voice_auto.clone();
-    let Some(det) = va.detector.lock().ok().and_then(|d| d.clone()) else { return };
+    // The detector is created with the audio engine; wait for it instead of giving up.
+    let det = loop {
+        if let Some(d) = va.detector.lock().ok().and_then(|d| d.clone()) {
+            break d;
+        }
+        std::thread::sleep(TICK);
+    };
+    let mut logged_on = None::<bool>;
     let mut last_key = None::<String>;
     let mut person: Option<String> = None;
     let mut seen_changes = det.changes();
@@ -124,6 +132,14 @@ pub fn run(handles: EngineHandles, settings: impl Fn() -> Settings) {
             }
         }
         was_on = now_on;
+        if logged_on != Some(now_on) {
+            logged_on = Some(now_on);
+            crate::log_info!(
+                "[voice] Auto detection {} (Auto switch {}, Accent voice {voice})",
+                if now_on { "on: listening" } else { "off" },
+                if s.accent_voice_auto { "on" } else { "off" }
+            );
+        }
         det.set_enabled(now_on);
         let state = det.state();
         va.state.store(state, Relaxed);
