@@ -155,6 +155,10 @@ pub struct Status {
     /// Accent voice "Auto": detector state (`gender::pipeline::S_*`) and answer (0 unknown, 1 male, 2 female).
     #[serde(default)]
     pub voice_auto: [u8; 2],
+    /// `voice_auto`'s answer was decided from this session's speech (`false`: only the answer saved earlier).
+    /// A separate field (not a third array entry) so an older window or engine still reads the status.
+    #[serde(default)]
+    pub voice_auto_confirmed: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -188,6 +192,8 @@ pub enum ClientMsg {
     AccentVoice(u8),
     TranscriptEnabled(bool),
     TranscriptClear,
+    /// Accent voice "Auto": forget the detected voice and listen again from scratch.
+    VoiceAutoRelisten,
     /// Quit the engine (and so the whole app).
     Quit,
 }

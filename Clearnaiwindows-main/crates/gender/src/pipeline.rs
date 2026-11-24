@@ -1,6 +1,7 @@
 //! Mic-chain tap + worker thread. The mic thread only copies the frame into a ring (never blocks, never changes the
 //! audio); the worker, at below-normal priority, does 48 -> 16 kHz, the voice detector, and one model run per 3 s of
-//! speech (one per ~12 s once an answer is known). Nothing runs, and nothing is loaded, while detection is off.
+//! speech (one per ~12 s once this session has decided; an answer saved
+//! from an earlier session does not count, every chunk is checked until the voice confirms or overturns it). Nothing runs, and nothing is loaded, while detection is off.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering::Relaxed;
@@ -40,6 +41,8 @@ struct Shared {
     state: AtomicU8,
     /// 0 = not known, else `Gender::code`.
     gender: AtomicU8,
+    /// The answer was decided from this session's speech (`false` while it is only the saved guess).
+    confirmed: AtomicBool,
     /// Bumped on every new answer.
     changes: AtomicU32,
     /// Set by the app when the person changes (`known` for the new person, 0 = unknown, 255 = nothing pending).
@@ -68,6 +71,11 @@ impl GenderHandle {
     pub fn gender(&self) -> Option<Gender> {
         Gender::from_code(self.0.gender.load(Relaxed))
     }
+    /// True once this session's speech decided the answer; `false` while [`gender`](Self::gender) is only the saved
+    /// guess (or nothing).
+    pub fn confirmed(&self) -> bool {
+        self.0.confirmed.load(Relaxed)
+    }
     /// Changes every time a new answer is published (compare with the last value seen).
     pub fn changes(&self) -> u32 {
         self.0.changes.load(Relaxed)
@@ -82,6 +90,7 @@ impl GenderHandle {
     /// A different person signed in: start again from what is saved for them (`None` = listen from scratch).
     pub fn reset(&self, known: Option<Gender>) {
         self.0.gender.store(known.map_or(0, Gender::code), Relaxed);
+        self.0.confirmed.store(false, Relaxed);
         self.0.reset_to.store(known.map_or(0, Gender::code), Relaxed);
     }
 }
@@ -118,6 +127,7 @@ pub fn start(cfg: GenderConfig) -> (GenderStage, GenderHandle) {
         enabled: AtomicBool::new(cfg.enabled),
         state: AtomicU8::new(S_OFF),
         gender: AtomicU8::new(cfg.known.map_or(0, Gender::code)),
+        confirmed: AtomicBool::new(false),
         changes: AtomicU32::new(0),
         reset_to: AtomicU8::new(255),
         voiced_ms: AtomicU32::new(0),
@@ -190,6 +200,7 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
             detector = model.as_ref().map(|m| Detector::new(m.sure, known));
             voiced.clear();
             gate.reset();
+            chunks_since_answer = 0;
             sh.voiced_ms.store(0, Relaxed);
         }
         if !sh.enabled.load(Relaxed) {
@@ -247,7 +258,8 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
             continue;
         }
         let chunk: Vec<f32> = voiced.drain(..need).collect();
-        if d.answer().is_some() {
+        // Only re-checks are thinned out: while the answer is just the saved guess, every chunk counts.
+        if d.confirmed() {
             chunks_since_answer += 1;
             if chunks_since_answer % RECHECK_EVERY != 0 {
                 continue;
@@ -259,6 +271,7 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
                 sh.last_f0.store(s.f0.unwrap_or(0.0) as u32, Relaxed);
                 if let Some(c) = d.push(&s) {
                     sh.gender.store(c.gender.code(), Relaxed);
+                    sh.confirmed.store(true, Relaxed);
                     sh.changes.fetch_add(1, Relaxed);
                     chunks_since_answer = 0;
                 }

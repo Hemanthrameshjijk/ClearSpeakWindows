@@ -1,6 +1,15 @@
 //! Accent voice "Auto" (engine side): the male / female detector (`gender` crate) runs while Accent is on in Auto, and
 //! the voice of the detected gender with the agent's chosen number is used (male 2 <-> female 2). The answer is saved
 //! per license holder (`voice_gender.json`), so the next start, or the next agent on a shared PC, starts right.
+//! A saved answer is only a starting guess: the detector still decides from the voice in the first ~6 s of speech and
+//! switches if it disagrees (see `gender::detector`).
+//!
+//! Every time detection starts (Accent switched on in Auto, or Auto picked while Accent is on) it listens again: the last
+//! answer is used straight away as a guess and the voice corrects it within ~6 s, so a different agent at the PC is
+//! picked up at once instead of after minutes of re-checking. "Listen again" in the window forgets the answer entirely.
+//!
+//! The developer sign-in (`dev_code`) is shared by everyone testing, so it never loads or saves an answer: one tester's
+//! voice would otherwise become everyone's starting point.
 //!
 //! Only ever touches a voice that is already on: Accent off, or switched off by the license (`license_gate::enforce`
 //! sets voice 0), is left alone. The switch itself waits for a pause (`accent_onnx` does that for every voice change).
@@ -45,6 +54,27 @@ fn saved_answer(person: &str) -> Option<Gender> {
     }
 }
 
+/// Whose saved answer applies for this license token: `None` for the shared developer sign-in (never saved or loaded).
+fn answer_owner(token: &str, holder: Option<String>) -> Option<String> {
+    if crate::dev_code::status(token, 0).is_some() {
+        return None;
+    }
+    Some(holder.unwrap_or_default())
+}
+
+/// Whether detection should start listening afresh this tick, and with what starting guess: `Some(None)` = from
+/// scratch ("Listen again" pressed), `Some(Some(g))`/`Some(None)` on start = keep the current answer only as a guess,
+/// `None` = carry on.
+fn fresh_listen(was_on: bool, now_on: bool, relisten: bool, current: Option<Gender>) -> Option<Option<Gender>> {
+    if relisten {
+        Some(None)
+    } else if now_on && !was_on {
+        Some(current)
+    } else {
+        None
+    }
+}
+
 /// The voice to use for these settings and this answer (`None` = keep the hand-picked one).
 pub fn auto_voice(s: &Settings, answer: Option<Gender>) -> Option<u8> {
     if !s.accent_voice_auto {
@@ -58,21 +88,23 @@ pub fn run(handles: EngineHandles, settings: impl Fn() -> Settings) {
     let va = handles.voice_auto.clone();
     let Some(det) = va.detector.lock().ok().and_then(|d| d.clone()) else { return };
     let mut last_key = None::<String>;
-    let mut person = String::new();
+    let mut person: Option<String> = None;
     let mut seen_changes = det.changes();
     let mut last_state = u8::MAX;
     let mut first = true;
+    let mut was_on = false;
     loop {
         std::thread::sleep(TICK);
         let s = settings();
         // Whose answer applies: re-read only when the stored license changes (sign-in / sign-out).
         if last_key.as_deref() != Some(s.license_key.as_str()) {
             last_key = Some(s.license_key.clone());
-            let who = crate::license_gate::holder_name(&crate::dpapi::unprotect(&s.license_key)).unwrap_or_default();
+            let token = crate::dpapi::unprotect(&s.license_key);
+            let who = answer_owner(&token, crate::license_gate::holder_name(&token));
             if first || who != person {
                 first = false;
                 person = who;
-                let known = saved_answer(&person);
+                let known = person.as_deref().and_then(saved_answer);
                 det.reset(known);
                 if let Some(g) = known {
                     crate::log_info!("[voice] Auto: using the saved answer ({}) until the voice says otherwise", g.label());
@@ -80,10 +112,23 @@ pub fn run(handles: EngineHandles, settings: impl Fn() -> Settings) {
             }
         }
         let voice = handles.accent.voice();
-        det.set_enabled(s.accent_voice_auto && voice != 0);
+        let now_on = s.accent_voice_auto && voice != 0;
+        let relisten = va.relisten.swap(false, Relaxed);
+        if let Some(guess) = fresh_listen(was_on, now_on, relisten, det.gender()) {
+            det.reset(guess);
+            if relisten || guess.is_some() {
+                crate::log_info!(
+                    "[voice] Auto: listening again ({})",
+                    if relisten { "Listen again pressed" } else { "Accent switched on" }
+                );
+            }
+        }
+        was_on = now_on;
+        det.set_enabled(now_on);
         let state = det.state();
         va.state.store(state, Relaxed);
         va.gender.store(det.gender().map_or(0, Gender::code), Relaxed);
+        va.confirmed.store(det.confirmed(), Relaxed);
         if state != last_state {
             if state == gender::pipeline::S_UNAVAILABLE {
                 crate::log_error!("[voice] Auto unavailable: {}", det.message());
@@ -100,7 +145,9 @@ pub fn run(handles: EngineHandles, settings: impl Fn() -> Settings) {
                     g.label(),
                     voiced_ms as f32 / 1000.0
                 );
-                save_answer(&person, g);
+                if let Some(p) = person.as_deref() {
+                    save_answer(p, g);
+                }
             }
         }
         if voice != 0 {
@@ -127,6 +174,26 @@ mod tests {
         assert_eq!(auto_voice(&s, None), None, "nothing detected yet: keep the current voice");
         s.accent_voice_auto = false;
         assert_eq!(auto_voice(&s, Some(Gender::Female)), None, "a hand-picked voice is never changed");
+    }
+
+    #[test]
+    fn detection_listens_again_whenever_it_starts() {
+        use Gender::{Female, Male};
+        assert_eq!(fresh_listen(false, true, false, Some(Male)), Some(Some(Male)), "Accent on: last answer is only a guess");
+        assert_eq!(fresh_listen(false, true, false, None), Some(None));
+        assert_eq!(fresh_listen(true, true, false, Some(Male)), None, "already listening: carry on");
+        assert_eq!(fresh_listen(true, false, false, Some(Female)), None, "switching off keeps the answer");
+        assert_eq!(fresh_listen(true, true, true, Some(Male)), Some(None), "Listen again: from scratch");
+        assert_eq!(fresh_listen(false, false, true, Some(Male)), Some(None), "Listen again while off: ready for next time");
+    }
+
+    #[test]
+    fn the_shared_dev_sign_in_never_keeps_an_answer() {
+        let dev = crate::dev_code::token("", 1_000);
+        let expected = if crate::dev_code::ENABLED { None } else { Some(String::new()) };
+        assert_eq!(answer_owner(&dev, None), expected, "dev sign-in (in a dev build): nothing saved or loaded");
+        assert_eq!(answer_owner("CLNAI1.real.token", Some("Asha".into())), Some("Asha".into()));
+        assert_eq!(answer_owner("", None), Some(String::new()), "nobody signed in keeps its own slot");
     }
 
     #[test]

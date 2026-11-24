@@ -181,6 +181,11 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
     fn set_virtual_mic_target(&self, device_id: Option<String>) {
         let t = Instant::now();
         match device_id {
+            Some(id) if is_driver_render(&id) => {
+                *self.mic_out_swap.lock().unwrap() = None;
+                Self::stop_and_replace_render(&self.virtual_mic_render, None);
+                crate::log_info!("[device] cleaned voice goes to ClearSpeak Microphone through the driver (not played into ClearSpeak Speaker)");
+            }
             Some(id) => {
                 let (producer, consumer) = make_ring_buffer(2.0);
                 match HardwareRender::start_on_device_id(&id, consumer, self.counters.clone()) {
@@ -324,6 +329,15 @@ impl LiveDeviceSwitcher for LiveAudioSwitcher {
 pub struct BootstrapOutcome {
     pub handles: EngineHandles,
     pub devices: DeviceList,
+}
+
+/// The ClearSpeak (or old ClearNAI) driver's own speaker endpoint. The cleaned voice reaches "ClearSpeak Microphone"
+/// through the driver pipe (`driver_pipe::DriverSink`), so it is never also played into this endpoint: that is
+/// "ClearSpeak Speaker", where call apps' audio comes from, and the voice would come back in the user's headset.
+fn is_driver_render(id: &str) -> bool {
+    devices::list_render_devices()
+        .map(|l| l.iter().any(|(i, label)| i == id && crate::device_rules::is_our_driver(label)))
+        .unwrap_or(false)
 }
 
 /// Enumerates render/capture devices for the GUI's device pickers. Returns
@@ -830,6 +844,10 @@ pub fn start(
     // one for the first time via the GUI (a live switch, not just a
     // next-launch preference) has a running thread to reconnect to. ---
     let (virtual_mic_render, mic_out_p) = match virtual_mic_target_id {
+        Some(id) if is_driver_render(id) => {
+            crate::log_info!("[device] cleaned voice goes to ClearSpeak Microphone through the driver (not played into ClearSpeak Speaker)");
+            (None, None)
+        }
         Some(id) => {
             let (p, c) = make_ring_buffer(2.0);
             match HardwareRender::start_on_device_id(id, c, handles.counters.clone()) {

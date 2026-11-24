@@ -330,6 +330,8 @@ pub enum Message {
     ToggleTranscript(bool),
     /// Empty the transcript box (the saved file is kept).
     ClearTranscript,
+    /// Accent voice "Auto" on/off. On listens to the voice from scratch (the current voice stays until it decides).
+    ToggleVoiceAuto(bool),
     SelectMicTarget(DeviceOption),
     SelectPhysicalMic(DeviceOption),
     /// The Bluetooth hint's button: talk on this (non-Bluetooth) mic so the earbuds stay in full-quality listening mode.
@@ -380,6 +382,8 @@ pub enum Message {
     /// Headset loudness for the exposure estimate (label from `ui_logic::HEADSET_DB_NAMES`).
     SelectHeadsetDb(&'static str),
     SelectSpeakerBvcBackend(&'static str),
+    /// Caller-side background voice removal on/off (keeps the chosen model).
+    ToggleSpeakerBvc(bool),
     SelectSpeakerSource(DeviceOption),
     SelectRealSpeakerOutput(DeviceOption),
     ToggleSpeakerMasterEnabled(bool),
@@ -1292,18 +1296,26 @@ fn update_main(state: &mut MainState, message: Message) {
             state.handles.transcript.clear();
             crate::remote::send(crate::ipc::ClientMsg::TranscriptClear);
         }
-        Message::SelectAccentVoice(label) => {
-            if label == crate::ui_logic::VOICE_AUTO_LABEL {
-                // Auto keeps the voice number chosen so far (male 2 <-> female 2).
-                state.settings.accent_voice_auto = true;
-            } else if let Some(i) = accent_onnx::VOICE_CHOICES.iter().position(|l| *l == label) {
-                // A voice picked by hand is used as it is; detection stops changing it.
-                state.settings.accent_voice_auto = false;
-                state.settings.accent_voice = i as u8 + 1;
+        Message::ToggleVoiceAuto(on) => {
+            let on = on && crate::ui_logic::VOICE_AUTO_OFFERED;
+            state.settings.accent_voice_auto = on;
+            if on {
+                // Every switch-on listens from scratch (no earlier answer): the voice in use now stays until the
+                // detector decides (~6 s of speech), then the matching voice with the same number is loaded.
+                state.handles.voice_auto.relisten.store(true, std::sync::atomic::Ordering::Relaxed);
+                crate::remote::send(crate::ipc::ClientMsg::VoiceAutoRelisten);
             } else {
-                return;
+                // Off: back to the hand-picked voice shown in the list.
+                state.handles.accent.set_voice(crate::ui_logic::accent_voice_now(&state.settings, None));
             }
-            state.handles.accent.set_voice(crate::ui_logic::accent_voice_now(&state.settings, state.handles.voice_auto.gender()));
+            persist(&state.settings);
+        }
+        Message::SelectAccentVoice(label) => {
+            // Only offered while Auto is off: a voice picked by hand is used as it is.
+            let Some(i) = accent_onnx::VOICE_CHOICES.iter().position(|l| *l == label) else { return };
+            state.settings.accent_voice_auto = false;
+            state.settings.accent_voice = i as u8 + 1;
+            state.handles.accent.set_voice(crate::ui_logic::accent_voice_now(&state.settings, None));
             persist(&state.settings);
         }
         Message::SelectMicTarget(device) => {
@@ -1493,6 +1505,14 @@ fn update_main(state: &mut MainState, message: Message) {
                 persist(&state.settings);
             }
         }
+        Message::ToggleSpeakerBvc(on) => {
+            // On: the model chosen before (Hush when there was none); off: the "Off" backend, as the picker used to do.
+            use tse_engine::SpeakerBvcBackend as B;
+            let before = B::from_index(state.settings.speaker_bvc_backend);
+            let backend = if !on { B::Off } else if before == B::Off { B::Hush } else { before };
+            crate::log_info!("[action] caller background voice removal: {}", if on { "on" } else { "off" });
+            update_main(state, Message::SelectSpeakerBvcBackend(backend.name()));
+        }
         Message::SelectSpeakerBvcBackend(name) => {
             if let Some(backend) = speaker_bvc_backend_from_name(name) {
                 let index = backend.to_index();
@@ -1646,6 +1666,7 @@ fn reset_to_defaults(state: &mut MainState) {
     update_main(state, Message::SelectBvcBackend(BvcBackend::from_index(d.mic_bvc_backend).name()));
     update_main(state, Message::ToggleAccent(d.accent_on));
     update_main(state, Message::SelectAccentVoice(crate::ui_logic::voice_pick_label(&d)));
+    update_main(state, Message::ToggleVoiceAuto(d.accent_voice_auto));
     update_main(state, Message::ToggleTranscript(d.transcript_on));
     update_main(state, Message::ToggleMonitor(d.monitor_enabled));
     update_main(state, Message::ToggleSpeakerNoise(d.speaker_noise_on));

@@ -23,6 +23,9 @@ path = "src/bin/clearspeak-engine.rs"
 # Never enable it for customer installers.
 [features]
 dev-code = []
+# `no-voice-auto`: builds without the Accent voice "Auto" (male / female detection). The picker lists only the six
+# voices, and a saved "Auto" falls back to the voice chosen in it.
+no-voice-auto = []
 
 [dependencies]
 # Portable foundation crate (bypass toggles, ring buffers, metrics). Builds

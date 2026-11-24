@@ -1338,16 +1338,37 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                     } else {
                         locked_row(state, "Convert my accent")
                     },
-                    row![
-                        text("Accent voice").size(13).color(t.muted),
-                        container(text("")).width(Length::Fill),
-                        pick_list(&crate::ui_logic::VOICE_PICKS[..], Some(voice_label), Message::SelectAccentVoice)
-                            .width(Length::Fixed(170.0))
-                            .padding([7, 10])
-                            .text_size(13)
-                            .style(style::select),
-                    ]
-                    .align_y(iced::Alignment::Center),
+                    {
+                        // "Auto voice" is its own switch; while it is on the voice list is hidden. Switching it on
+                        // again listens to the voice from scratch.
+                        let mut c = column![].spacing(14);
+                        if crate::ui_logic::VOICE_AUTO_OFFERED {
+                            let va = &h.voice_auto;
+                            let note = crate::ui_logic::voice_auto_note(
+                                &state.settings,
+                                va.state.load(std::sync::atomic::Ordering::Relaxed),
+                                va.gender(),
+                                va.confirmed.load(std::sync::atomic::Ordering::Relaxed),
+                            )
+                            .unwrap_or_else(|| "Picks a male or female voice to match the speaker".to_string());
+                            c = c.push(switch_row("Auto voice", note, t.muted, state.settings.accent_voice_auto, Message::ToggleVoiceAuto));
+                        }
+                        if crate::ui_logic::voice_picker_shown(&state.settings) {
+                            c = c.push(
+                                row![
+                                    text("Accent voice").size(13).color(t.muted),
+                                    container(text("")).width(Length::Fill),
+                                    pick_list(&crate::ui_logic::VOICE_PICKS[..], Some(voice_label), Message::SelectAccentVoice)
+                                        .width(Length::Fixed(170.0))
+                                        .padding([7, 10])
+                                        .text_size(13)
+                                        .style(style::select),
+                                ]
+                                .align_y(iced::Alignment::Center),
+                            );
+                        }
+                        c
+                    },
                 ]
                 .spacing(14)
                 .into(),
@@ -1924,6 +1945,7 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         &state.settings,
         h.voice_auto.state.load(std::sync::atomic::Ordering::Relaxed),
         h.voice_auto.gender(),
+        h.voice_auto.confirmed.load(std::sync::atomic::Ordering::Relaxed),
     );
     let accent_color = match status.state {
         accent_onnx::pipeline::AccentState::Active => t.success,
@@ -1931,21 +1953,36 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         accent_onnx::pipeline::AccentState::Paused | accent_onnx::pipeline::AccentState::Unavailable => t.danger,
         accent_onnx::pipeline::AccentState::Off => t.muted,
     };
-    col = col.push(accent_row(
+    if crate::ui_logic::VOICE_AUTO_OFFERED {
+        col = col.push(setting_row(
+            state,
+            "Auto voice",
+            Some("Detects a male or female voice and picks the matching Accent voice. Switch it on again to re-detect."),
+            state.settings.accent_voice_auto,
+            Message::ToggleVoiceAuto,
+        ));
+    }
+    let line: Element<'_, Message> = text(match &auto_note {
+        Some(n) => format!("{} \u{00B7} {n}", status.line()),
+        None => status.line(),
+    })
+    .size(12)
+    .color(accent_color)
+    .into();
+    if crate::ui_logic::voice_picker_shown(&state.settings) {
+        col = col.push(accent_row(
             wide,
             select_row(
                 state,
                 "Accent voice",
                 pick_list(&crate::ui_logic::VOICE_PICKS[..], Some(label), Message::SelectAccentVoice).padding([9, 12]).text_size(13).style(style::select).into(),
             ),
-            text(match &auto_note {
-                Some(n) => format!("{} \u{00B7} {n}", status.line()),
-                None => status.line(),
-            })
-            .size(12)
-            .color(accent_color)
-            .into(),
-    ));
+            line,
+        ));
+    } else {
+        // Auto picks the voice: no list, just what it is doing ("Listening to your voice…", "Detected: …").
+        col = col.push(line);
+    }
     col = col.push(setting_row(state, "Studio voice", Some("Fuller, clearer tone"), h.mic_studio.is_on(), Message::ToggleMicStudio));
     col = col.push(select_row(
         state,
@@ -1995,15 +2032,26 @@ fn call_audio_tab(state: &MainState) -> Element<'_, Message> {
         .push(row![text("\u{25CF}").size(10).color(t.success), text(status_text).size(15)].spacing(8).align_y(iced::Alignment::Center))
         .push(setting_row(state, "Call audio path enabled", None, h.speaker_master_enabled.is_on(), Message::ToggleSpeakerMasterEnabled))
         .push(gated_row(state, allowed(state).nc, "Noise removal", None, h.speaker_noise.is_on(), Message::ToggleSpeakerNoise))
-        .push(select_row(
+        // Its own switch (it used to be on only by picking a model in a list that started with "Off").
+        .push(gated_row(
+            state,
+            allowed(state).bvc,
+            "Background voice removal",
+            Some("Removes other people talking near the caller"),
+            state.settings.speaker_bvc_on,
+            Message::ToggleSpeakerBvc,
+        ));
+    if state.settings.speaker_bvc_on {
+        col = col.push(select_row(
             state,
             "Background voice model",
-            pick_list(&SPEAKER_BVC_BACKEND_NAMES[..], Some(selected.name()), Message::SelectSpeakerBvcBackend)
+            pick_list(&SPEAKER_BVC_BACKEND_NAMES[1..], Some(selected.name()), Message::SelectSpeakerBvcBackend)
                 .padding([9, 12])
                 .text_size(13)
                 .style(style::select)
                 .into(),
         ));
+    }
     if let Some(n) = note {
         col = col.push(n);
     }

@@ -64,12 +64,14 @@ impl DriverSink {
                 let (mut sent, mut failed, mut peak) = (0u64, 0u64, 0i16);
                 let mut last_summary = Instant::now();
                 let mut told_missing = false;
+                // Which driver's microphone the frames go to (the old pre-rename driver is still accepted).
+                let mut mic_name = "ClearSpeak Microphone";
                 while !t_stop.load(Ordering::Relaxed) {
                     if last_summary.elapsed() >= SUMMARY_EVERY {
                         let lost = t_dropped.swap(0, Ordering::Relaxed);
                         if device.is_some() || sent > 0 {
                             crate::log_info!(
-                                "[driver] last {}s: {sent} frames sent to ClearSpeak Microphone, {failed} write errors, {lost} dropped (queue full), loudest {:.1} dBFS",
+                                "[driver] last {}s: {sent} frames sent to {mic_name}, {failed} write errors, {lost} dropped (queue full), loudest {:.1} dBFS",
                                 SUMMARY_EVERY.as_secs(),
                                 if peak <= 0 { -120.0 } else { 20.0 * (peak as f32 / 32767.0).log10() }
                             );
@@ -88,11 +90,19 @@ impl DriverSink {
                     }
                     if device.is_none() && last_try.elapsed() >= Duration::from_secs(1) {
                         last_try = Instant::now();
-                        device = open_device();
-                        if device.is_some() {
+                        let opened = open_device();
+                        device = opened.map(|(h, _)| h);
+                        if let Some((_, which)) = opened {
                             t_connected.store(true, Ordering::Relaxed);
                             told_missing = false;
-                            crate::log_info!("[driver] connected to the ClearSpeak virtual microphone driver");
+                            mic_name = which.mic_name();
+                            match which {
+                                Driver::ClearSpeak => crate::log_info!("[driver] connected to the ClearSpeak virtual microphone driver"),
+                                Driver::OldClearNai => crate::log_info!(
+                                    "[driver] connected to the OLD ClearNAI driver (from before the rename); install the current \
+                                     ClearSpeak driver (driver folder, Install-ClearSpeak-Driver.ps1)"
+                                ),
+                            }
                         } else if !std::mem::replace(&mut told_missing, true) {
                             crate::log_info!("[driver] ClearSpeak virtual microphone driver not found (not installed or not loaded); retrying every second");
                         }
@@ -149,16 +159,36 @@ impl Drop for DriverSink {
     }
 }
 
-fn open_device() -> Option<HANDLE> {
-    // A driver installed before the rename still uses the old device name.
-    open_named(w!("\\\\.\\ClearSpeakPipe")).or_else(|| open_named(w!("\\\\.\\ClearNAIPipe")))
+/// Which driver the control device belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Driver {
+    ClearSpeak,
+    /// Installed before the rename: same pipe protocol, old device and endpoint names.
+    OldClearNai,
 }
 
-fn open_named(name: windows::core::PCWSTR) -> Option<HANDLE> {
+impl Driver {
+    /// The microphone apps see for this driver.
+    fn mic_name(self) -> &'static str {
+        match self {
+            Driver::ClearSpeak => "ClearSpeak Microphone",
+            Driver::OldClearNai => "ClearNAI Microphone (old driver)",
+        }
+    }
+}
+
+fn open_device() -> Option<(HANDLE, Driver)> {
+    // A driver installed before the rename still uses the old device name.
+    open_named(w!("\\\\.\\ClearSpeakPipe"), GENERIC_WRITE.0)
+        .map(|h| (h, Driver::ClearSpeak))
+        .or_else(|| open_named(w!("\\\\.\\ClearNAIPipe"), GENERIC_WRITE.0).map(|h| (h, Driver::OldClearNai)))
+}
+
+fn open_named(name: windows::core::PCWSTR, access: u32) -> Option<HANDLE> {
     unsafe {
         CreateFileW(
             name,
-            GENERIC_WRITE.0,
+            access,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,

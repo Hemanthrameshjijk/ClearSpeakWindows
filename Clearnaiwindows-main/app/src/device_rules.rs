@@ -12,7 +12,7 @@ fn is_virtual(label: &str) -> bool {
 }
 
 /// Our own virtual microphone driver, under its current name or the one it had before the rename.
-fn is_our_driver(label: &str) -> bool {
+pub fn is_our_driver(label: &str) -> bool {
     let l = label.to_ascii_lowercase();
     l.contains("clearspeak virtual audio device") || l.contains("clearnai virtual audio device")
 }
@@ -103,14 +103,16 @@ pub fn preferred_mic_target(devices: &DeviceList) -> Option<DeviceOption> {
         .or_else(|| cable_input_target(devices))
 }
 
-/// Call-audio source choices: virtual capture ends, minus the end paired with the mic target's cable.
+/// Call-audio source choices: virtual capture ends, minus the end paired with the mic target's cable and minus our own
+/// driver's microphone (that is ClearSpeak's cleaned voice: as call audio it would play your voice back to you and
+/// become the echo canceller's reference).
 pub fn call_source_choices(devices: &DeviceList, mic_target_id: Option<&str>) -> Vec<DeviceOption> {
     let paired = mic_target_id
         .and_then(|id| find(&devices.render, id))
         .map(|d| paired_capture_label(&d.label));
     only_virtual(&devices.capture, true)
         .into_iter()
-        .filter(|d| paired.as_deref() != Some(d.label.to_ascii_lowercase().as_str()))
+        .filter(|d| paired.as_deref() != Some(d.label.to_ascii_lowercase().as_str()) && !is_our_driver(&d.label))
         .collect()
 }
 
@@ -148,6 +150,11 @@ pub fn resolve(saved: &Settings, devices: &DeviceList, auto_mic_target: Option<S
     let speaker_source = match saved.virtual_speaker_source_id.as_deref() {
         Some(id) if no_enumeration => Some(id.to_string()),
         Some(id) => match find(&devices.capture, id) {
+            Some(d) if is_our_driver(&d.label) => {
+                notes.push(format!("call audio source '{}' is ClearSpeak's own microphone (it would echo your voice); cleared", d.label));
+                clear_source_for_good = true;
+                None
+            }
             Some(d) if is_virtual(&d.label) => {
                 let loops_back = mic_target_label
                     .as_deref()
@@ -230,6 +237,27 @@ mod tests {
                 dev("epos-mic", "Microphone (EPOS PC 8 USB)"),
             ],
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn our_own_microphone_is_never_call_audio() {
+        for name in ["ClearSpeak", "ClearNAI"] {
+            let mut l = list();
+            l.render.push(dev("drv-out", &format!("Speakers ({name} Virtual Audio Device)")));
+            l.capture.push(dev("drv-mic", &format!("{name} Microphone ({name} Virtual Audio Device)")));
+            let choices = call_source_choices(&l, Some("drv-out"));
+            assert!(choices.iter().all(|d| d.id != "drv-mic"), "{name}: own mic offered as call audio");
+            assert!(choices.iter().any(|d| d.id == "cable-out"), "{name}: the VB-CABLE end is still offered");
+
+            let mut s = Settings::default();
+            s.virtual_mic_target_id = Some("drv-out".into());
+            s.virtual_speaker_source_id = Some("drv-mic".into());
+            let r = resolve(&s, &l, None);
+            assert_eq!(r.speaker_source, None, "{name}: not used");
+            assert_eq!(r.settings.virtual_speaker_source_id, None, "{name}: cleared in settings");
+            assert!(r.changed);
+            assert_eq!(r.mic_target.as_deref(), Some("drv-out"), "{name}: the driver stays the mic target");
         }
     }
 

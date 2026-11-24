@@ -241,6 +241,7 @@ impl Host {
             mic_counters: shared::counters_to_array(&h.counters),
             mic_hands_free: h.counters.hands_free.load(std::sync::atomic::Ordering::Relaxed),
             voice_auto: [h.voice_auto.state.load(Ordering::Relaxed), h.voice_auto.gender.load(Ordering::Relaxed)],
+            voice_auto_confirmed: h.voice_auto.confirmed.load(Ordering::Relaxed),
             speaker_counters: shared::counters_to_array(&h.speaker_counters),
             mic_pct: dsp_core::compute_percentiles(h.latency_log.snapshot()).into(),
             speaker_pct: dsp_core::compute_percentiles(h.speaker_latency_log.snapshot()).into(),
@@ -332,6 +333,10 @@ impl Host {
             ClientMsg::TranscriptEnabled(on) => {
                 crate::log_info!("[action] live transcript: {}", if on { "on" } else { "off" });
                 h.transcript.set_enabled(on)
+            }
+            ClientMsg::VoiceAutoRelisten => {
+                crate::log_info!("[action] accent voice Auto: listen again");
+                h.voice_auto.relisten.store(true, Ordering::Relaxed);
             }
             ClientMsg::TranscriptClear => {
                 crate::log_info!("[action] transcript cleared");

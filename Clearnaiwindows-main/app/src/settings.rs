@@ -351,6 +351,14 @@ pub fn settings_path() -> Option<PathBuf> {
 /// no way to tell that apart from, say, a UI bug that never persisted the
 /// setting in the first place.
 pub fn load() -> Settings {
+    let mut s = load_file();
+    if !crate::ui_logic::VOICE_AUTO_OFFERED {
+        s.accent_voice_auto = false;
+    }
+    s
+}
+
+fn load_file() -> Settings {
     let Some(path) = settings_path() else {
         return Settings::default();
     };

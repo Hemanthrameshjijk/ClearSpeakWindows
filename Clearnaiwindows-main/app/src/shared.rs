@@ -214,6 +214,10 @@ pub struct VoiceAuto {
     pub state: std::sync::atomic::AtomicU8,
     /// 0 not known yet, 1 male, 2 female (`gender::Gender::code`).
     pub gender: std::sync::atomic::AtomicU8,
+    /// `gender` was decided from this session's speech; `false` while it is only the answer saved earlier.
+    pub confirmed: std::sync::atomic::AtomicBool,
+    /// "Listen again" was pressed: the engine forgets the answer and listens from scratch (see `voice_auto::run`).
+    pub relisten: std::sync::atomic::AtomicBool,
     /// The running detector (engine process only; `None` in the window and in tests).
     pub detector: std::sync::Mutex<Option<gender::pipeline::GenderHandle>>,
 }

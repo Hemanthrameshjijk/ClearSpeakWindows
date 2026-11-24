@@ -1,21 +1,20 @@
 //! Pure, platform-independent logic behind the tabbed window: tab list, header status chip, the three profiles,
 //! transcript search/format helpers. Nothing here touches iced, the engine or the OS, so it is all unit-tested.
 
-/// The Accent voice picker: "Auto" first, then the six voices (`accent_onnx::VOICE_CHOICES`).
-pub const VOICE_AUTO_LABEL: &str = "Auto (match my voice)";
-pub const VOICE_PICKS: [&str; 7] = [
-    VOICE_AUTO_LABEL,
-    accent_onnx::VOICE_CHOICES[0],
-    accent_onnx::VOICE_CHOICES[1],
-    accent_onnx::VOICE_CHOICES[2],
-    accent_onnx::VOICE_CHOICES[3],
-    accent_onnx::VOICE_CHOICES[4],
-    accent_onnx::VOICE_CHOICES[5],
-];
+/// False in builds made with `--features no-voice-auto`: no "Auto voice" switch, and Auto is never on.
+pub const VOICE_AUTO_OFFERED: bool = !cfg!(feature = "no-voice-auto");
+/// The Accent voice picker: the six voices. "Auto" is a switch of its own; while it is on the picker is hidden
+/// (`voice_picker_shown`), and switching it on listens to the voice from scratch.
+pub const VOICE_PICKS: &[&str] = &accent_onnx::VOICE_CHOICES;
 
 /// What the picker shows as chosen.
 pub fn voice_pick_label(s: &crate::settings::Settings) -> &'static str {
-    if s.accent_voice_auto { VOICE_AUTO_LABEL } else { accent_onnx::VOICE_CHOICES[(s.accent_voice_index() - 1) as usize] }
+    accent_onnx::VOICE_CHOICES[(s.accent_voice_index() - 1) as usize]
+}
+
+/// The voice picker is shown only while Auto is off (Auto picks the voice itself).
+pub fn voice_picker_shown(s: &crate::settings::Settings) -> bool {
+    !(VOICE_AUTO_OFFERED && s.accent_voice_auto)
 }
 
 /// The voice Accent should use now (`0` = off): in Auto, the detected gender's voice with the chosen number, or the
@@ -27,14 +26,20 @@ pub fn accent_voice_now(s: &crate::settings::Settings, detected: Option<gender::
     crate::voice_auto::auto_voice(s, detected).unwrap_or_else(|| s.accent_voice_index())
 }
 
-/// The line under the picker in Auto: what was detected (or that it is still listening).
-pub fn voice_auto_note(s: &crate::settings::Settings, state: u8, detected: Option<gender::Gender>) -> Option<String> {
+/// The line under the picker in Auto: what was detected (or that it is still listening). `confirmed` = the answer
+/// comes from this session's speech; otherwise it is the one saved earlier, shown as such while the voice is checked.
+pub fn voice_auto_note(s: &crate::settings::Settings, state: u8, detected: Option<gender::Gender>, confirmed: bool) -> Option<String> {
     if !s.accent_voice_auto {
         return None;
     }
+    let name = |g: gender::Gender| if g == gender::Gender::Male { "Male" } else { "Female" };
+    let voice = |g: gender::Gender| accent_onnx::VOICE_CHOICES[(g.voice_like(s.accent_voice_index()) - 1) as usize];
     Some(match (detected, state) {
-        (Some(g), _) => format!("Detected: {} \u{2192} {}", if g == gender::Gender::Male { "Male" } else { "Female" },
-            accent_onnx::VOICE_CHOICES[(g.voice_like(s.accent_voice_index()) - 1) as usize]),
+        (Some(g), _) if confirmed => format!("Detected: {} \u{2192} {}", name(g), voice(g)),
+        (Some(g), gender::pipeline::S_LISTENING | gender::pipeline::S_LOADING) => {
+            format!("Last time: {} \u{2192} {} (checking your voice\u{2026})", name(g), voice(g))
+        }
+        (Some(g), _) => format!("Last time: {} \u{2192} {}", name(g), voice(g)),
         (None, gender::pipeline::S_UNAVAILABLE) => "Voice detection unavailable: pick a voice".into(),
         (None, gender::pipeline::S_LISTENING | gender::pipeline::S_LOADING) => "Listening to your voice\u{2026}".into(),
         (None, _) => "Detects your voice when Accent is on".into(),
@@ -522,6 +527,34 @@ pub fn settings_password_ok(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_note_tells_a_saved_answer_from_a_detected_one() {
+        use gender::pipeline::{S_LISTENING, S_OFF};
+        use gender::Gender::{Female, Male};
+        let mut s = crate::settings::Settings::default();
+        s.accent_voice = 2;
+        s.accent_voice_auto = true;
+        let note = |state, g, confirmed| voice_auto_note(&s, state, g, confirmed).unwrap();
+        assert_eq!(note(S_LISTENING, Some(Male), false), "Last time: Male \u{2192} American male 2 (checking your voice\u{2026})");
+        assert_eq!(note(S_OFF, Some(Male), false), "Last time: Male \u{2192} American male 2");
+        assert_eq!(note(S_LISTENING, Some(Female), true), "Detected: Female \u{2192} American female 2");
+        assert_eq!(note(S_LISTENING, None, false), "Listening to your voice\u{2026}");
+        s.accent_voice_auto = false;
+        assert_eq!(voice_auto_note(&s, S_LISTENING, Some(Male), true), None, "hand-picked voice: no note");
+    }
+
+    #[test]
+    fn the_voice_list_is_hidden_while_auto_picks_the_voice() {
+        let mut s = crate::settings::Settings::default();
+        s.accent_voice = 5;
+        s.accent_voice_auto = true;
+        assert_eq!(voice_picker_shown(&s), !VOICE_AUTO_OFFERED, "Auto on: no list (unless this build has no Auto)");
+        s.accent_voice_auto = false;
+        assert!(voice_picker_shown(&s), "Auto off: pick a voice");
+        assert_eq!(voice_pick_label(&s), "American female 2");
+        assert_eq!(VOICE_PICKS, &accent_onnx::VOICE_CHOICES[..], "only real voices in the list; Auto is a switch");
+    }
 
     #[test]
     fn auto_gain_moves_toward_the_needed_gain_in_small_steps_and_does_not_hunt() {
