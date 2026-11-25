@@ -234,6 +234,9 @@ fn apply_observed(handles: &EngineHandles, hush: &Option<Arc<AtomicBool>>, bpo: 
     handles.voice_auto.state.store(st.voice_auto[0], std::sync::atomic::Ordering::Relaxed);
     handles.voice_auto.gender.store(st.voice_auto[1], std::sync::atomic::Ordering::Relaxed);
     handles.voice_auto.confirmed.store(st.voice_auto_confirmed, std::sync::atomic::Ordering::Relaxed);
+    handles.voice_auto.own_ready.store(st.own_voice_ready, std::sync::atomic::Ordering::Relaxed);
+    handles.voice_auto.own_recording.store(st.own_voice_recording_ms.is_some(), std::sync::atomic::Ordering::Relaxed);
+    handles.voice_auto.own_rec_ms.store(st.own_voice_recording_ms.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
     shared::counters_from_array(&handles.speaker_counters, &st.speaker_counters);
     let ex = &handles.exposure;
     ex.dose_pct.store(st.exposure.dose_pct);

@@ -2,6 +2,8 @@
 //!
 //! - Each 3 s chunk gives a vote: ECAPA's score when it is sure; otherwise pitch + formants if *they* are sure;
 //!   otherwise ECAPA's (weak) score.
+//! - Quick guess: from the first ~2 s of speech when that piece is clearly one way ([`Detector::quick_guess`]); used
+//!   straight away but not confirmed, like a saved answer.
 //! - First answer: after 2 chunks (~6 s of speech) whose average is sure, or 1 chunk that is very sure.
 //! - A saved answer (from an earlier session) is only a starting guess: it is used straight away, but the first-answer
 //!   rule still runs on this session's speech and its answer wins. Before this, a saved "male" counted as already
@@ -68,6 +70,26 @@ impl Detector {
         }
     }
 
+    /// A quick first guess from the first ~2 s of speech, so the voice switches right away instead of after ~6 s.
+    /// It is only a guess, like a saved answer: nothing is confirmed, and the first-answer rule in [`push`](Self::push)
+    /// still runs on the full chunks and overrides it a few seconds later if it was wrong. Needs a vote of at least
+    /// `min_vote` (stricter than a normal chunk, the piece is shorter).
+    pub fn quick_guess(&mut self, s: &ChunkScores, min_vote: f32) -> Option<Change> {
+        if self.confirmed {
+            return None;
+        }
+        let v = self.vote(s);
+        if v.abs() < min_vote {
+            return None;
+        }
+        let g = sign_gender(v);
+        if self.answer == Some(g) {
+            return None;
+        }
+        self.answer = Some(g);
+        Some(Change { gender: g, first: true, strength: v })
+    }
+
     pub fn push(&mut self, s: &ChunkScores) -> Option<Change> {
         let v = self.vote(s);
         match self.answer {
@@ -124,6 +146,26 @@ mod tests {
 
     fn s(ecapa: f32, pf: f32) -> ChunkScores {
         ChunkScores { ecapa, pitch_formants: pf, f0: None }
+    }
+
+    #[test]
+    fn a_quick_guess_switches_at_once_but_the_full_check_still_decides() {
+        let mut d = Detector::new(1.0, None);
+        assert_eq!(d.quick_guess(&s(0.5, 0.0), 1.5), None, "too unsure for a quick guess");
+        let c = d.quick_guess(&s(2.0, 0.0), 1.5).expect("sure enough");
+        assert_eq!((c.gender, d.answer(), d.confirmed()), (Gender::Female, Some(Gender::Female), false));
+        // The full chunks say male: the first-answer rule overrides the guess straight away.
+        assert_eq!(d.push(&s(-2.0, 0.0)), None);
+        let c = d.push(&s(-2.0, 0.0)).expect("first real answer");
+        assert_eq!((c.gender, d.confirmed()), (Gender::Male, true));
+        assert_eq!(d.quick_guess(&s(5.0, 0.0), 1.5), None, "once confirmed, quick guesses are ignored");
+    }
+
+    #[test]
+    fn a_quick_guess_that_matches_the_saved_answer_changes_nothing() {
+        let mut d = Detector::new(1.0, Some(Gender::Male));
+        assert_eq!(d.quick_guess(&s(-3.0, 0.0), 1.5), None);
+        assert!(!d.confirmed());
     }
 
     #[test]

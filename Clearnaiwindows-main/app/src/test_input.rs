@@ -81,7 +81,7 @@ fn le32(b: &[u8], o: usize) -> u32 {
 }
 
 /// Minimal RIFF/WAVE reader: PCM16 or float32 (also inside WAVE_FORMAT_EXTENSIBLE), mixed down to mono, resampled to 48 kHz.
-fn wav_to_mono_48k(b: &[u8]) -> Result<Vec<f32>, String> {
+pub fn wav_to_mono_48k(b: &[u8]) -> Result<Vec<f32>, String> {
     if b.len() < 12 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" {
         return Err("not a RIFF/WAVE file".into());
     }

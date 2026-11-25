@@ -219,6 +219,35 @@ impl Default for StateWatch {
     }
 }
 
+/// The accent just paused because the PC could not keep up: log what else was using the CPU and how fast the CPU was
+/// running, so the next report names the cause. On 24 Nov the accent's RTF jumped from ~0.65 to ~1.4 while the
+/// engine's own CPU stayed flat and "all apps" went to 100%, and nothing in the log said which app. Runs once per
+/// pause, on its own thread (it takes ~2 s); a pause at most every few minutes, so the cost does not matter.
+fn log_cpu_culprits() {
+    #[cfg(windows)]
+    let _ = std::thread::Builder::new().name("clearspeak-cpu-culprits".into()).spawn(|| {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = "$c=Get-Counter '\\Process(*)\\% Processor Time','\\Processor Information(_Total)\\% Processor Performance' \
+                      -SampleInterval 1 -MaxSamples 1 -ErrorAction SilentlyContinue; $n=[Environment]::ProcessorCount; \
+                      $p=$c.CounterSamples | ? { $_.Path -like '*\\process(*' -and $_.InstanceName -notin '_total','idle' } | \
+                      sort CookedValue -Descending | select -First 5 | % { '{0} {1:N0}%' -f $_.InstanceName,($_.CookedValue/$n) }; \
+                      $f=($c.CounterSamples | ? { $_.Path -like '*processor performance' }).CookedValue; \
+                      'CPU clock {0:N0}% of base; top: {1}' -f $f,($p -join ', ')";
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                crate::log_info!("[accent] paused for CPU: {}", String::from_utf8_lossy(&o.stdout).trim())
+            }
+            Ok(o) => crate::log_info!("[accent] paused for CPU: could not read the CPU users ({})", o.status),
+            Err(e) => crate::log_info!("[accent] paused for CPU: could not read the CPU users ({e})"),
+        }
+    });
+}
+
 /// At most one "accent gap" line per this window; the line carries how many gaps there were since the last one.
 const GAP_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -234,6 +263,9 @@ impl StateWatch {
                     now.duration_since(since).as_secs_f32(),
                     if acc.message.is_empty() { String::new() } else { format!(": {}", acc.message) }
                 );
+                if acc.state == accent_onnx::pipeline::AccentState::Paused {
+                    log_cpu_culprits();
+                }
                 self.accent = Some((acc.state, now));
             }
             None => self.accent = Some((acc.state, now)),

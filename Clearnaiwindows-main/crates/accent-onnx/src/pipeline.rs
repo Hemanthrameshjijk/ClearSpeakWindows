@@ -136,6 +136,10 @@ struct Shared {
     /// Set by the worker when it skipped input: the converted voice has a hole, so go back to the plain voice.
     reprime: AtomicBool,
     error: Mutex<String>, // never locked on the mic thread
+    /// "My voice": when set, the converter speaks with this fingerprint (blended, see `own_speaker`) instead of the
+    /// chosen American voice; `own_gen` is bumped on every change. Never locked on the mic thread.
+    own: Mutex<Option<Vec<f32>>>,
+    own_gen: AtomicU32,
 }
 
 /// GUI-side handle: choose the voice, read the status.
@@ -153,6 +157,19 @@ impl AccentHandle {
     }
     pub fn voice(&self) -> u8 {
         self.0.voice.load(Relaxed)
+    }
+    /// "My voice": `Some(fingerprint)` speaks with the agent's own (blended) voice while Accent is on, `None` goes back
+    /// to the chosen American voice. Takes effect on the next push (~50 ms); costs nothing per frame.
+    pub fn set_own_voice(&self, fingerprint: Option<Vec<f32>>) {
+        if let Ok(mut o) = self.0.own.lock() {
+            if *o != fingerprint {
+                *o = fingerprint;
+                self.0.own_gen.fetch_add(1, Relaxed);
+            }
+        }
+    }
+    pub fn own_voice_on(&self) -> bool {
+        self.0.own.lock().is_ok_and(|o| o.is_some())
     }
     pub fn status(&self) -> AccentStatus {
         let s = &self.0;
@@ -310,6 +327,8 @@ fn start_inner(cfg: Option<AccentConfig>, unavailable_reason: &str) -> (AccentSt
         rtf_voc_milli: AtomicU32::new(0),
         latency_x10: AtomicU32::new(0),
         jitter_ms: AtomicU32::new(jitter_ms),
+        own: Mutex::new(None),
+        own_gen: AtomicU32::new(0),
         underruns: AtomicU32::new(0),
         dropped_input: AtomicU32::new(0),
         catchups: AtomicU32::new(0),
@@ -967,8 +986,16 @@ fn set_error(sh: &Shared, msg: String) {
 /// size as the live worker, so it sounds like the live accent. `voice` is 1..=6. `init_runtime` must have been called.
 /// The result is 48 kHz, the same length as the input (the model delay is removed so both line up).
 pub fn convert_offline(models: &std::path::Path, threads: usize, voice: u8, x48: &[f32]) -> Result<Vec<f32>, String> {
+    convert_offline_with(models, threads, voice, None, x48)
+}
+
+/// [`convert_offline`] with "My voice": `own` = the recorded fingerprint (blended as live, see `own_speaker`).
+pub fn convert_offline_with(models: &std::path::Path, threads: usize, voice: u8, own: Option<&[f32]>, x48: &[f32]) -> Result<Vec<f32>, String> {
     let name = VOICE_NAMES.get((voice.max(1) - 1) as usize).ok_or("unknown voice")?;
     let mut eng = AccentStream::load(models, threads, name)?;
+    if let Some(fp) = own {
+        eng.set_own_voice(fp)?;
+    }
     let mut down = CausalDownsampler3x::new(RESAMPLER_TAPS);
     let mut up = CausalUpsampler2x::new(RESAMPLER_TAPS);
     let mut leveler = Leveler::new();
@@ -1018,6 +1045,8 @@ fn worker(sh: Arc<Shared>, mut in_cons: Consumer<f32>, mut out_prod: Producer<f3
     raise_thread_priority();
     let mut engine: Option<AccentStream> = None;
     let mut loaded_voice = 0u8;
+    // `own_gen` the converter's speaker was last set for (MAX: not yet, set it after loading).
+    let mut seen_own = u32::MAX;
     let mut seen_gen = sh.generation.load(Relaxed);
     let mut down = CausalDownsampler3x::new(RESAMPLER_TAPS);
     let mut up = CausalUpsampler2x::new(RESAMPLER_TAPS);
@@ -1050,6 +1079,7 @@ fn worker(sh: Arc<Shared>, mut in_cons: Consumer<f32>, mut out_prod: Producer<f3
                 Ok(e) => {
                     engine = Some(e);
                     loaded_voice = voice;
+                    seen_own = u32::MAX;
                     seen_gen = sh.generation.load(Relaxed);
                     sh.worker.store(W_READY, Relaxed);
                 }
@@ -1061,9 +1091,25 @@ fn worker(sh: Arc<Shared>, mut in_cons: Consumer<f32>, mut out_prod: Producer<f3
             continue;
         }
         let eng = engine.as_mut().unwrap();
-        if voice != loaded_voice {
-            if eng.set_voice(VOICE_NAMES[voice as usize - 1]).is_ok() {
-                loaded_voice = voice;
+        let own_gen = sh.own_gen.load(Relaxed);
+        if voice != loaded_voice || own_gen != seen_own {
+            let own = sh.own.lock().ok().and_then(|o| o.clone());
+            let set = match &own {
+                Some(fp) => eng.set_own_voice(fp),
+                None => eng.set_voice(VOICE_NAMES[voice as usize - 1]),
+            };
+            match set {
+                Ok(()) => {
+                    loaded_voice = voice;
+                    seen_own = own_gen;
+                }
+                Err(e) => {
+                    // A bad fingerprint: say so and keep the American voice (never retry every push).
+                    set_error(&sh, format!("my voice: {e}"));
+                    let _ = eng.set_voice(VOICE_NAMES[voice as usize - 1]);
+                    loaded_voice = voice;
+                    seen_own = own_gen;
+                }
             }
         }
         let g = sh.generation.load(Relaxed);

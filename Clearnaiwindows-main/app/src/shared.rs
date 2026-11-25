@@ -218,6 +218,13 @@ pub struct VoiceAuto {
     pub confirmed: std::sync::atomic::AtomicBool,
     /// "Listen again" was pressed: the engine forgets the answer and listens from scratch (see `voice_auto::run`).
     pub relisten: std::sync::atomic::AtomicBool,
+    /// "Record my voice" was pressed (the engine starts a 10 s recording, see `voice_auto::run`).
+    pub record: std::sync::atomic::AtomicBool,
+    /// "My voice" recording in progress, and the speech recorded so far (ms).
+    pub own_recording: std::sync::atomic::AtomicBool,
+    pub own_rec_ms: std::sync::atomic::AtomicU32,
+    /// A "My voice" recording is saved for the signed-in person.
+    pub own_ready: std::sync::atomic::AtomicBool,
     /// The running detector (engine process only; `None` in the window and in tests).
     pub detector: std::sync::Mutex<Option<gender::pipeline::GenderHandle>>,
 }

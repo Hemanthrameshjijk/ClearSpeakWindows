@@ -334,6 +334,10 @@ pub enum Message {
     ClearTranscript,
     /// Accent voice "Auto" on/off. On listens to the voice from scratch (the current voice stays until it decides).
     ToggleVoiceAuto(bool),
+    /// Accent "My voice" on/off (switching on with no recording starts one).
+    ToggleOwnVoice(bool),
+    /// "Record my voice" / "Record again" / "Start over".
+    RecordMyVoice,
     SelectMicTarget(DeviceOption),
     SelectPhysicalMic(DeviceOption),
     /// The Bluetooth hint's button: talk on this (non-Bluetooth) mic so the earbuds stay in full-quality listening mode.
@@ -1331,6 +1335,22 @@ fn update_main(state: &mut MainState, message: Message) {
             crate::remote::send(crate::ipc::ClientMsg::VoiceAutoRelisten);
             // Also re-send the settings, so the engine surely has Auto on (it decides when detection runs).
             persist(&state.settings);
+        }
+        Message::ToggleOwnVoice(on) => {
+            // The engine applies it (it holds the recording). Switching on with nothing recorded yet starts a
+            // recording, and My voice is used as soon as it is done.
+            state.settings.accent_own_voice = on;
+            crate::log_info!("[action] my voice: {}", if on { "on" } else { "off" });
+            if on && !state.handles.voice_auto.own_ready.load(std::sync::atomic::Ordering::Relaxed) {
+                state.handles.voice_auto.record.store(true, std::sync::atomic::Ordering::Relaxed);
+                crate::remote::send(crate::ipc::ClientMsg::RecordMyVoice);
+            }
+            persist(&state.settings);
+        }
+        Message::RecordMyVoice => {
+            crate::log_info!("[action] my voice: record");
+            state.handles.voice_auto.record.store(true, std::sync::atomic::Ordering::Relaxed);
+            crate::remote::send(crate::ipc::ClientMsg::RecordMyVoice);
         }
         Message::SelectAccentVoice(label) => {
             // Only offered while Auto is off: a voice picked by hand is used as it is.

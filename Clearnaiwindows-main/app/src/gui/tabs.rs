@@ -1356,6 +1356,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                                 c = c.push(r);
                             }
                         }
+                        c = c.push(my_voice_rows(state));
                         if crate::ui_logic::voice_picker_shown(&state.settings) {
                             c = c.push(
                                 row![
@@ -1915,6 +1916,37 @@ fn detected_voice_row<'a>(state: &MainState) -> Option<Element<'a, Message>> {
     )
 }
 
+/// "My voice" switch and its record button / progress: speak with your own recorded voice, only the accent changes.
+fn my_voice_rows<'a>(state: &MainState) -> Element<'a, Message> {
+    let t = style::tokens_for(state.settings.theme_dark);
+    let va = &state.handles.voice_auto;
+    let ready = va.own_ready.load(std::sync::atomic::Ordering::Relaxed);
+    let recording = va.own_recording.load(std::sync::atomic::Ordering::Relaxed);
+    let rec_ms = recording.then(|| va.own_rec_ms.load(std::sync::atomic::Ordering::Relaxed));
+    let note = crate::ui_logic::my_voice_note(&state.settings, ready, rec_ms);
+    let note_color = if recording { t.warning } else { t.muted };
+    column![
+        row![
+            column![text("My voice").size(15), text(note).size(12).color(note_color)].spacing(3).width(Length::Fill),
+            toggler(state.settings.accent_own_voice).on_toggle(Message::ToggleOwnVoice).size(24).style(style::toggle),
+        ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center),
+        row![
+            text("Say anything for 10 s; saved for you on this PC").size(12).color(t.muted),
+            container(text("")).width(Length::Fill),
+            btn(text(crate::ui_logic::my_voice_button(ready, recording)).size(12).font(bold()).color(t.primary))
+                .padding([4, 6])
+                .on_press(Message::RecordMyVoice)
+                .style(style::text_button),
+        ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center),
+    ]
+    .spacing(10)
+    .into()
+}
+
 /// Select and its status line: side by side when there is room, stacked otherwise.
 fn accent_row<'a>(wide: bool, select: Element<'a, Message>, line: Element<'a, Message>) -> Element<'a, Message> {
     if wide {
@@ -1991,6 +2023,7 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
             col = col.push(r);
         }
     }
+    col = col.push(my_voice_rows(state));
     let line: Element<'_, Message> = text(match &auto_note {
         Some(n) => format!("{} \u{00B7} {n}", status.line()),
         None => status.line(),

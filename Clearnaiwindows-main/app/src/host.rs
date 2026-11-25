@@ -242,6 +242,12 @@ impl Host {
             mic_hands_free: h.counters.hands_free.load(std::sync::atomic::Ordering::Relaxed),
             voice_auto: [h.voice_auto.state.load(Ordering::Relaxed), h.voice_auto.gender.load(Ordering::Relaxed)],
             voice_auto_confirmed: h.voice_auto.confirmed.load(Ordering::Relaxed),
+            own_voice_ready: h.voice_auto.own_ready.load(Ordering::Relaxed),
+            own_voice_recording_ms: h
+                .voice_auto
+                .own_recording
+                .load(Ordering::Relaxed)
+                .then(|| h.voice_auto.own_rec_ms.load(Ordering::Relaxed)),
             speaker_counters: shared::counters_to_array(&h.speaker_counters),
             mic_pct: dsp_core::compute_percentiles(h.latency_log.snapshot()).into(),
             speaker_pct: dsp_core::compute_percentiles(h.speaker_latency_log.snapshot()).into(),
@@ -337,6 +343,10 @@ impl Host {
             ClientMsg::VoiceAutoRelisten => {
                 crate::log_info!("[action] accent voice Auto: listen again");
                 h.voice_auto.relisten.store(true, Ordering::Relaxed);
+            }
+            ClientMsg::RecordMyVoice => {
+                crate::log_info!("[action] my voice: record");
+                h.voice_auto.record.store(true, Ordering::Relaxed);
             }
             ClientMsg::TranscriptClear => {
                 crate::log_info!("[action] transcript cleared");
@@ -474,8 +484,10 @@ fn perf_second(h: &EngineHandles, g: &mut crate::perf_governor::Governor, last: 
         let accent = h.accent.status();
         g.tick(crate::perf_governor::Signals {
             overloaded: (running[0] && over(&h.latency_log)) || (running[1] && over(&h.speaker_latency_log)),
+            // Near its limit, or already paused by it: the RTF can jump past the pause level within a second or two
+            // (24 Nov: 0.67 -> 1.36), and counting only "Active" then never paused the extras to make room.
             accent_strained: running[0]
-                && accent.state == accent_onnx::pipeline::AccentState::Active
+                && matches!(accent.state, accent_onnx::pipeline::AccentState::Active | accent_onnx::pipeline::AccentState::Paused)
                 && accent.rtf >= crate::perf_governor::ACCENT_STRAINED_RTF,
         })
     } else {
@@ -591,6 +603,28 @@ impl ExposureTick {
 }
 
 /// Entry point of `clearspeak-engine.exe`. Never returns.
+/// The engine runs above normal priority. The accent's own thread was already raised, but the ONNX Runtime threads
+/// doing the model work are created by ORT at the process's priority: when another app pushed the PC to 100% they
+/// got an equal share with it, the accent's RTF jumped from ~0.65 to ~1.4 and it paused (log, 24 Nov). Everything is
+/// raised one class, so the threads that lower themselves (transcript, voice detection re-checks) still sit below
+/// the audio and accent work.
+pub fn raise_process_priority() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> isize;
+            fn SetPriorityClass(h: isize, class: u32) -> i32;
+        }
+        const ABOVE_NORMAL_PRIORITY_CLASS: u32 = 0x0000_8000;
+        if unsafe { SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) } != 0 {
+            crate::log_info!("[clearspeakrt] engine priority: above normal");
+        } else {
+            crate::log_error!("[clearspeakrt] could not raise the engine priority: {}", std::io::Error::last_os_error());
+        }
+    }
+}
+
 pub fn run_engine() {
     if another_instance_running("Local\\ClearSpeak-engine") {
         return;
@@ -610,6 +644,7 @@ pub fn run_engine() {
         None => crate::log_error!("{msg}"),
     });
     crate::log_info!("[clearspeakrt] engine starting");
+    raise_process_priority();
     if let Some(note) = setup::take_migration_note() {
         crate::log_info!("{note}");
     }

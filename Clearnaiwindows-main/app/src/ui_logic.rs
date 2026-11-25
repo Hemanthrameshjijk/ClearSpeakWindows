@@ -23,9 +23,30 @@ pub fn voice_pick_label(s: &crate::settings::Settings) -> &'static str {
     accent_onnx::VOICE_CHOICES[(s.accent_voice_index() - 1) as usize]
 }
 
-/// The voice picker is shown only while Auto is off (Auto picks the voice itself).
+/// The voice picker is shown only while Auto is off (Auto picks the voice itself) and My voice is off (it replaces
+/// the American voice).
 pub fn voice_picker_shown(s: &crate::settings::Settings) -> bool {
-    !(VOICE_AUTO_OFFERED && s.accent_voice_auto)
+    !(VOICE_AUTO_OFFERED && s.accent_voice_auto) && !s.accent_own_voice
+}
+
+/// The line under the "My voice" switch. `recording_ms`: speech recorded so far while recording.
+pub fn my_voice_note(s: &crate::settings::Settings, ready: bool, recording_ms: Option<u32>) -> String {
+    let total = gender::pipeline::ENROLL_S as u32;
+    match recording_ms {
+        Some(ms) => format!("Recording \u{2014} keep talking ({} / {total} s)", (ms / 1000).min(total)),
+        None if !ready => format!("Record {total} s of your voice first"),
+        None if s.accent_own_voice => "Your own voice, with the American accent".into(),
+        None => "Keeps your own voice; only the accent changes".into(),
+    }
+}
+
+/// The record button's label.
+pub fn my_voice_button(ready: bool, recording: bool) -> &'static str {
+    match (recording, ready) {
+        (true, _) => "Start over",
+        (false, true) => "Record again",
+        (false, false) => "Record my voice",
+    }
 }
 
 /// The voice Accent should use now (`0` = off): in Auto, the detected gender's voice with the chosen number, or the
@@ -613,6 +634,21 @@ mod tests {
         assert_eq!(VOICE_PICKS.len(), accent_onnx::VOICE_CHOICES.len(), "only real voices in the list; Auto is a switch");
         assert!(VOICE_PICKS.iter().all(|p| accent_onnx::VOICE_CHOICES.contains(p)), "{VOICE_PICKS:?}");
         assert_eq!((VOICE_PICKS[0], VOICE_PICKS[5]), ("American male 1", "American female 1"), "males first, then females");
+        s.accent_own_voice = true;
+        assert!(!voice_picker_shown(&s), "My voice on: it replaces the American voice, no list");
+    }
+
+    #[test]
+    fn my_voice_says_what_to_do_next() {
+        let mut s = crate::settings::Settings::default();
+        assert_eq!(my_voice_note(&s, false, None), "Record 10 s of your voice first");
+        assert_eq!(my_voice_note(&s, false, Some(4_300)), "Recording \u{2014} keep talking (4 / 10 s)");
+        assert_eq!(my_voice_note(&s, true, None), "Keeps your own voice; only the accent changes");
+        s.accent_own_voice = true;
+        assert_eq!(my_voice_note(&s, true, None), "Your own voice, with the American accent");
+        assert_eq!(my_voice_button(false, false), "Record my voice");
+        assert_eq!(my_voice_button(true, false), "Record again");
+        assert_eq!(my_voice_button(true, true), "Start over");
     }
 
     #[test]

@@ -215,6 +215,10 @@ pub struct Settings {
     /// installs; `#[serde(default)]` = off for an older `settings.json`, so an existing hand-picked voice stays.
     #[serde(default)]
     pub accent_voice_auto: bool,
+    /// Accent "My voice": speak with the agent's own recorded voice (70% own, 30% the nearest American voice) instead
+    /// of an American voice; needs a recording ("Record my voice"). Off by default and for older files.
+    #[serde(default)]
+    pub accent_own_voice: bool,
     /// Live transcript (speech-to-text of your own mic). Default OFF; `#[serde(default)]` keeps older files loading.
     #[serde(default)]
     pub transcript_on: bool,
@@ -331,6 +335,7 @@ impl Default for Settings {
             accent_on: false,
             accent_voice: 1,
             accent_voice_auto: true,
+            accent_own_voice: false,
             transcript_on: false,
             compact_mode: false,
             theme_dark: false,

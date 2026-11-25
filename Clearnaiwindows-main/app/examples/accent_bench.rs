@@ -257,6 +257,11 @@ fn live(dir: &Path, threads: usize, seconds: usize) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // RAISE_PRIORITY=1: run at the engine's priority (above normal), to compare against another app loading the PC.
+    if std::env::var_os("RAISE_PRIORITY").is_some() {
+        clearspeak_app::host::raise_process_priority();
+        println!("process priority: above normal");
+    }
     match args.first().map(String::as_str) {
         Some("rtf") => rtf_grid(&models(args.get(1))),
         Some("live") => live(

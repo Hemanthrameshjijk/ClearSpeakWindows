@@ -3,7 +3,7 @@
 //! verified against fixtures produced by the reference (see `tests/golden.rs`, `tools/make_golden.py`).
 //!
 //! Signal path of [`AccentStream`]:  16 kHz mono -> [`logmel::StreamingLogMel`] -> [`converter::StreamingConverterV5`]
-//! -> [`vocoder::CausalStreamer`] -> 24 kHz mono. Fixed American voices only (no ECAPA / own-voice yet).
+//! -> [`vocoder::CausalStreamer`] -> 24 kHz mono. Ten fixed American voices, or "My voice" ([`own_speaker`]).
 
 pub mod causal_resampler;
 pub mod converter;
@@ -67,6 +67,35 @@ pub const BUNDLE_FILES: [&str; 8] = [
     "vocoder_causal_hifigan_best.onnx",
 ];
 
+/// "My voice": how much of the agent's own fingerprint goes into the speaker vector; the rest is the nearest of the
+/// trained American voices. Own-voice test (24 Nov, 3 speakers, ECAPA similarity of the output to the speaker): for
+/// a speaker far from every trained voice, nearest voice +0.27, 70% own +0.40, 100% own +0.54; speakers close to a
+/// trained voice scored ~+0.9 either way. 70% keeps more of the person while staying near voices the model knows.
+pub const OWN_VOICE_SHARE: f32 = 0.7;
+/// Length of a voice fingerprint (ECAPA).
+pub const FINGERPRINT_LEN: usize = 192;
+
+/// `share` of the unit-length `own` fingerprint plus the rest of the most similar trained voice, made unit-length
+/// again (the trained voices are unit-length too). Same recipe as the own-voice test.
+pub fn own_speaker(own: &[f32], voices: &BTreeMap<String, Vec<f32>>, share: f32) -> Result<Vec<f32>, String> {
+    if own.len() != FINGERPRINT_LEN || !own.iter().all(|v| v.is_finite()) {
+        return Err(format!("voice fingerprint must be {FINGERPRINT_LEN} numbers"));
+    }
+    let unit = |v: &[f32]| -> Vec<f32> {
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+        v.iter().map(|x| x / n).collect()
+    };
+    let own = unit(own);
+    let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    let nearest = voices
+        .values()
+        .filter(|v| v.len() == FINGERPRINT_LEN)
+        .max_by(|a, b| dot(a, &own).total_cmp(&dot(b, &own)))
+        .ok_or("no trained voices")?;
+    let near = unit(nearest);
+    Ok(unit(&own.iter().zip(&near).map(|(o, n)| share * o + (1.0 - share) * n).collect::<Vec<_>>()))
+}
+
 /// Load `onnxruntime.dll` once for the process.
 pub fn init_runtime(dll: &Path) -> Result<(), String> {
     ort_util::init_ort(dll)
@@ -112,6 +141,14 @@ impl AccentStream {
     pub fn set_voice(&mut self, voice: &str) -> Result<(), String> {
         let spk = self.voices.get(voice).ok_or_else(|| format!("unknown voice '{voice}'"))?;
         self.conv.set_voice(spk);
+        Ok(())
+    }
+
+    /// "My voice": the converter speaks with `own` (a recorded ECAPA fingerprint) blended with the nearest trained
+    /// voice, see [`own_speaker`]. Costs nothing per frame; only the speaker vector changes.
+    pub fn set_own_voice(&mut self, own: &[f32]) -> Result<(), String> {
+        let spk = own_speaker(own, &self.voices, OWN_VOICE_SHARE)?;
+        self.conv.set_voice(&spk);
         Ok(())
     }
 
@@ -186,4 +223,47 @@ pub fn find_models_dir() -> Option<PathBuf> {
         cands.push(PathBuf::from(l).join("ClearSpeak").join("app_models"));
     }
     cands.into_iter().find(ok)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn axis(i: usize) -> Vec<f32> {
+        let mut v = vec![0.0; FINGERPRINT_LEN];
+        v[i] = 1.0;
+        v
+    }
+
+    fn voices() -> BTreeMap<String, Vec<f32>> {
+        [("a", axis(0)), ("b", axis(1))].into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+    }
+
+    #[test]
+    fn my_voice_is_70_percent_own_plus_the_nearest_trained_voice() {
+        // Own voice mostly like "b", partly something no trained voice has.
+        let mut own = vec![0.0; FINGERPRINT_LEN];
+        own[1] = 0.6;
+        own[2] = 0.8;
+        let s = own_speaker(&own, &voices(), 0.7).unwrap();
+        let norm = s.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-5, "unit length like the trained voices");
+        assert_eq!(s[0], 0.0, "the far voice 'a' is not used");
+        // before re-normalising: b = 0.7*0.6 + 0.3 = 0.72, own part = 0.7*0.8 = 0.56
+        assert!((s[1] / s[2] - 0.72 / 0.56).abs() < 1e-4, "{} {}", s[1], s[2]);
+    }
+
+    #[test]
+    fn a_voice_equal_to_a_trained_one_stays_that_voice() {
+        let s = own_speaker(&axis(0), &voices(), 0.7).unwrap();
+        assert!((s[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_broken_fingerprint_is_refused() {
+        assert!(own_speaker(&[1.0; 10], &voices(), 0.7).is_err());
+        let mut nan = axis(0);
+        nan[3] = f32::NAN;
+        assert!(own_speaker(&nan, &voices(), 0.7).is_err());
+    }
 }

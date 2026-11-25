@@ -9,7 +9,8 @@
 //! unrelated features and then switched the accent off, which made it flap on a busy PC.
 //!
 //! But the accent shares the CPU with the caller-side cleanup (both sides run at once). So while the accent runs
-//! close to its limit (`ACCENT_STRAINED_RTF` and up), that counts as "not keeping up" too - only up to
+//! close to its limit (`ACCENT_STRAINED_RTF` and up), or is paused by it with the RTF still that high, that counts
+//! as "not keeping up" too - only up to
 //! `ACCENT_MAX_STEP` (Studio, Transcript, caller voice removal), so the extras give way before the accent has to
 //! pause, and the agent's own voice cleanup (step 3) is only ever lightened by a real audio overload.
 
