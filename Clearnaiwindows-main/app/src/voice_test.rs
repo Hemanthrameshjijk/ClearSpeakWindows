@@ -63,6 +63,13 @@ pub struct Results {
     pub checks: Vec<crate::preshift::Check>,
     #[serde(default)]
     pub verdict: crate::preshift::Verdict,
+    /// "My voice": the voice fingerprint taken from this recording (empty for the pre-shift check). The window hands it
+    /// to the engine only when "Use this voice" is pressed.
+    #[serde(default)]
+    pub fingerprint: Vec<f32>,
+    /// "My voice": the speech found in the recording (seconds).
+    #[serde(default)]
+    pub speech_s: f32,
 }
 
 fn history_path() -> PathBuf {
@@ -100,18 +107,57 @@ fn append_history(results: &Results, device: &str, who: Option<(String, String)>
     }
 }
 
-pub fn dir() -> PathBuf {
-    crate::setup::app_data_dir().join("voice_test")
+/// What the helper records for: the pre-shift check, or "My voice" (a recording that becomes the agent's own accent
+/// voice, with a preview before it is used).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Check,
+    MyVoice,
 }
 
-fn progress_path() -> PathBuf {
-    dir().join("progress.json")
+/// Length of a "My voice" recording; up to 10 s of the speech in it are used (`gender::pipeline::ENROLL_S`). The speech
+/// filter keeps only clearly voiced sound: 15 s of continuous talking gave under 6 s of it (25 Nov), hence 25 s.
+pub const MY_VOICE_SECONDS: f32 = 25.0;
+/// Least speech a "My voice" recording must contain.
+pub const MY_VOICE_MIN_SPEECH_S: f32 = 5.0;
+
+impl Mode {
+    pub fn seconds(self) -> f32 {
+        match self {
+            Mode::Check => SECONDS,
+            Mode::MyVoice => MY_VOICE_SECONDS,
+        }
+    }
+    fn folder(self) -> &'static str {
+        match self {
+            Mode::Check => "voice_test",
+            Mode::MyVoice => "my_voice_test",
+        }
+    }
 }
-fn results_path() -> PathBuf {
-    dir().join("result.json")
+
+/// The helper process's mode (from its command line).
+static HELPER_MODE: std::sync::OnceLock<Mode> = std::sync::OnceLock::new();
+fn helper_mode() -> Mode {
+    HELPER_MODE.get().copied().unwrap_or_default()
 }
-fn stop_path() -> PathBuf {
-    dir().join("stop")
+
+pub fn dir_for(m: Mode) -> PathBuf {
+    crate::setup::app_data_dir().join(m.folder())
+}
+fn dir() -> PathBuf {
+    dir_for(helper_mode())
+}
+
+fn progress_path(m: Mode) -> PathBuf {
+    dir_for(m).join("progress.json")
+}
+fn results_path(m: Mode) -> PathBuf {
+    dir_for(m).join("result.json")
+}
+fn stop_path(m: Mode) -> PathBuf {
+    dir_for(m).join("stop")
 }
 
 fn write_json<T: Serialize>(path: &Path, v: &T) {
@@ -131,34 +177,37 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
 // ---------------------------------------------------------------- window side
 
 /// Starts a new test: clears the previous one and launches the helper.
-pub fn start() -> Result<(), String> {
+pub fn start(m: Mode) -> Result<(), String> {
     stop_playback();
-    let d = dir();
+    let d = dir_for(m);
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).map_err(|e| format!("Could not prepare the test folder: {e}"))?;
-    write_json(&progress_path(), &Progress::default());
+    write_json(&progress_path(m), &Progress::default());
     let exe = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .with_file_name("clearspeak-engine.exe");
-    std::process::Command::new(&exe)
-        .arg("--voice-test")
-        .spawn()
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("--voice-test");
+    if m == Mode::MyVoice {
+        cmd.arg("--my-voice");
+    }
+    cmd.spawn()
         .map_err(|e| format!("Could not start the voice test ({e})."))?;
-    crate::log_info!("[voice-test] started");
+    crate::log_info!("[voice-test] started ({m:?})");
     Ok(())
 }
 
 /// Asks the helper to finish recording now (it keeps what it has, if at least `MIN_SECONDS`).
-pub fn request_stop() {
-    let _ = std::fs::write(stop_path(), b"stop");
+pub fn request_stop(m: Mode) {
+    let _ = std::fs::write(stop_path(m), b"stop");
 }
 
-pub fn read_progress() -> Option<Progress> {
-    read_json(&progress_path())
+pub fn read_progress(m: Mode) -> Option<Progress> {
+    read_json(&progress_path(m))
 }
 
-pub fn read_results() -> Option<Results> {
-    read_json(&results_path())
+pub fn read_results(m: Mode) -> Option<Results> {
+    read_json(&results_path(m))
 }
 
 #[cfg(windows)]
@@ -198,7 +247,7 @@ pub fn stop_playback() {
 
 fn set(p: &mut Progress, f: impl FnOnce(&mut Progress)) {
     f(p);
-    write_json(&progress_path(), p);
+    write_json(&progress_path(helper_mode()), p);
 }
 
 fn fail(p: &mut Progress, msg: String) {
@@ -211,6 +260,7 @@ fn fail(p: &mut Progress, msg: String) {
 
 /// Entry point of `clearspeak-engine.exe --voice-test`. Returns when the files are written (or on failure).
 pub fn run_helper() {
+    let _ = HELPER_MODE.set(if std::env::args().any(|a| a == "--my-voice") { Mode::MyVoice } else { Mode::Check });
     let app = crate::setup::app_data_dir();
     crate::logging::init_named(&app, "clearspeak-voicetest.log");
     crate::logging::set_person(
@@ -235,6 +285,26 @@ pub fn run_helper() {
         Ok(r) => r,
         Err(e) => return fail(&mut p, e),
     };
+    if helper_mode() == Mode::MyVoice {
+        crate::log_info!("[my-voice] recorded {:.1} s in {} ms", rec.len() as f32 / SR as f32, t0.elapsed().as_millis());
+        set(&mut p, |p| {
+            p.phase = Phase::Processing;
+            p.step = "Preparing...".into();
+        });
+        let (allowed, _) = license_allowed(&settings);
+        match my_voice(&settings, allowed, &rec, &mut p) {
+            Ok(results) => {
+                write_json(&results_path(Mode::MyVoice), &results);
+                crate::log_info!("[my-voice] done in {} ms", t0.elapsed().as_millis());
+                set(&mut p, |p| {
+                    p.phase = Phase::Done;
+                    p.step.clear();
+                });
+            }
+            Err(e) => fail(&mut p, e),
+        }
+        return;
+    }
     let mut checks = crate::preshift::analyse(&rec, SR, &capture_info);
     crate::log_info!("[voice-test] recorded {:.1} s in {} ms", rec.len() as f32 / SR as f32, t0.elapsed().as_millis());
 
@@ -252,7 +322,7 @@ pub fn run_helper() {
             crate::log_info!("[pre-shift] {} on '{}'", crate::preshift::overall_line(results.verdict), capture_info.device);
             results.checks = checks;
             append_history(&results, &capture_info.device, who);
-            write_json(&results_path(), &results);
+            write_json(&results_path(helper_mode()), &results);
             crate::log_info!(
                 "[voice-test] done in {} ms: {}",
                 t0.elapsed().as_millis(),
@@ -288,6 +358,20 @@ fn license_allowed(settings: &crate::settings::Settings) -> (crate::license_gate
 }
 
 fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<(Vec<f32>, crate::preshift::CaptureInfo), String> {
+    // Hidden test microphone (see `test_input`): a WAV file stands in for the mic, so the recorder can be checked on
+    // known speech without anyone talking. Never set in normal use.
+    if let Some(path) = std::env::var_os("CLEARSPEAK_TEST_MIC").map(PathBuf::from).filter(|p| p.is_file()) {
+        let bytes = std::fs::read(&path).map_err(|e| format!("test mic: {e}"))?;
+        let mut x = crate::test_input::wav_to_mono_48k(&bytes)?;
+        x.truncate((helper_mode().seconds() * SR as f32) as usize);
+        crate::log_info!("[voice-test] test microphone: {} ({:.1} s)", path.display(), x.len() as f32 / SR as f32);
+        set(p, |p| {
+            p.phase = Phase::Recording;
+            p.recorded_s = x.len() as f32 / SR as f32;
+        });
+        let info = crate::preshift::CaptureInfo { device: "test microphone".into(), ..Default::default() };
+        return Ok((x, info));
+    }
     let (producer, mut consumer) = dsp_core::make_ring_buffer(2.0);
     let counters = std::sync::Arc::new(dsp_core::FrameCounters::default());
     let capture = match settings.physical_mic_device_id.as_deref() {
@@ -296,7 +380,8 @@ fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<(Vec
     }
     .map_err(|e| format!("Could not open the microphone ({e:#})."))?;
 
-    let target = (SECONDS * SR as f32) as usize;
+    let seconds = helper_mode().seconds();
+    let target = (seconds * SR as f32) as usize;
     let mut rec: Vec<f32> = Vec::with_capacity(target);
     let started = Instant::now();
     set(p, |p| p.phase = Phase::Recording);
@@ -315,7 +400,7 @@ fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<(Vec
             return Err("The microphone sent no sound. Check the microphone choice and try again.".into());
         }
         let secs = rec.len() as f32 / SR as f32;
-        if secs >= MIN_SECONDS && stop_path().exists() {
+        if secs >= MIN_SECONDS && stop_path(helper_mode()).exists() {
             break;
         }
         if last_report.elapsed() >= Duration::from_millis(100) {
@@ -326,7 +411,7 @@ fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<(Vec
             peak = 0.0;
             last_report = Instant::now();
         }
-        if started.elapsed() > Duration::from_secs_f32(SECONDS + 15.0) {
+        if started.elapsed() > Duration::from_secs_f32(seconds + 15.0) {
             break; // the device delivers too slowly; keep what we have
         }
     }
@@ -353,6 +438,82 @@ fn record(settings: &crate::settings::Settings, p: &mut Progress) -> Result<(Vec
         if info.hands_free { ", Bluetooth call mode" } else { "" }
     );
     Ok((rec, info))
+}
+
+/// "My voice": clean the recording as the live mic path does (mic boost, then background-voice removal when licensed),
+/// take the voice fingerprint from its first 10 s of speech, and make three versions to compare: the original, My voice
+/// (70% own, the accent converted) and the nearest American voice.
+fn my_voice(
+    settings: &crate::settings::Settings,
+    allowed: crate::license_gate::Allowed,
+    rec: &[f32],
+    p: &mut Progress,
+) -> Result<Results, String> {
+    let step = |p: &mut Progress, s: &str| {
+        crate::log_info!("[my-voice] {s}");
+        set(p, |p| p.step = s.to_string());
+    };
+    if !allowed.accent {
+        return Err("Your license does not include the accent, so My voice cannot be used.".into());
+    }
+    let mut boost = dsp_core::PreGainStage::new();
+    boost.set_db(dsp_core::mic_boost_effective(settings.mic_boost_on, settings.mic_boost_db) as f32);
+    let pre = run_frames(rec, &mut [&mut boost]);
+    let clean = if allowed.bvc {
+        step(p, "Removing background voices...");
+        match load_bvc(settings) {
+            Ok(mut stage) => run_frames(&pre, &mut [stage.as_mut()]),
+            Err(e) => {
+                crate::log_error!("[my-voice] BVC could not load: {e}");
+                pre.clone()
+            }
+        }
+    } else {
+        pre.clone()
+    };
+
+    step(p, "Learning your voice...");
+    let dll = crate::setup::onnxruntime_dll_path(&crate::setup::assets_dir());
+    accent_onnx::init_runtime(&dll)?;
+    let gender_dir = gender::pipeline::find_models_dir(None).ok_or("Voice files (ecapa.onnx) are not installed.")?;
+    let mut model = gender::ecapa::Model::load(&gender_dir, 2)?;
+    let mut down = accent_onnx::causal_resampler::CausalDownsampler3x::new(97);
+    let mut gate = gender::analysis::VoiceGate::default();
+    let mut speech = Vec::new();
+    for c in clean.chunks(FRAME) {
+        gate.push(&down.push(c), &mut speech);
+    }
+    let speech_s = speech.len() as f32 / gender::analysis::SR as f32;
+    crate::log_info!("[my-voice] {speech_s:.1} s of speech in the recording");
+    if speech_s < MY_VOICE_MIN_SPEECH_S {
+        return Err(format!(
+            "Only {speech_s:.0} s of speech was heard. Talk for the whole recording (read a few sentences aloud) and try again."
+        ));
+    }
+    let use_n = speech.len().min((gender::pipeline::ENROLL_S * gender::analysis::SR as f32) as usize);
+    let fingerprint = model.embed(&speech[..use_n])?;
+
+    let models = accent_onnx::find_models_dir().ok_or("Accent files are not installed.")?;
+    let nearest = accent_onnx::nearest_voice(&models, &fingerprint)?;
+    let nearest_label = accent_onnx::VOICE_CHOICES[(nearest - 1) as usize];
+    let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(2, 8) / 2;
+    step(p, "Making your voice with the accent...");
+    let mine = accent_onnx::pipeline::convert_offline_with(&models, threads, nearest, Some(&fingerprint), &clean)?;
+    step(p, "Making the nearest American voice...");
+    let american = accent_onnx::pipeline::convert_offline(&models, threads, nearest, &clean)?;
+
+    let mut out = Vec::new();
+    for (key, label, mut x) in [
+        ("original", "Your voice as recorded".to_string(), finish(&clean)),
+        ("my_voice", "My voice (your voice, American accent)".to_string(), finish(&mine)),
+        ("american", format!("For comparison: {nearest_label}"), finish(&american)),
+    ] {
+        level_match(&mut x);
+        let file = dir().join(format!("{key}.wav"));
+        write_wav(&file, &x).map_err(|e| format!("Could not save the {label} version: {e}"))?;
+        out.push(Version { key: key.into(), label, file, transcript: String::new() });
+    }
+    Ok(Results { seconds: rec.len() as f32 / SR as f32, versions: out, fingerprint, speech_s, ..Default::default() })
 }
 
 /// Runs `stages` over `x` in 10 ms frames, as the live mic thread does.

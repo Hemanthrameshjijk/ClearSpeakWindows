@@ -153,11 +153,15 @@ struct MainState {
     accent_paused_ticks: u32,
     /// "Test my voice": shown in place of the card's controls while `open`; also a section of the Microphone page.
     voice_test: VoiceTestUi,
+    /// "Record my voice": the same recorder in My voice mode (record, preview, then "Use this voice").
+    pub my_voice: VoiceTestUi,
 }
 
 /// What the window knows about the current voice test (the helper process does the work, see `voice_test`).
 #[derive(Default)]
 pub struct VoiceTestUi {
+    /// Pre-shift check or My voice.
+    pub mode: crate::voice_test::Mode,
     pub open: bool,
     /// The helper is recording or preparing the versions.
     pub running: bool,
@@ -225,6 +229,7 @@ impl MainState {
             license_status: license::Status::SignIn,
             clock_wrong: false,
             voice_test: VoiceTestUi::default(),
+            my_voice: VoiceTestUi { mode: crate::voice_test::Mode::MyVoice, ..Default::default() },
         }
     }
 }
@@ -334,10 +339,16 @@ pub enum Message {
     ClearTranscript,
     /// Accent voice "Auto" on/off. On listens to the voice from scratch (the current voice stays until it decides).
     ToggleVoiceAuto(bool),
-    /// Accent "My voice" on/off (switching on with no recording starts one).
+    /// Accent "My voice" on/off (switching on with no recording opens the recorder).
     ToggleOwnVoice(bool),
-    /// "Record my voice" / "Record again" / "Start over".
-    RecordMyVoice,
+    /// "Record my voice": open / close the recorder, record, finish early, preview, use the recording.
+    OpenMyVoice,
+    CloseMyVoice,
+    StartMyVoice,
+    StopMyVoiceRecording,
+    PlayMyVoice(String),
+    StopMyVoicePlayback,
+    UseMyVoice,
     SelectMicTarget(DeviceOption),
     SelectPhysicalMic(DeviceOption),
     /// The Bluetooth hint's button: talk on this (non-Bluetooth) mic so the earbuds stay in full-quality listening mode.
@@ -930,6 +941,7 @@ fn update_main(state: &mut MainState, message: Message) {
     match message {
         Message::Tick => {
             poll_voice_test(&mut state.voice_test);
+            poll_voice_test(&mut state.my_voice);
             if let Some(list) = state.handles.device_switcher.take_devices() {
                 state.devices = list;
             }
@@ -1051,7 +1063,7 @@ fn update_main(state: &mut MainState, message: Message) {
             vt.playing = None;
             vt.progress = Default::default();
             vt.stalled_ticks = 0;
-            match crate::voice_test::start() {
+            match crate::voice_test::start(crate::voice_test::Mode::Check) {
                 Ok(()) => {
                     vt.running = true;
                     vt.error = None;
@@ -1059,7 +1071,7 @@ fn update_main(state: &mut MainState, message: Message) {
                 Err(e) => vt.error = Some(e),
             }
         }
-        Message::StopVoiceTestRecording => crate::voice_test::request_stop(),
+        Message::StopVoiceTestRecording => crate::voice_test::request_stop(crate::voice_test::Mode::Check),
         Message::PlayVoiceTest(key) => {
             let file = state.voice_test.results.as_ref().and_then(|r| r.versions.iter().find(|v| v.key == key)).map(|v| v.file.clone());
             if let Some(file) = file {
@@ -1337,20 +1349,76 @@ fn update_main(state: &mut MainState, message: Message) {
             persist(&state.settings);
         }
         Message::ToggleOwnVoice(on) => {
-            // The engine applies it (it holds the recording). Switching on with nothing recorded yet starts a
-            // recording, and My voice is used as soon as it is done.
+            // The engine applies it (it holds the recording). With nothing recorded yet, switching on opens the
+            // recorder instead; the switch turns on when "Use this voice" is pressed.
+            if on && !state.handles.voice_auto.own_ready.load(std::sync::atomic::Ordering::Relaxed) {
+                state.my_voice.open = true;
+                return;
+            }
             state.settings.accent_own_voice = on;
             crate::log_info!("[action] my voice: {}", if on { "on" } else { "off" });
-            if on && !state.handles.voice_auto.own_ready.load(std::sync::atomic::Ordering::Relaxed) {
-                state.handles.voice_auto.record.store(true, std::sync::atomic::Ordering::Relaxed);
-                crate::remote::send(crate::ipc::ClientMsg::RecordMyVoice);
-            }
             persist(&state.settings);
         }
-        Message::RecordMyVoice => {
+        Message::OpenMyVoice => state.my_voice.open = true,
+        Message::CloseMyVoice => {
+            crate::voice_test::stop_playback();
+            let mv = &mut state.my_voice;
+            mv.playing = None;
+            mv.open = false;
+            if !mv.running {
+                mv.results = None;
+                mv.error = None;
+            }
+        }
+        Message::StartMyVoice => {
             crate::log_info!("[action] my voice: record");
-            state.handles.voice_auto.record.store(true, std::sync::atomic::Ordering::Relaxed);
-            crate::remote::send(crate::ipc::ClientMsg::RecordMyVoice);
+            let mv = &mut state.my_voice;
+            mv.results = None;
+            mv.playing = None;
+            mv.progress = Default::default();
+            mv.stalled_ticks = 0;
+            match crate::voice_test::start(crate::voice_test::Mode::MyVoice) {
+                Ok(()) => {
+                    mv.running = true;
+                    mv.error = None;
+                }
+                Err(e) => mv.error = Some(e),
+            }
+        }
+        Message::StopMyVoiceRecording => crate::voice_test::request_stop(crate::voice_test::Mode::MyVoice),
+        Message::PlayMyVoice(key) => {
+            let file = state.my_voice.results.as_ref().and_then(|r| r.versions.iter().find(|v| v.key == key)).map(|v| v.file.clone());
+            if let Some(file) = file {
+                // One sound at a time: whatever the pre-shift check was playing stops.
+                state.voice_test.playing = None;
+                if crate::voice_test::play(&file) {
+                    state.my_voice.playing = Some((key, std::time::Instant::now()));
+                } else {
+                    state.my_voice.error = Some("Could not play the recording on the default speakers.".to_string());
+                }
+            }
+        }
+        Message::StopMyVoicePlayback => {
+            crate::voice_test::stop_playback();
+            state.my_voice.playing = None;
+        }
+        Message::UseMyVoice => {
+            // Hand the fingerprint from the previewed recording to the engine; it saves it for this person.
+            let fp = state.my_voice.results.as_ref().map(|r| r.fingerprint.clone()).unwrap_or_default();
+            if fp.len() == accent_onnx::FINGERPRINT_LEN {
+                crate::log_info!("[action] my voice: use this recording");
+                state.handles.voice_auto.own_ready.store(true, std::sync::atomic::Ordering::Relaxed);
+                crate::remote::send(crate::ipc::ClientMsg::SetMyVoice(fp));
+                state.settings.accent_own_voice = true;
+                persist(&state.settings);
+                crate::voice_test::stop_playback();
+                let mv = &mut state.my_voice;
+                mv.playing = None;
+                mv.open = false;
+                mv.results = None;
+            } else {
+                state.my_voice.error = Some("This recording has no voice fingerprint. Record again.".to_string());
+            }
         }
         Message::SelectAccentVoice(label) => {
             // Only offered while Auto is off: a voice picked by hand is used as it is.
@@ -1642,13 +1710,13 @@ fn poll_voice_test(vt: &mut VoiceTestUi) {
     if !vt.running {
         return;
     }
-    match crate::voice_test::read_progress() {
+    match crate::voice_test::read_progress(vt.mode) {
         Some(p) => {
             vt.stalled_ticks = if p.phase == Phase::Starting { vt.stalled_ticks + 1 } else { 0 };
             match p.phase {
                 Phase::Done => {
                     vt.running = false;
-                    vt.results = crate::voice_test::read_results();
+                    vt.results = crate::voice_test::read_results(vt.mode);
                     if vt.results.is_none() {
                         vt.error = Some("The test finished but its results could not be read.".to_string());
                     }

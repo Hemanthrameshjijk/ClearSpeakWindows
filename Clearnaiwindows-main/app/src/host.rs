@@ -243,11 +243,6 @@ impl Host {
             voice_auto: [h.voice_auto.state.load(Ordering::Relaxed), h.voice_auto.gender.load(Ordering::Relaxed)],
             voice_auto_confirmed: h.voice_auto.confirmed.load(Ordering::Relaxed),
             own_voice_ready: h.voice_auto.own_ready.load(Ordering::Relaxed),
-            own_voice_recording_ms: h
-                .voice_auto
-                .own_recording
-                .load(Ordering::Relaxed)
-                .then(|| h.voice_auto.own_rec_ms.load(Ordering::Relaxed)),
             speaker_counters: shared::counters_to_array(&h.speaker_counters),
             mic_pct: dsp_core::compute_percentiles(h.latency_log.snapshot()).into(),
             speaker_pct: dsp_core::compute_percentiles(h.speaker_latency_log.snapshot()).into(),
@@ -344,9 +339,11 @@ impl Host {
                 crate::log_info!("[action] accent voice Auto: listen again");
                 h.voice_auto.relisten.store(true, Ordering::Relaxed);
             }
-            ClientMsg::RecordMyVoice => {
-                crate::log_info!("[action] my voice: record");
-                h.voice_auto.record.store(true, Ordering::Relaxed);
+            ClientMsg::SetMyVoice(fp) => {
+                crate::log_info!("[action] my voice: use the previewed recording");
+                if let Ok(mut slot) = h.voice_auto.new_fingerprint.lock() {
+                    *slot = Some(fp);
+                }
             }
             ClientMsg::TranscriptClear => {
                 crate::log_info!("[action] transcript cleared");

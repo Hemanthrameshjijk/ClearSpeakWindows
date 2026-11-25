@@ -162,9 +162,6 @@ pub struct Status {
     /// "My voice": a recording is saved for the signed-in person.
     #[serde(default)]
     pub own_voice_ready: bool,
-    /// "My voice": speech recorded so far (ms) while recording, `None` otherwise.
-    #[serde(default)]
-    pub own_voice_recording_ms: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -200,8 +197,8 @@ pub enum ClientMsg {
     TranscriptClear,
     /// Accent voice "Auto": forget the detected voice and listen again from scratch.
     VoiceAutoRelisten,
-    /// "Record my voice": record ~10 s of speech for the "My voice" accent voice.
-    RecordMyVoice,
+    /// "Use this voice" after the My voice preview: the voice fingerprint to save and use.
+    SetMyVoice(Vec<f32>),
     /// Quit the engine (and so the whole app).
     Quit,
 }

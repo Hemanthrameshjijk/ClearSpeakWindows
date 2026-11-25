@@ -25,9 +25,9 @@ const RECHECK_EVERY: u32 = 4;
 const QUICK_S: f32 = 2.0;
 /// Vote the quick guess needs (a full chunk needs `sure` = 1.0; the shorter piece must be clearer).
 pub const QUICK_VOTE: f32 = 1.5;
-/// Speech recorded for "My voice" (the same ~10 s the own-voice test enrolled from).
+/// Speech a "My voice" fingerprint is taken from (the same ~10 s the own-voice test enrolled from). The recording
+/// itself is made by the app's recorder (`voice_test`, My voice mode), not by this worker.
 pub const ENROLL_S: f32 = 10.0;
-const NOT_RECORDING: u32 = u32::MAX;
 
 pub const S_OFF: u8 = 0;
 pub const S_LOADING: u8 = 1;
@@ -55,26 +55,10 @@ struct Shared {
     /// Set by the app when the person changes (`known` for the new person, 0 = unknown, 255 = nothing pending).
     reset_to: AtomicU8,
     voiced_ms: AtomicU32,
-    /// "Record my voice": speech collected so far (ms), `u32::MAX` while not recording.
-    enroll_ms: AtomicU32,
-    enroll_restart: AtomicBool,
-    /// The last recorded voice fingerprint (unit-length, 192 numbers), and a counter bumped when a new one is ready.
-    enrolled: Mutex<Option<Vec<f32>>>,
-    enrollments: AtomicU32,
     last_ecapa_x100: AtomicI32,
     last_f0: AtomicU32,
     stop: AtomicBool,
     message: Mutex<String>,
-}
-
-impl Shared {
-    fn recording(&self) -> bool {
-        self.enroll_ms.load(Relaxed) != NOT_RECORDING
-    }
-    /// Detection on, or "Record my voice" running: the mic is tapped and the model loaded.
-    fn active(&self) -> bool {
-        self.enabled.load(Relaxed) || self.recording()
-    }
 }
 
 /// The app's end: switch detection on/off, read the answer.
@@ -111,25 +95,6 @@ impl GenderHandle {
         self.0.message.lock().map(|m| m.clone()).unwrap_or_default()
     }
     /// A different person signed in: start again from what is saved for them (`None` = listen from scratch).
-    /// "Record my voice": collect [`ENROLL_S`] of speech from the mic (works with Auto on or off), then publish the
-    /// voice fingerprint ([`enrolled`](Self::enrolled)). Pressing it again starts over.
-    pub fn start_enroll(&self) {
-        self.0.enroll_restart.store(true, Relaxed);
-        self.0.enroll_ms.store(0, Relaxed);
-    }
-    /// Speech recorded so far in ms, `None` while not recording.
-    pub fn enroll_progress(&self) -> Option<u32> {
-        Some(self.0.enroll_ms.load(Relaxed)).filter(|&v| v != NOT_RECORDING)
-    }
-    /// Bumped every time a new recording is finished.
-    pub fn enrollments(&self) -> u32 {
-        self.0.enrollments.load(Relaxed)
-    }
-    /// The fingerprint of the last finished recording.
-    pub fn enrolled(&self) -> Option<Vec<f32>> {
-        self.0.enrolled.lock().ok().and_then(|e| e.clone())
-    }
-
     pub fn reset(&self, known: Option<Gender>) {
         self.0.gender.store(known.map_or(0, Gender::code), Relaxed);
         self.0.confirmed.store(false, Relaxed);
@@ -155,7 +120,7 @@ impl Stage for GenderStage {
     }
 
     fn process(&mut self, frame: &mut [f32]) {
-        if !self.sh.active() || frame.len() != FRAME_SAMPLES || self.sh.state.load(Relaxed) != S_LISTENING {
+        if !self.sh.enabled.load(Relaxed) || frame.len() != FRAME_SAMPLES || self.sh.state.load(Relaxed) != S_LISTENING {
             return;
         }
         for &s in frame.iter() {
@@ -173,10 +138,6 @@ pub fn start(cfg: GenderConfig) -> (GenderStage, GenderHandle) {
         changes: AtomicU32::new(0),
         reset_to: AtomicU8::new(255),
         voiced_ms: AtomicU32::new(0),
-        enroll_ms: AtomicU32::new(NOT_RECORDING),
-        enroll_restart: AtomicBool::new(false),
-        enrolled: Mutex::new(None),
-        enrollments: AtomicU32::new(0),
         last_ecapa_x100: AtomicI32::new(0),
         last_f0: AtomicU32::new(0),
         stop: AtomicBool::new(false),
@@ -245,8 +206,6 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
     let mut gate = VoiceGate::default();
     let mut chunk_in = vec![0.0f32; FRAME_SAMPLES];
     let mut voiced: Vec<f32> = Vec::new();
-    // "Record my voice": speech collected for the fingerprint.
-    let mut enroll: Vec<f32> = Vec::new();
     let mut chunks_since_answer = 0u32;
 
     while !sh.stop.load(Relaxed) {
@@ -259,16 +218,16 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
             chunks_since_answer = 0;
             quick_tried = false;
             sh.voiced_ms.store(0, Relaxed);
+            // Re-assert what `reset` published: an answer from the old detector may have been written meanwhile.
+            sh.gender.store(r, Relaxed);
+            sh.confirmed.store(false, Relaxed);
         }
-        let want_urgent = sh.recording() || !detector.as_ref().is_some_and(Detector::confirmed);
+        let want_urgent = !detector.as_ref().is_some_and(Detector::confirmed);
         if want_urgent != urgent {
             urgent = want_urgent;
             set_priority(urgent);
         }
-        if sh.enroll_restart.swap(false, Relaxed) {
-            enroll.clear(); // "Record my voice" pressed (again): start from nothing
-        }
-        if !sh.active() {
+        if !sh.enabled.load(Relaxed) {
             if sh.state.load(Relaxed) != S_UNAVAILABLE {
                 sh.state.store(S_OFF, Relaxed);
             }
@@ -300,8 +259,14 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
                     continue;
                 }
             }
+        }
+        // Listening again after being idle (Auto or Accent switched off and on). Only the first model load used to do
+        // this: after any idle spell the mic tap stayed shut for the rest of the session, so Auto never answered again
+        // and Re-detect showed "Not started yet" (25 Nov).
+        if sh.state.load(Relaxed) != S_LISTENING {
             while cons.pop().is_ok() {}
             down.reset();
+            gate.reset();
             sh.state.store(S_LISTENING, Relaxed);
         }
         if cons.slots() < FRAME_SAMPLES {
@@ -316,34 +281,6 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
         gate.push(&x16, &mut voiced);
         let added_ms = ((voiced.len() - before) * 1000 / SR) as u32;
 
-        if sh.recording() {
-            let Some(m) = model.as_mut() else { continue };
-            enroll.extend_from_slice(&voiced[before..]);
-            let need = (ENROLL_S * SR as f32) as usize;
-            if enroll.len() < need {
-                sh.enroll_ms.store((enroll.len() * 1000 / SR) as u32, Relaxed);
-            } else {
-                match m.embed(&enroll[..need]) {
-                    Ok(e) => {
-                        if let Ok(mut slot) = sh.enrolled.lock() {
-                            *slot = Some(e);
-                        }
-                        sh.enrollments.fetch_add(1, Relaxed);
-                    }
-                    Err(e) => {
-                        if let Ok(mut msg) = sh.message.lock() {
-                            *msg = format!("voice recording failed: {e}");
-                        }
-                    }
-                }
-                enroll.clear();
-                sh.enroll_ms.store(NOT_RECORDING, Relaxed);
-            }
-        }
-        if !sh.enabled.load(Relaxed) {
-            voiced.clear(); // only recording: no detection
-            continue;
-        }
         sh.voiced_ms.fetch_add(added_ms, Relaxed);
 
         let (Some(m), Some(d)) = (model.as_mut(), detector.as_mut()) else { continue };
@@ -354,7 +291,8 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
             if let Ok(s) = m.score_chunk(&voiced[..quick]) {
                 sh.last_ecapa_x100.store((s.ecapa * 100.0) as i32, Relaxed);
                 sh.last_f0.store(s.f0.unwrap_or(0.0) as u32, Relaxed);
-                if let Some(c) = d.quick_guess(&s, QUICK_VOTE) {
+                // A reset (Re-detect, another person) that came in while scoring: this answer is for the old one.
+                if let Some(c) = d.quick_guess(&s, QUICK_VOTE).filter(|_| sh.reset_to.load(Relaxed) == 255) {
                     sh.gender.store(c.gender.code(), Relaxed);
                     sh.changes.fetch_add(1, Relaxed);
                 }
@@ -376,7 +314,7 @@ fn worker(sh: Arc<Shared>, mut cons: Consumer<f32>, cfg: GenderConfig) {
             Ok(s) => {
                 sh.last_ecapa_x100.store((s.ecapa * 100.0) as i32, Relaxed);
                 sh.last_f0.store(s.f0.unwrap_or(0.0) as u32, Relaxed);
-                if let Some(c) = d.push(&s) {
+                if let Some(c) = d.push(&s).filter(|_| sh.reset_to.load(Relaxed) == 255) {
                     sh.gender.store(c.gender.code(), Relaxed);
                     sh.confirmed.store(true, Relaxed);
                     sh.changes.fetch_add(1, Relaxed);

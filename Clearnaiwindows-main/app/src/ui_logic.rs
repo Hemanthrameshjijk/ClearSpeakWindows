@@ -29,24 +29,23 @@ pub fn voice_picker_shown(s: &crate::settings::Settings) -> bool {
     !(VOICE_AUTO_OFFERED && s.accent_voice_auto) && !s.accent_own_voice
 }
 
-/// The line under the "My voice" switch. `recording_ms`: speech recorded so far while recording.
-pub fn my_voice_note(s: &crate::settings::Settings, ready: bool, recording_ms: Option<u32>) -> String {
-    let total = gender::pipeline::ENROLL_S as u32;
-    match recording_ms {
-        Some(ms) => format!("Recording \u{2014} keep talking ({} / {total} s)", (ms / 1000).min(total)),
-        None if !ready => format!("Record {total} s of your voice first"),
-        None if s.accent_own_voice => "Your own voice, with the American accent".into(),
-        None => "Keeps your own voice; only the accent changes".into(),
+/// My voice really replaces the American voice: switched on, and a recording saved for the signed-in person.
+pub fn my_voice_in_use(s: &crate::settings::Settings, ready: bool) -> bool {
+    s.accent_own_voice && ready
+}
+
+/// The line under the "My voice" switch.
+pub fn my_voice_note(s: &crate::settings::Settings, ready: bool) -> String {
+    match (ready, s.accent_own_voice) {
+        (false, _) => "Record your voice once, hear it, then use it".into(),
+        (true, true) => "Your own voice, with the American accent".into(),
+        (true, false) => "Keeps your own voice; only the accent changes".into(),
     }
 }
 
 /// The record button's label.
-pub fn my_voice_button(ready: bool, recording: bool) -> &'static str {
-    match (recording, ready) {
-        (true, _) => "Start over",
-        (false, true) => "Record again",
-        (false, false) => "Record my voice",
-    }
+pub fn my_voice_button(ready: bool) -> &'static str {
+    if ready { "Record again" } else { "Record my voice" }
 }
 
 /// The voice Accent should use now (`0` = off): in Auto, the detected gender's voice with the chosen number, or the
@@ -60,9 +59,19 @@ pub fn accent_voice_now(s: &crate::settings::Settings, detected: Option<gender::
 
 /// The line under the picker in Auto: what was detected (or that it is still listening). `confirmed` = the answer
 /// comes from this session's speech; otherwise it is the one saved earlier, shown as such while the voice is checked.
-pub fn voice_auto_note(s: &crate::settings::Settings, state: u8, detected: Option<gender::Gender>, confirmed: bool) -> Option<String> {
+pub fn voice_auto_note(
+    s: &crate::settings::Settings,
+    state: u8,
+    detected: Option<gender::Gender>,
+    confirmed: bool,
+    own_in_use: bool,
+) -> Option<String> {
     if !s.accent_voice_auto {
         return None;
+    }
+    if own_in_use {
+        // The engine switches detection off while My voice is in use (it replaces the American voice).
+        return Some("Not used while My voice is on".into());
     }
     let name = |g: gender::Gender| if g == gender::Gender::Male { "Male" } else { "Female" };
     let voice = |g: gender::Gender| accent_onnx::VOICE_CHOICES[(g.voice_like(s.accent_voice_index()) - 1) as usize];
@@ -81,8 +90,14 @@ pub fn voice_auto_note(s: &crate::settings::Settings, state: u8, detected: Optio
 
 /// The "Detected voice" row shown under the Auto switch: `(value, decided)`. `decided` = this session's speech gave
 /// the answer (shown in green); otherwise it is still listening or showing the answer saved last time.
-pub fn voice_auto_detected(s: &crate::settings::Settings, state: u8, detected: Option<gender::Gender>, confirmed: bool) -> Option<(String, bool)> {
-    if !(VOICE_AUTO_OFFERED && s.accent_voice_auto) {
+pub fn voice_auto_detected(
+    s: &crate::settings::Settings,
+    state: u8,
+    detected: Option<gender::Gender>,
+    confirmed: bool,
+    own_in_use: bool,
+) -> Option<(String, bool)> {
+    if !(VOICE_AUTO_OFFERED && s.accent_voice_auto) || own_in_use {
         return None;
     }
     let name = |g: gender::Gender| if g == gender::Gender::Male { "Male" } else { "Female" };
@@ -589,13 +604,13 @@ mod tests {
         let mut s = crate::settings::Settings::default();
         s.accent_voice = 2;
         s.accent_voice_auto = true;
-        let note = |state, g, confirmed| voice_auto_note(&s, state, g, confirmed).unwrap();
+        let note = |state, g, confirmed| voice_auto_note(&s, state, g, confirmed, false).unwrap();
         assert_eq!(note(S_LISTENING, Some(Male), false), "Last time: Male \u{2192} American male 2 (checking your voice\u{2026})");
         assert_eq!(note(S_OFF, Some(Male), false), "Last time: Male \u{2192} American male 2");
         assert_eq!(note(S_LISTENING, Some(Female), true), "Detected: Female \u{2192} American female 2");
         assert_eq!(note(S_LISTENING, None, false), "Listening to your voice\u{2026}");
         s.accent_voice_auto = false;
-        assert_eq!(voice_auto_note(&s, S_LISTENING, Some(Male), true), None, "hand-picked voice: no note");
+        assert_eq!(voice_auto_note(&s, S_LISTENING, Some(Male), true, false), None, "hand-picked voice: no note");
     }
 
     #[test]
@@ -606,10 +621,10 @@ mod tests {
         s.accent_voice = 2;
         s.accent_voice_auto = true;
         if !VOICE_AUTO_OFFERED {
-            assert_eq!(voice_auto_detected(&s, S_LISTENING, Some(Male), true), None);
+            assert_eq!(voice_auto_detected(&s, S_LISTENING, Some(Male), true, false), None);
             return;
         }
-        let row = |s: &crate::settings::Settings, state, g, confirmed| voice_auto_detected(s, state, g, confirmed).unwrap();
+        let row = |s: &crate::settings::Settings, state, g, confirmed| voice_auto_detected(s, state, g, confirmed, false).unwrap();
         assert_eq!(row(&s, S_LISTENING, Some(Female), true), ("Female \u{2192} American female 2".into(), true));
         assert_eq!(row(&s, S_OFF, Some(Male), true), ("Male \u{2192} American male 2".into(), true));
         assert_eq!(row(&s, S_OFF, Some(Male), false), ("Male \u{2192} American male 2 (last time)".into(), false));
@@ -619,7 +634,14 @@ mod tests {
         s.accent_on = false;
         assert_eq!(row(&s, S_OFF, None, false), ("Not yet (turn Accent on)".into(), false));
         s.accent_voice_auto = false;
-        assert_eq!(voice_auto_detected(&s, S_LISTENING, Some(Male), true), None, "Auto off: no row");
+        assert_eq!(voice_auto_detected(&s, S_LISTENING, Some(Male), true, false), None, "Auto off: no row");
+        // My voice in use: detection is off in the engine, so no stuck "Not started yet" / Re-detect row.
+        s.accent_voice_auto = true;
+        s.accent_on = true;
+        assert_eq!(voice_auto_detected(&s, S_OFF, None, false, true), None);
+        assert_eq!(voice_auto_note(&s, S_OFF, None, false, true).as_deref(), Some("Not used while My voice is on"));
+        s.accent_own_voice = true;
+        assert!(my_voice_in_use(&s, true) && !my_voice_in_use(&s, false), "needs the switch and a recording");
     }
 
     #[test]
@@ -641,14 +663,12 @@ mod tests {
     #[test]
     fn my_voice_says_what_to_do_next() {
         let mut s = crate::settings::Settings::default();
-        assert_eq!(my_voice_note(&s, false, None), "Record 10 s of your voice first");
-        assert_eq!(my_voice_note(&s, false, Some(4_300)), "Recording \u{2014} keep talking (4 / 10 s)");
-        assert_eq!(my_voice_note(&s, true, None), "Keeps your own voice; only the accent changes");
+        assert_eq!(my_voice_note(&s, false), "Record your voice once, hear it, then use it");
+        assert_eq!(my_voice_note(&s, true), "Keeps your own voice; only the accent changes");
         s.accent_own_voice = true;
-        assert_eq!(my_voice_note(&s, true, None), "Your own voice, with the American accent");
-        assert_eq!(my_voice_button(false, false), "Record my voice");
-        assert_eq!(my_voice_button(true, false), "Record again");
-        assert_eq!(my_voice_button(true, true), "Start over");
+        assert_eq!(my_voice_note(&s, true), "Your own voice, with the American accent");
+        assert_eq!(my_voice_button(false), "Record my voice");
+        assert_eq!(my_voice_button(true), "Record again");
     }
 
     #[test]

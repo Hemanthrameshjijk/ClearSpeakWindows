@@ -1349,6 +1349,7 @@ pub fn view_card(state: &MainState) -> Element<'_, Message> {
                                 va.state.load(std::sync::atomic::Ordering::Relaxed),
                                 va.gender(),
                                 va.confirmed.load(std::sync::atomic::Ordering::Relaxed),
+                                crate::ui_logic::my_voice_in_use(&state.settings, va.own_ready.load(std::sync::atomic::Ordering::Relaxed)),
                             )
                             .unwrap_or_else(|| "Picks a male or female voice to match the speaker".to_string());
                             c = c.push(switch_row("Auto voice", note, t.muted, state.settings.accent_voice_auto, Message::ToggleVoiceAuto));
@@ -1902,6 +1903,7 @@ fn detected_voice_row<'a>(state: &MainState) -> Option<Element<'a, Message>> {
         va.state.load(std::sync::atomic::Ordering::Relaxed),
         va.gender(),
         va.confirmed.load(std::sync::atomic::Ordering::Relaxed),
+        crate::ui_logic::my_voice_in_use(&state.settings, va.own_ready.load(std::sync::atomic::Ordering::Relaxed)),
     )?;
     Some(
         row![
@@ -1916,28 +1918,28 @@ fn detected_voice_row<'a>(state: &MainState) -> Option<Element<'a, Message>> {
     )
 }
 
-/// "My voice" switch and its record button / progress: speak with your own recorded voice, only the accent changes.
-fn my_voice_rows<'a>(state: &MainState) -> Element<'a, Message> {
+/// "My voice": the switch and a button that opens the recorder; while the recorder is open, its panel instead
+/// (record ~15 s like the pre-shift check, hear yourself with the accent, then use it).
+fn my_voice_rows(state: &MainState) -> Element<'static, Message> {
+    if state.my_voice.open {
+        return container(my_voice_panel(state)).padding(12).width(Length::Fill).style(style::soft_box).into();
+    }
     let t = style::tokens_for(state.settings.theme_dark);
-    let va = &state.handles.voice_auto;
-    let ready = va.own_ready.load(std::sync::atomic::Ordering::Relaxed);
-    let recording = va.own_recording.load(std::sync::atomic::Ordering::Relaxed);
-    let rec_ms = recording.then(|| va.own_rec_ms.load(std::sync::atomic::Ordering::Relaxed));
-    let note = crate::ui_logic::my_voice_note(&state.settings, ready, rec_ms);
-    let note_color = if recording { t.warning } else { t.muted };
+    let ready = state.handles.voice_auto.own_ready.load(std::sync::atomic::Ordering::Relaxed);
+    let note = crate::ui_logic::my_voice_note(&state.settings, ready);
     column![
         row![
-            column![text("My voice").size(15), text(note).size(12).color(note_color)].spacing(3).width(Length::Fill),
-            toggler(state.settings.accent_own_voice).on_toggle(Message::ToggleOwnVoice).size(24).style(style::toggle),
+            column![text("My voice").size(15), text(note).size(12).color(t.muted)].spacing(3).width(Length::Fill),
+            toggler(state.settings.accent_own_voice && ready).on_toggle(Message::ToggleOwnVoice).size(24).style(style::toggle),
         ]
         .spacing(12)
         .align_y(iced::Alignment::Center),
         row![
-            text("Say anything for 10 s; saved for you on this PC").size(12).color(t.muted),
+            text("Record once, hear it with the accent, then use it").size(12).color(t.muted),
             container(text("")).width(Length::Fill),
-            btn(text(crate::ui_logic::my_voice_button(ready, recording)).size(12).font(bold()).color(t.primary))
+            btn(text(crate::ui_logic::my_voice_button(ready)).size(12).font(bold()).color(t.primary))
                 .padding([4, 6])
-                .on_press(Message::RecordMyVoice)
+                .on_press(Message::OpenMyVoice)
                 .style(style::text_button),
         ]
         .spacing(12)
@@ -1945,6 +1947,126 @@ fn my_voice_rows<'a>(state: &MainState) -> Element<'a, Message> {
     ]
     .spacing(10)
     .into()
+}
+
+/// The My voice recorder: record (level meter, progress, finish early), then three versions to play and
+/// "Use this voice" / "Record again". The live voice changes only on "Use this voice".
+fn my_voice_panel(state: &MainState) -> Element<'static, Message> {
+    use crate::voice_test::{Phase, MIN_SECONDS, MY_VOICE_SECONDS};
+    use super::icons;
+    let t = style::tokens_for(state.settings.theme_dark);
+    let mv = &state.my_voice;
+    let mut col = column![row![
+        glyph_icon(icons::MIC, 16.0, t.primary),
+        text("Record my voice").size(15).font(bold()),
+        container(text("")).width(Length::Fill),
+        btn(text("Close").size(12).font(bold()).color(t.primary)).padding([4, 6]).on_press(Message::CloseMyVoice).style(style::text_button),
+    ]
+    .spacing(10)
+    .align_y(iced::Alignment::Center)]
+    .spacing(12);
+
+    if mv.running {
+        match mv.progress.phase {
+            Phase::Starting | Phase::Recording => {
+                let secs = mv.progress.recorded_s;
+                col = col
+                    .push(text("Talk normally, as on a call, the whole time. Reading a few sentences aloud works well.").size(13))
+                    .push(progress_bar(0.0..=MY_VOICE_SECONDS, secs).girth(Length::Fixed(8.0)).style(style::meter))
+                    .push(
+                        row![
+                            text(if mv.progress.phase == Phase::Starting {
+                                "Opening the microphone...".to_string()
+                            } else {
+                                format!("Recording: {secs:.0} s of {MY_VOICE_SECONDS:.0} s")
+                            })
+                            .size(12)
+                            .color(t.muted),
+                            container(text("")).width(Length::Fill),
+                            progress_bar(0.0..=1.0, mv.progress.level).length(Length::Fixed(90.0)).girth(Length::Fixed(6.0)).style(style::meter),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    );
+                let finish = btn(text("Finish now").size(13).font(bold())).padding([8, 14]).style(style::outline);
+                col = col.push(if secs >= MIN_SECONDS { finish.on_press(Message::StopMyVoiceRecording) } else { finish });
+            }
+            _ => {
+                col = col
+                    .push(text(if mv.progress.step.is_empty() { "Preparing...".to_string() } else { mv.progress.step.clone() }).size(13))
+                    .push(text("Making your voice with the accent. This takes up to half a minute.").size(12).color(t.muted));
+            }
+        }
+        return col.into();
+    }
+
+    if let Some(e) = &mv.error {
+        col = col.push(text(e.clone()).size(12).color(t.danger));
+    }
+    match &mv.results {
+        Some(r) => {
+            col = col.push(
+                text(format!("Heard {:.0} s of your speech. Play each one (use headphones), then use it if you like it.", r.speech_s))
+                    .size(12)
+                    .color(t.muted),
+            );
+            for v in &r.versions {
+                let playing = mv.playing.as_ref().is_some_and(|(k, _)| *k == v.key);
+                let (icon, msg) = if playing {
+                    (icons::STOP, Message::StopMyVoicePlayback)
+                } else {
+                    (icons::PLAY, Message::PlayMyVoice(v.key.clone()))
+                };
+                let play = btn(container(glyph_icon(icon, 15.0, Color::WHITE)).center_x(Length::Fill).center_y(Length::Fill))
+                    .width(32)
+                    .height(32)
+                    .padding(0)
+                    .on_press(msg)
+                    .style(style::primary);
+                col = col.push(
+                    container(
+                        row![play, text(v.label.clone()).size(14).font(bold()).color(if playing { t.primary } else { t.text }).width(Length::Fill)]
+                            .spacing(10)
+                            .align_y(iced::Alignment::Center),
+                    )
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(style::soft_box),
+                );
+            }
+            col = col.push(
+                row![
+                    btn(container(text("Use this voice").size(13).font(bold()).color(Color::WHITE)).center_x(Length::Fill))
+                        .width(Length::Fill)
+                        .padding([9, 0])
+                        .on_press(Message::UseMyVoice)
+                        .style(style::primary),
+                    btn(text("Record again").size(13).font(bold())).padding([8, 14]).on_press(Message::StartMyVoice).style(style::outline),
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        None => {
+            col = col
+                .push(
+                    text(format!(
+                        "Record {MY_VOICE_SECONDS:.0} seconds of your voice. Then you hear it as recorded, in your own voice with the \
+                         American accent, and the nearest American voice, and choose whether to use it."
+                    ))
+                    .size(13),
+                )
+                .push(
+                    btn(container(text("Start recording").size(14).font(bold()).color(Color::WHITE)).center_x(Length::Fill))
+                        .width(Length::Fill)
+                        .padding([11, 0])
+                        .on_press(Message::StartMyVoice)
+                        .style(style::primary),
+                )
+                .push(text("Your call keeps working while you record. The recording stays on this PC.").size(12).color(t.muted));
+        }
+    }
+    col.into()
 }
 
 /// Select and its status line: side by side when there is room, stacked otherwise.
@@ -2004,6 +2126,7 @@ fn microphone_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         h.voice_auto.state.load(std::sync::atomic::Ordering::Relaxed),
         h.voice_auto.gender(),
         h.voice_auto.confirmed.load(std::sync::atomic::Ordering::Relaxed),
+        crate::ui_logic::my_voice_in_use(&state.settings, h.voice_auto.own_ready.load(std::sync::atomic::Ordering::Relaxed)),
     );
     let accent_color = match status.state {
         accent_onnx::pipeline::AccentState::Active => t.success,

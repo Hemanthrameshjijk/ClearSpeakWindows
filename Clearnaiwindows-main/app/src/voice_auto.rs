@@ -156,7 +156,6 @@ pub fn run(handles: EngineHandles, settings: impl Fn() -> Settings) {
     // "My voice": whose recording applies, the recording, the last finished recording seen, and whether it is in use.
     let mut own_key = String::new();
     let mut own_fp: Option<Vec<f32>> = None;
-    let mut seen_enrollments = det.enrollments();
     let mut own_logged = None::<bool>;
     loop {
         std::thread::sleep(TICK);
@@ -182,26 +181,16 @@ pub fn run(handles: EngineHandles, settings: impl Fn() -> Settings) {
                 }
             }
         }
-        // "Record my voice" pressed, and a recording finished.
-        if va.record.swap(false, Relaxed) {
-            crate::log_info!("[voice] My voice: recording ({:.0} s of speech)", gender::pipeline::ENROLL_S);
-            det.start_enroll();
-        }
-        let done = det.enrollments();
-        if done != seen_enrollments {
-            seen_enrollments = done;
-            match det.enrolled() {
-                Some(fp) => {
-                    save_own_voice(&own_key, &fp);
-                    own_fp = Some(fp);
-                    crate::log_info!("[voice] My voice: recorded and saved");
-                }
-                None => crate::log_error!("[voice] My voice: recording failed: {}", det.message()),
+        // "Use this voice" after the preview in the window (the recorder runs in its own process, `voice_test`).
+        if let Some(fp) = va.new_fingerprint.lock().ok().and_then(|mut s| s.take()) {
+            if decode_fingerprint(&encode_fingerprint(&fp)).is_some() {
+                save_own_voice(&own_key, &fp);
+                own_fp = Some(fp);
+                crate::log_info!("[voice] My voice: new recording saved");
+            } else {
+                crate::log_error!("[voice] My voice: the recording from the window is not a valid fingerprint");
             }
         }
-        let progress = det.enroll_progress();
-        va.own_recording.store(progress.is_some(), Relaxed);
-        va.own_rec_ms.store(progress.unwrap_or(0), Relaxed);
         va.own_ready.store(own_fp.is_some(), Relaxed);
         // In use only with the switch on and a recording made; it replaces the American voice (and Auto) while on.
         let own_on = s.accent_own_voice && own_fp.is_some();

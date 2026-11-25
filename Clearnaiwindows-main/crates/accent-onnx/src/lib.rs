@@ -96,6 +96,21 @@ pub fn own_speaker(own: &[f32], voices: &BTreeMap<String, Vec<f32>>, share: f32)
     Ok(unit(&own.iter().zip(&near).map(|(o, n)| share * o + (1.0 - share) * n).collect::<Vec<_>>()))
 }
 
+/// The trained voice (index, 1-based as in [`VOICE_NAMES`]) most like the `own` fingerprint: the one My voice is
+/// blended with, and the comparison voice in the My voice preview.
+pub fn nearest_voice(models: &Path, own: &[f32]) -> Result<u8, String> {
+    let vz = Npz::open(&models.join("american_voices.npz"))?;
+    let dot = |a: &[f32]| a.iter().zip(own).map(|(x, y)| x * y).sum::<f32>();
+    let mut best = (0u8, f32::NEG_INFINITY);
+    for (i, name) in VOICE_NAMES.iter().enumerate() {
+        let d = dot(&vz.f32s(name)?);
+        if d > best.1 {
+            best = (i as u8 + 1, d);
+        }
+    }
+    Ok(best.0)
+}
+
 /// Load `onnxruntime.dll` once for the process.
 pub fn init_runtime(dll: &Path) -> Result<(), String> {
     ort_util::init_ort(dll)
