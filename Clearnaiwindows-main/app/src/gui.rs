@@ -118,10 +118,16 @@ struct MainState {
     /// Transcript tab: the search box text and the result line of the last Export / Open folder / Copy.
     transcript_query: String,
     transcript_note: Option<String>,
+    /// Call recording tab: the VICIdial API password being typed (saved encrypted on "Save password", never kept in
+    /// the settings as plain text) and the result line of that.
+    vici_pass_input: String,
+    vici_note: Option<String>,
     /// Advanced tab: result line of Export logs / Start with Windows / Reset, and whether the next Reset click
     /// is the confirming one (cleared when the tab changes).
     diag_note: Option<String>,
     reset_armed: bool,
+    /// When "Delete all" transcripts was pressed once; a second press within 10 s deletes.
+    delete_transcripts_armed: Option<std::time::Instant>,
     cpu_percent: Option<f32>,
     /// Problems to show as a banner (every tab and the collapsed bar); `logged_alerts` remembers which keys were
     /// already written to the log so each problem is logged once when it appears and once when it clears.
@@ -210,8 +216,11 @@ impl MainState {
             tab: Tab::Home,
             transcript_query: String::new(),
             transcript_note: None,
+            vici_pass_input: String::new(),
+            vici_note: None,
             diag_note: None,
             reset_armed: false,
+            delete_transcripts_armed: None,
             cpu_percent: None,
             alerts: Vec::new(),
             logged_alerts: Vec::new(),
@@ -335,8 +344,22 @@ pub enum Message {
     RedetectVoice,
     /// Live transcript on/off.
     ToggleTranscript(bool),
+    /// Automatic call recording on/off (the engine reads the saved setting).
+    ToggleRecordCalls(bool),
+    /// Call recording tab: how calls are found (`call_session::METHOD_*`).
+    SelectRecordMethod(u8),
+    /// VICIdial API fields: server address, API user, this agent's ID, and the password (typed, then saved).
+    VicidialUrl(String),
+    VicidialApiUser(String),
+    VicidialAgentUser(String),
+    VicidialPassInput(String),
+    SaveVicidialPass,
     /// Empty the transcript box (the saved file is kept).
     ClearTranscript,
+    /// "Keep transcripts" choice (a name from `transcript_files::KEEP_NAMES`).
+    SelectTranscriptKeep(&'static str),
+    /// "Delete all" saved transcripts: the first press asks for a second one.
+    DeleteAllTranscripts,
     /// Accent voice "Auto" on/off. On listens to the voice from scratch (the current voice stays until it decides).
     ToggleVoiceAuto(bool),
     /// Accent "My voice" on/off (switching on with no recording opens the recorder).
@@ -788,7 +811,7 @@ fn update(screen: &mut Screen, message: Message) -> iced::Task<Message> {
     if matches!(message, Message::CopyTranscript) {
         if let Screen::Main(state) = screen {
             let (lines, _) = state.handles.transcript.snapshot(10_000);
-            let all: Vec<(u32, String)> = lines.iter().map(|l| (l.at_secs, l.text.clone())).collect();
+            let all: Vec<(u32, String)> = crate::ui_logic::labelled_lines(&lines);
             let shown: Vec<(u32, String)> =
                 crate::ui_logic::filter_lines(&all, &state.transcript_query).into_iter().cloned().collect();
             state.transcript_note = Some(if shown.is_empty() {
@@ -1030,6 +1053,7 @@ fn update_main(state: &mut MainState, message: Message) {
         Message::SelectTab(tab) => {
             state.tab = tab;
             state.reset_armed = false;
+            state.delete_transcripts_armed = None;
             // Fresh device list on every page change, so the pickers never offer a headset that was unplugged
             // since the window opened (picking one played to nothing). Asked for without waiting (waiting froze the
             // window for up to 5 s when the engine was busy or away); the Tick picks the answer up.
@@ -1129,7 +1153,7 @@ fn update_main(state: &mut MainState, message: Message) {
         Message::TranscriptSearch(query) => state.transcript_query = query,
         Message::ExportTranscript => {
             let (lines, _) = state.handles.transcript.snapshot(10_000);
-            let all: Vec<(u32, String)> = lines.iter().map(|l| (l.at_secs, l.text.clone())).collect();
+            let all: Vec<(u32, String)> = crate::ui_logic::labelled_lines(&lines);
             let shown: Vec<(u32, String)> =
                 crate::ui_logic::filter_lines(&all, &state.transcript_query).into_iter().cloned().collect();
             let dir = crate::setup::app_data_dir().join("transcripts");
@@ -1322,9 +1346,74 @@ fn update_main(state: &mut MainState, message: Message) {
             state.handles.transcript.set_enabled(on);
             persist(&state.settings);
         }
+        Message::ToggleRecordCalls(on) => {
+            crate::log_info!("[action] record calls automatically: {}", if on { "on" } else { "off" });
+            state.settings.record_calls = on;
+            persist(&state.settings);
+        }
+        Message::SelectRecordMethod(m) => {
+            crate::log_info!("[action] find calls by: {}", crate::call_session::method_name(m));
+            state.settings.record_method = m;
+            persist(&state.settings);
+        }
+        Message::VicidialUrl(v) => {
+            state.settings.vicidial_url = v;
+            persist(&state.settings);
+        }
+        Message::VicidialApiUser(v) => {
+            state.settings.vicidial_api_user = v;
+            persist(&state.settings);
+        }
+        Message::VicidialAgentUser(v) => {
+            state.settings.vicidial_agent_user = v;
+            persist(&state.settings);
+        }
+        Message::VicidialPassInput(v) => state.vici_pass_input = v,
+        Message::SaveVicidialPass => {
+            if state.vici_pass_input.is_empty() {
+                state.vici_note = Some("Type the password first.".into());
+            } else {
+                // Encrypted for this Windows user before it is saved; the typed text is dropped.
+                state.settings.vicidial_api_pass = crate::dpapi::protect(&std::mem::take(&mut state.vici_pass_input));
+                persist(&state.settings);
+                crate::log_info!("[action] VICIdial API password saved");
+                state.vici_note = Some("Password saved (encrypted on this PC).".into());
+            }
+        }
         Message::ClearTranscript => {
             state.handles.transcript.clear();
             crate::remote::send(crate::ipc::ClientMsg::TranscriptClear);
+        }
+        Message::SelectTranscriptKeep(name) => {
+            let days = crate::transcript_files::keep_days(name);
+            state.settings.transcript_keep_days = days;
+            persist(&state.settings);
+            let dir = crate::setup::app_data_dir().join("transcripts");
+            let gone = crate::transcript_files::delete_older_than(&dir, days, std::time::SystemTime::now());
+            crate::log_info!("[action] keep transcripts: {name} ({gone} older file(s) deleted)");
+            state.transcript_note = (gone > 0).then(|| format!("Deleted {gone} transcript file(s) older than {name}."));
+        }
+        Message::DeleteAllTranscripts if state.handles.recording().is_some() => {
+            // Deleting the open recording would lose the rest of the call.
+            state.delete_transcripts_armed = None;
+            state.transcript_note = Some("A call is being recorded. Delete after it ends.".into());
+        }
+        Message::DeleteAllTranscripts => {
+            if !state.delete_transcripts_armed.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(10)) {
+                state.delete_transcripts_armed = Some(std::time::Instant::now());
+                state.transcript_note = Some("Press \"Confirm delete all\" within 10 seconds to delete every saved transcript. This cannot be undone.".into());
+            } else {
+                state.delete_transcripts_armed = None;
+                let dir = crate::setup::app_data_dir().join("transcripts");
+                let (n, err) = crate::transcript_files::delete_all(&dir);
+                crate::log_info!("[action] deleted all saved transcripts ({n} file(s)){}", err.as_deref().map(|e| format!("; {e}")).unwrap_or_default());
+                state.handles.transcript.clear();
+                crate::remote::send(crate::ipc::ClientMsg::TranscriptClear);
+                state.transcript_note = Some(match err {
+                    None => format!("Deleted {n} saved transcript file(s)."),
+                    Some(e) => format!("Deleted {n} file(s); some could not be deleted ({e})."),
+                });
+            }
         }
         Message::ToggleVoiceAuto(on) => {
             let on = on && crate::ui_logic::VOICE_AUTO_OFFERED;
@@ -1764,6 +1853,15 @@ fn reset_to_defaults(state: &mut MainState) {
     fresh.start_with_windows = keep.start_with_windows;
     fresh.last_seen_at = keep.last_seen_at;
     fresh.first_run_at = keep.first_run_at;
+    // Call recording is the BPO's setup, not a sound preference: a reset must not stop recording calls, drop the
+    // VICIdial login, or (via a shorter keep time) delete saved recordings at the next start.
+    fresh.record_calls = keep.record_calls;
+    fresh.record_method = keep.record_method;
+    fresh.vicidial_url = keep.vicidial_url;
+    fresh.vicidial_api_user = keep.vicidial_api_user;
+    fresh.vicidial_api_pass = keep.vicidial_api_pass;
+    fresh.vicidial_agent_user = keep.vicidial_agent_user;
+    fresh.transcript_keep_days = keep.transcript_keep_days;
     state.settings = fresh;
     state.handles.mic_master_enabled.set(true);
     state.handles.speaker_master_enabled.set(true);
@@ -1777,7 +1875,12 @@ fn reset_to_defaults(state: &mut MainState) {
     update_main(state, Message::ToggleAccent(d.accent_on));
     update_main(state, Message::SelectAccentVoice(crate::ui_logic::voice_pick_label(&d)));
     update_main(state, Message::ToggleVoiceAuto(d.accent_voice_auto));
-    update_main(state, Message::ToggleTranscript(d.transcript_on));
+    if state.handles.recording().is_some() {
+        // A call is being recorded: its transcript keeps running; only the saved choice is reset.
+        state.settings.transcript_on = d.transcript_on;
+    } else {
+        update_main(state, Message::ToggleTranscript(d.transcript_on));
+    }
     update_main(state, Message::ToggleMonitor(d.monitor_enabled));
     update_main(state, Message::ToggleSpeakerNoise(d.speaker_noise_on));
     update_main(state, Message::ToggleSpeakerStudio(d.speaker_studio_on));

@@ -124,6 +124,10 @@ pub struct TranscriptWire {
     /// The engine cleared its transcript: drop what you have before adding `new_lines`.
     pub reset: bool,
     pub new_lines: Vec<(u32, String)>,
+    /// Who said each of `new_lines` (`asr_onnx::pipeline::Side::to_u8`: 0 agent, 1 caller). Missing (an older
+    /// engine) = agent.
+    #[serde(default)]
+    pub new_sides: Vec<u8>,
     pub partial: String,
 }
 
@@ -162,6 +166,23 @@ pub struct Status {
     /// "My voice": a recording is saved for the signed-in person.
     #[serde(default)]
     pub own_voice_ready: bool,
+    /// Automatic call recording: the call being recorded now (`None` = none).
+    #[serde(default)]
+    pub recording: Option<RecordingWire>,
+    /// How calls are being found right now, in one line (Call recording tab).
+    #[serde(default)]
+    pub record_signal: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct RecordingWire {
+    /// Where the call is ("eyeBeam", "VICIdial", ...).
+    pub app: String,
+    pub secs: u32,
+    /// On hold: nothing is being written.
+    pub paused: bool,
+    /// The caller's side is reaching ClearSpeak (false: only the agent is recorded).
+    pub caller_side: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -379,6 +400,17 @@ mod tests {
         }
         assert!(matches!(read_msg::<_, ClientMsg>(&mut r).unwrap(), Some(ClientMsg::SetDevice { role: 4, .. })));
         assert!(read_msg::<_, ClientMsg>(&mut r).unwrap().is_none(), "end of stream is None, not an error");
+    }
+
+    #[test]
+    fn transcript_sides_cross_the_wire_and_an_older_engine_means_agent() {
+        let t = TranscriptWire { new_lines: vec![(5, "hi".into()), (7, "hello".into())], new_sides: vec![0, 1], ..Default::default() };
+        let back: TranscriptWire = serde_json::from_slice(&serde_json::to_vec(&t).unwrap()).unwrap();
+        assert_eq!(back.new_sides, [0, 1]);
+        let mut old = serde_json::to_value(&t).unwrap();
+        old.as_object_mut().unwrap().remove("new_sides");
+        let back: TranscriptWire = serde_json::from_value(old).unwrap();
+        assert!(back.new_sides.is_empty(), "no sides from an older engine: the window treats every line as Agent");
     }
 
     #[test]

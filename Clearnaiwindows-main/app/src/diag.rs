@@ -55,7 +55,28 @@ pub fn role_name(role: u8) -> &'static str {
 
 /// Settings keys that are personal or secret: never written to the log.
 fn private_key(key: &str) -> bool {
-    key.contains("license") || key.contains("email") || key.starts_with("user_") || key.contains("password")
+    key.contains("license")
+        || key.contains("email")
+        || key.starts_with("user_")
+        || key.contains("password")
+        // The dialer's address, API user and password, and the agent's dialer ID.
+        || key.starts_with("vicidial_")
+}
+
+#[cfg(test)]
+mod private_key_tests {
+    #[test]
+    fn dialer_credentials_never_reach_the_log() {
+        let old = crate::settings::Settings::default();
+        let mut new = old.clone();
+        new.vicidial_api_pass = "s3cret".into();
+        new.vicidial_api_user = "apiuser".into();
+        new.vicidial_url = "http://dialer/vicidial/non_agent_api.php".into();
+        new.record_calls = false;
+        let diff = super::settings_diff(&old, &new).join("\n") + &super::settings_line(&new);
+        assert!(!diff.contains("s3cret") && !diff.contains("apiuser") && !diff.contains("dialer"), "{diff}");
+        assert!(diff.contains("record_calls: true -> false"), "{diff}");
+    }
 }
 
 fn as_map(s: &Settings) -> serde_json::Map<String, serde_json::Value> {

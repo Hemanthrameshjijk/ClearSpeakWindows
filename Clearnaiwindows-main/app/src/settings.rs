@@ -222,6 +222,31 @@ pub struct Settings {
     /// Live transcript (speech-to-text of your own mic). Default OFF; `#[serde(default)]` keeps older files loading.
     #[serde(default)]
     pub transcript_on: bool,
+    /// Saved transcripts older than this many days are deleted (0 = keep forever). Older files: 30.
+    #[serde(default = "default_transcript_keep_days")]
+    pub transcript_keep_days: u32,
+    /// Automatic call recording: every call is recorded (stereo WAV, agent left / caller right) and transcribed to
+    /// its own files, starting and stopping with the call (`call_session`). Default ON, also for older files.
+    #[serde(default = "default_true")]
+    pub record_calls: bool,
+    /// How a call's start and end are found (Call recording tab): 1 = the VICIdial agent screen in the browser (no
+    /// password), 2 = the caller's voice (falls back to the microphone), 3 = the VICIdial API (needs an API user and
+    /// password). See `call_session::METHOD_*`. Default 2.
+    #[serde(default = "default_record_method")]
+    pub record_method: u8,
+    /// VICIdial (agents logged in all shift on one eyeBeam line): with these set, a recording starts when VICIdial
+    /// puts a customer through to this agent and stops when that customer is gone, named with the customer's
+    /// number. Empty URL = not used. Example URL: `http://dialer.local/vicidial/non_agent_api.php`.
+    #[serde(default)]
+    pub vicidial_url: String,
+    /// The API user (Non-Agent API access) and its password, stored encrypted (`dpapi::protect`).
+    #[serde(default)]
+    pub vicidial_api_user: String,
+    #[serde(default)]
+    pub vicidial_api_pass: String,
+    /// This agent's VICIdial user ID.
+    #[serde(default)]
+    pub vicidial_agent_user: String,
     /// Compact ("collapsed") window: a small always-on-top bar with the main switches. Default OFF (full window);
     /// `#[serde(default)]` keeps older files loading.
     #[serde(default)]
@@ -250,6 +275,14 @@ impl Settings {
     pub fn accent_effective_voice(&self) -> u8 {
         if self.accent_on { self.accent_voice_index() } else { 0 }
     }
+}
+
+fn default_transcript_keep_days() -> u32 {
+    crate::transcript_files::DEFAULT_KEEP_DAYS
+}
+
+fn default_record_method() -> u8 {
+    crate::call_session::METHOD_VOICE
 }
 
 fn default_true() -> bool {
@@ -337,6 +370,13 @@ impl Default for Settings {
             accent_voice_auto: true,
             accent_own_voice: false,
             transcript_on: false,
+            transcript_keep_days: crate::transcript_files::DEFAULT_KEEP_DAYS,
+            record_calls: true,
+            record_method: crate::call_session::METHOD_VOICE,
+            vicidial_url: String::new(),
+            vicidial_api_user: String::new(),
+            vicidial_api_pass: String::new(),
+            vicidial_agent_user: String::new(),
             compact_mode: false,
             theme_dark: false,
             start_with_windows: false,

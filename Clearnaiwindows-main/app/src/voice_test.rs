@@ -561,24 +561,7 @@ pub fn level_match(x: &mut [f32]) {
 
 /// 16-bit PCM mono WAV at 48 kHz.
 pub fn write_wav(path: &Path, x: &[f32]) -> std::io::Result<()> {
-    let data_len = (x.len() * 2) as u32;
-    let mut b = Vec::with_capacity(44 + x.len() * 2);
-    b.extend_from_slice(b"RIFF");
-    b.extend_from_slice(&(36 + data_len).to_le_bytes());
-    b.extend_from_slice(b"WAVEfmt ");
-    b.extend_from_slice(&16u32.to_le_bytes());
-    b.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    b.extend_from_slice(&1u16.to_le_bytes()); // mono
-    b.extend_from_slice(&(SR as u32).to_le_bytes());
-    b.extend_from_slice(&(SR as u32 * 2).to_le_bytes());
-    b.extend_from_slice(&2u16.to_le_bytes());
-    b.extend_from_slice(&16u16.to_le_bytes());
-    b.extend_from_slice(b"data");
-    b.extend_from_slice(&data_len.to_le_bytes());
-    for v in x {
-        b.extend_from_slice(&((v.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
-    }
-    std::fs::write(path, b)
+    crate::wav::write_mono(path, SR as u32, x)
 }
 
 /// The BVC stage the user has chosen (Hush when the choice is Off, since the test is about hearing BVC).

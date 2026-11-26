@@ -10,3 +10,7 @@ realfft = "3"
 # init_ort / make_session helpers.
 accent-onnx = { path = "../accent-onnx" }
 dsp-core = { path = "../dsp-core" }
+
+[dev-dependencies]
+# Voice fingerprints (ECAPA) for the diarize_file example.
+gender = { path = "../gender" }

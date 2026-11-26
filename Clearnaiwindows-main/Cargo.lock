@@ -241,6 +241,7 @@ version = "0.1.0"
 dependencies = [
  "accent-onnx",
  "dsp-core",
+ "gender",
  "ort",
  "realfft",
 ]

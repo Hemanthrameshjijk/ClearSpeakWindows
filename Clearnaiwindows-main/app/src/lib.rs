@@ -15,6 +15,8 @@
 //! and test anywhere. `engine`, `host` and the pipe halves of `ipc`/`remote` only exist on Windows.
 
 pub mod call_log;
+pub mod call_recorder;
+pub mod call_session;
 pub mod clock_guard;
 pub mod crash;
 pub mod dev_code;
@@ -36,9 +38,13 @@ pub mod shared;
 pub mod status_ui;
 pub mod sysutil;
 pub mod tray;
+pub mod transcript_files;
 pub mod ui_logic;
+pub mod vicidial;
+pub mod vicidial_screen;
 pub mod voice_test;
 pub mod voice_auto;
+pub mod wav;
 
 #[cfg(windows)]
 pub mod driver_pipe;

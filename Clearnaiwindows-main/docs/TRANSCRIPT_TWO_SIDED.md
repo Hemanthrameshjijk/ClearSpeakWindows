@@ -1,6 +1,27 @@
 # Two-sided transcript (Agent + Caller) — design
 
-Status: **proposal, not built.** Jira: KRIS-58 (decide whether transcript is in the product), KRIS-59 (caller audio and
+Status: **built, not yet tested on a live call** (2026-11-26). What differs from the proposal below:
+
+- Built: caller tap (after the caller cleanup, before studio), one worker and model for both sides, Agent / Caller
+  labels, echo guard, Transcript tab in two colours (caller lines in the primary colour), copy / export / search keep
+  the labels, one `.txt` file per call (`YYYY-MM-DD_HH-MM-SS_call.txt`; a new file after 2 min of quiet or when the
+  transcript is switched off). Tests: `asr-onnx` `two_sides_are_labelled_and_echo_is_dropped` (real model: order,
+  labels, a -20 dB leak dropped), `call_file_tests`, `echo_guard_tests`; app `ipc` / `ui_logic` side tests.
+- Load (decision 7): no "[transcript paused]" gap. A busy PC queues sentences of both sides and transcribes them
+  later (up to 10 min), so nothing is lost.
+- Line times are when the sentence ended, taken from the audio itself (how much is still queued), so they stay right
+  when the PC was busy. Known limit: when both talk at once, a caller line can be written a second or two before
+  an agent line that ended earlier (the echo guard needs the caller's words first).
+- Echo guard: a dropped Agent sentence must be covered ≥50% by caller speech >6 dB louder **and** repeat ≥60% of
+  that caller's words (≥2 words). The mic and call levels come through unrelated chains, so the level alone could
+  drop a quiet headset's real replies.
+- Also built: `.jsonl` copy of each call file, "Keep saved transcripts" (7 / 30 / 90 days / forever, default 30;
+  applied at start and when changed), "Delete all" (second press within 10 s; only files the app wrote).
+- Not built yet: the BPO sign-off on storing call text (KRIS-60), the ClearNAI
+  Speaker endpoint (KRIS-51; caller audio still needs the call app's speaker on the second cable), the live 10-minute
+  test call.
+
+Jira: KRIS-58 (decide whether transcript is in the product), KRIS-59 (caller audio and
 Agent/Caller labels), KRIS-60 (model in the installer, privacy), KRIS-51 (caller audio through the ClearNAI Speaker
 endpoint).
 

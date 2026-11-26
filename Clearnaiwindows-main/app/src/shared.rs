@@ -393,6 +393,8 @@ pub struct EngineHandles {
     pub accent: accent_onnx::pipeline::AccentHandle,
     /// Live transcript (lines + status). Inert until the real engine replaces it.
     pub transcript: asr_onnx::pipeline::TranscriptHandle,
+    /// Call audio recording (one stereo WAV per call). Inert until the real engine replaces it.
+    pub recorder: crate::call_recorder::CallRecorder,
     /// Accent voice "Auto": what the engine's male / female detector says (mirrored to the window).
     pub voice_auto: Arc<VoiceAuto>,
     pub latency_log: Arc<LatencyLog>,
@@ -489,6 +491,7 @@ impl EngineHandles {
             mic_bpo_v1_status: None,
             accent: accent_onnx::pipeline::AccentHandle::unavailable("accent engine not started"),
             transcript: asr_onnx::pipeline::TranscriptHandle::unavailable("transcript engine not started"),
+            recorder: crate::call_recorder::CallRecorder::default(),
             voice_auto: Arc::new(VoiceAuto::default()),
             warnings: Arc::new(warnings),
             latency_log: Arc::new(LatencyLog::new(1024)),
@@ -575,6 +578,10 @@ pub struct RemoteLive {
     pub connected: std::sync::atomic::AtomicBool,
     /// The engine said it is quitting.
     pub shutdown: std::sync::atomic::AtomicBool,
+    /// The call the engine is recording now (automatic call recording).
+    pub recording: std::sync::Mutex<Option<crate::ipc::RecordingWire>>,
+    /// How the engine is finding calls right now, in one line.
+    pub record_signal: std::sync::Mutex<String>,
 }
 
 impl RemoteLive {
@@ -585,7 +592,21 @@ impl RemoteLive {
             cpu_tenths: std::sync::atomic::AtomicU32::new(u32::MAX),
             connected: std::sync::atomic::AtomicBool::new(true),
             shutdown: std::sync::atomic::AtomicBool::new(false),
+            recording: Default::default(),
+            record_signal: Default::default(),
         }
+    }
+}
+
+impl EngineHandles {
+    /// The call being recorded now, as the window knows it.
+    pub fn recording(&self) -> Option<crate::ipc::RecordingWire> {
+        self.remote.as_ref().and_then(|r| r.recording.lock().unwrap().clone())
+    }
+
+    /// How the engine is finding calls right now (empty until it has said).
+    pub fn record_signal(&self) -> String {
+        self.remote.as_ref().map(|r| r.record_signal.lock().unwrap().clone()).unwrap_or_default()
     }
 }
 

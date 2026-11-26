@@ -44,6 +44,9 @@ pub struct Segmenter {
     speech_frames: usize,
     noise: f32,
     last_partial_len: usize,
+    /// Samples taken in as whole frames so far, and where (in those samples) the last `Final` ended.
+    fed: usize,
+    last_end: usize,
 }
 
 impl Default for Segmenter {
@@ -65,11 +68,25 @@ impl Segmenter {
             speech_frames: 0,
             noise: NOISE_MIN,
             last_partial_len: 0,
+            fed: 0,
+            last_end: 0,
         }
     }
 
     pub fn reset(&mut self) {
         *self = Self::new();
+    }
+
+    /// Where the last [`Event::Final`] ended, in samples since the start (or the last reset). Its start is this minus
+    /// its length. Push at most one frame at a time when you need this for every segment.
+    pub fn last_final_end(&self) -> usize {
+        self.last_end
+    }
+
+    /// Samples taken in as whole 20 ms frames since the start (or the last reset): with [`Self::last_final_end`],
+    /// how far back the last finished segment ended.
+    pub fn fed(&self) -> usize {
+        self.fed
     }
 
     pub fn in_speech(&self) -> bool {
@@ -93,6 +110,7 @@ impl Segmenter {
         let drop_tail = self.silence.saturating_sub(KEEP_TAIL_FRAMES) * FRAME;
         let keep = self.buf.len().saturating_sub(drop_tail);
         self.buf.truncate(keep);
+        self.last_end = self.fed - drop_tail;
         if self.speech_frames >= MIN_SPEECH_FRAMES {
             events.push(Event::Final(std::mem::take(&mut self.buf)));
         }
@@ -119,6 +137,7 @@ impl Segmenter {
         }
         let rest = self.buf.split_off(cut * FRAME);
         let rest_levels = self.levels.split_off(cut);
+        self.last_end = self.fed - rest.len();
         events.push(Event::Final(std::mem::replace(&mut self.buf, rest)));
         self.levels = rest_levels;
         // The remainder is still speech in progress.
@@ -128,6 +147,7 @@ impl Segmenter {
     }
 
     fn frame(&mut self, frame: Vec<f32>, events: &mut Vec<Event>) {
+        self.fed += frame.len();
         let rms = frame_rms(&frame);
         let thr = (self.noise * 3.0).max(MIN_THRESHOLD);
         let loud = rms > thr;

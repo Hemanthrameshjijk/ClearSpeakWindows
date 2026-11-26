@@ -62,14 +62,25 @@ impl AsrModel {
 
     /// Speech -> lowercase text (no punctuation). Empty string for silence / too-short audio.
     pub fn transcribe(&mut self, audio16: &[f32]) -> Result<String, String> {
+        let ids = self.frame_ids(audio16)?;
+        Ok(self.detokenize(&ids))
+    }
+
+    /// Like [`transcribe`](Self::transcribe), but word by word with times (seconds from the start of `audio16`).
+    pub fn transcribe_words(&mut self, audio16: &[f32]) -> Result<Vec<Word>, String> {
+        let ids = self.frame_ids(audio16)?;
+        Ok(words_with_times(&self.vocab, &ids))
+    }
+
+    /// Greedy token id per 80 ms output frame for the whole of `audio16` (long audio decoded in windows).
+    fn frame_ids(&mut self, audio16: &[f32]) -> Result<Vec<usize>, String> {
         // Per-feature normalisation turns near-silence into confident nonsense ("yeah"), so skip it outright.
         if audio16.iter().fold(0.0f32, |m, v| m.max(v.abs())) < 1e-3 {
-            return Ok(String::new());
+            return Ok(Vec::new());
         }
         let total = audio16.len() as f64 / SR;
         if total <= SINGLE_PASS_MAX_S {
-            let ids = self.token_ids(audio16)?;
-            return Ok(self.detokenize(&ids));
+            return self.token_ids(audio16);
         }
         let mut kept: Vec<usize> = Vec::new();
         let mut pos = 0.0f64;
@@ -80,9 +91,12 @@ impl AsrModel {
             let f0 = (((pos - w0) / TOKEN_S).round() as usize).min(ids.len());
             let f1 = (((core_end - w0) / TOKEN_S).round() as usize).min(ids.len());
             kept.extend_from_slice(&ids[f0..f1]);
+            // Keep the frame count in step with time even if a window came back a frame short.
+            let want = ((core_end / TOKEN_S).round() as usize).max(kept.len());
+            kept.resize(want, BLANK);
             pos = core_end;
         }
-        Ok(self.detokenize(&kept))
+        Ok(kept)
     }
 
     /// Greedy per-frame token ids (CTC, before collapsing) for one window of audio.
@@ -121,6 +135,57 @@ impl AsrModel {
     }
 }
 
+/// One recognised word and when it was said (seconds).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Word {
+    pub text: String,
+    pub start: f32,
+    pub end: f32,
+}
+
+/// CTC collapse + word-piece join, keeping each word's first and last frame. Gives the same words as
+/// [`join_pieces`].
+fn words_with_times(vocab: &[String], ids: &[usize]) -> Vec<Word> {
+    let mut words: Vec<Word> = Vec::new();
+    let mut open = false; // the last word can still take "##" pieces
+    let mut prev = usize::MAX;
+    for (f, &i) in ids.iter().enumerate() {
+        let (t0, t1) = (f as f32 * TOKEN_S as f32, (f + 1) as f32 * TOKEN_S as f32);
+        if i == prev && open && i != BLANK {
+            if let Some(w) = words.last_mut() {
+                w.end = t1; // the same token held over several frames
+            }
+        }
+        if i != prev && i != BLANK && i != 0 && i < vocab.len() {
+            let tok = &vocab[i];
+            match tok.strip_prefix("##") {
+                Some(rest) if open => {
+                    let w = words.last_mut().unwrap();
+                    w.text.push_str(rest);
+                    w.end = t1;
+                }
+                Some(rest) => {
+                    words.push(Word { text: rest.to_string(), start: t0, end: t1 });
+                    open = true;
+                }
+                None => {
+                    words.push(Word { text: tok.to_string(), start: t0, end: t1 });
+                    open = true;
+                }
+            }
+        }
+        prev = i;
+    }
+    // A bare "▁" (or one inside a piece) is only a word break, never a word.
+    let mut out = Vec::with_capacity(words.len());
+    for w in words {
+        for part in w.text.split(|c: char| c.is_whitespace() || c == '\u{2581}').filter(|p| !p.is_empty()) {
+            out.push(Word { text: part.to_string(), start: w.start, end: w.end });
+        }
+    }
+    out
+}
+
 fn join_pieces(vocab: &[String], ids: &[usize]) -> String {
     let mut text = String::new();
     let mut prev = usize::MAX;
@@ -154,5 +219,21 @@ mod tests {
         // hello + ##s -> "hellos"; "▁" then "##ch" must not give "▁ch"; a trailing bare "▁" must vanish.
         assert_eq!(join_pieces(&vocab, &[1, 2, 3, 4, 5, 3]), "hellos ch world");
         assert_eq!(join_pieces(&vocab, &[1, 1, BLANK, 1, 5]), "hello hello world"); // CTC: repeats collapse, a blank splits them
+    }
+
+    #[test]
+    fn words_carry_their_times_and_match_the_plain_text() {
+        let vocab: Vec<String> = ["<unk>", "hello", "##s", "\u{2581}", "##ch", "world"].iter().map(|s| s.to_string()).collect();
+        let b = BLANK;
+        // frame: 0 hello, 1 hello, 2 ##s, 3 blank, 4 blank, 5 ▁, 6 ##ch, 7 blank, 8 world, 9 blank
+        let ids = [1, 1, 2, b, b, 3, 4, b, 5, b];
+        let w = words_with_times(&vocab, &ids);
+        let text: Vec<&str> = w.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(text.join(" "), join_pieces(&vocab, &ids));
+        assert_eq!(text, ["hellos", "ch", "world"]);
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        assert!(close(w[0].start, 0.0) && close(w[0].end, 0.24), "{:?}", w[0]);
+        assert!(close(w[1].start, 0.40) && close(w[1].end, 0.56), "{:?}", w[1]);
+        assert!(close(w[2].start, 0.64) && close(w[2].end, 0.72), "{:?}", w[2]);
     }
 }

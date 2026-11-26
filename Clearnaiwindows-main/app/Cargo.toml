@@ -93,7 +93,7 @@ iced = { version = "0.14", features = ["tokio", "svg", "image"] }
 # `wasapi::initialize_mta()` COM-init probe, matching the exact `windows`/
 # `wasapi` versions already pulled in transitively by `audio-io` (see
 # `crates/audio-io/Cargo.toml`) to avoid duplicate incompatible versions.
-windows = { version = "0.62", features = ["Wdk_System_SystemServices", "Wdk_Foundation", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Ioctl"] }
+windows = { version = "0.62", features = ["Wdk_System_SystemServices", "Wdk_Foundation", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Ioctl", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility", "Win32_Media_Audio", "Win32_System_Com_StructuredStorage", "Win32_System_Threading"] }
 wasapi = "0.24"
 # System-tray icon for the "Minimize to tray" setting (see `src/tray.rs`). Exact pin: published 2026-10-07.
 tray-icon = { version = "=0.26.1", default-features = false }

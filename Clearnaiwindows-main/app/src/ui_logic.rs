@@ -121,6 +121,7 @@ pub enum Tab {
     Microphone,
     CallAudio,
     Transcript,
+    Recording,
     Devices,
     Advanced,
     /// Reached from the sidebar's profile entry; not in the navigation list.
@@ -128,7 +129,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [Tab::Home, Tab::Microphone, Tab::CallAudio, Tab::Transcript, Tab::Devices, Tab::Advanced];
+    pub const ALL: [Tab; 7] = [Tab::Home, Tab::Microphone, Tab::CallAudio, Tab::Transcript, Tab::Recording, Tab::Devices, Tab::Advanced];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -136,6 +137,7 @@ impl Tab {
             Tab::Microphone => "Microphone",
             Tab::CallAudio => "Call audio",
             Tab::Transcript => "Transcript",
+            Tab::Recording => "Call recording",
             Tab::Devices => "Devices",
             Tab::Advanced => "Advanced",
             Tab::Profile => "Profile",
@@ -359,6 +361,11 @@ impl Calibration {
         let i = ((sorted.len() as f32) * 0.8) as usize;
         Some(sorted[i.min(sorted.len() - 1)])
     }
+}
+
+/// Lines as `(time, "Agent: text")`: the side stays with the text in search, copy and export.
+pub fn labelled_lines(lines: &[asr_onnx::pipeline::TranscriptLine]) -> Vec<(u32, String)> {
+    lines.iter().map(|l| (l.at_secs, format!("{}: {}", l.side.label(), l.text))).collect()
 }
 
 /// Case-insensitive substring filter; an empty (or blank) query keeps every line.
@@ -910,6 +917,20 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[1].0, 3);
         assert!(filter_lines(&lines, "zzz").is_empty());
+    }
+
+    #[test]
+    fn exported_and_searched_lines_keep_who_said_them() {
+        use asr_onnx::pipeline::{Side, TranscriptLine};
+        let lines = [
+            TranscriptLine { at_secs: 12, side: Side::Agent, text: "how can i help".into() },
+            TranscriptLine { at_secs: 15, side: Side::Caller, text: "my internet is down".into() },
+        ];
+        let l = labelled_lines(&lines);
+        assert_eq!(format_transcript(&l), "[00:12] Agent: how can i help
+[00:15] Caller: my internet is down
+");
+        assert_eq!(filter_lines(&l, "caller").len(), 1, "search finds a side");
     }
 
     #[test]

@@ -167,12 +167,222 @@ struct Host {
     /// Every connected window, so a quit can tell them all.
     writers: Mutex<Vec<SharedWriter>>,
     cpu_tenths: AtomicU32,
+    /// The call being recorded now (shown in the window); its seconds come from the recorder.
+    recording: Mutex<Option<ipc::RecordingWire>>,
+    /// One line about how calls are being found (Call recording tab).
+    record_signal: Mutex<String>,
+}
+
+/// Automatic call recording, once a second on the engine's tick thread: asks `call_session` what to do and does it
+/// (recorder, transcript, log). The caller's number goes into the file names and the transcript header only, never
+/// into the log.
+#[derive(Default)]
+struct AutoRecord {
+    session: crate::call_session::Session,
+    vicidial: crate::vicidial::VicidialWatch,
+    screen: crate::vicidial_screen::ScreenWatch,
+    /// Calls of the softphone alone ("eyeBeam call" method): other apps using the mic are not calls.
+    softphone_calls: crate::call_log::CallTracker,
+    armed: Option<bool>,
+    method: Option<u8>,
+    /// The transcript was switched on for the calls (not by the agent): it goes off again after the call.
+    transcript_auto: bool,
+    transcript_off_from: Option<std::time::Instant>,
+    /// Time stamp of the call being recorded, for the log.
+    stamp: String,
+    password_checked: bool,
+    /// Recording was switched off: the transcript leaves call mode only once the last call's lines are written.
+    call_mode_off_pending: bool,
+}
+
+impl AutoRecord {
+    fn second(&mut self, host: &Host, calls: &mut crate::call_log::CallTracker, apps: &[String]) {
+        let h = &host.handles;
+        if !self.password_checked {
+            self.password_checked = true;
+            protect_vicidial_password(host);
+        }
+        let settings = host.settings.lock().unwrap().clone();
+        let on = settings.record_calls;
+        if self.armed != Some(on) {
+            self.armed = Some(on);
+            h.recorder.set_armed(on);
+            h.transcript.set_preload(on);
+            if on {
+                h.transcript.set_call_mode(true);
+            }
+            // Off: call mode stays until the current call's last lines are written (see the end of this function).
+            self.call_mode_off_pending = !on;
+            crate::log_info!("[call] automatic call recording: {}", if on { "on" } else { "off" });
+        }
+        use crate::call_session::{METHOD_API, METHOD_SCREEN};
+        let method = settings.record_method;
+        if self.method != Some(method) {
+            // Changed mid-call: the new method's signals cannot end a call the old one started, so end it now.
+            if self.method.is_some() {
+                for a in self.session.stop_now() {
+                    self.apply(host, a);
+                }
+            }
+            self.method = Some(method);
+            crate::log_info!("[call] calls are found by: {}", crate::call_session::method_name(method));
+        }
+        let api_cfg = crate::vicidial::Config::from_settings(&settings);
+        let api_set_up = api_cfg.is_some();
+        self.vicidial.set_config(if on && method == METHOD_API { api_cfg } else { None });
+        self.screen.set_on(on && method == METHOD_SCREEN);
+        let all_events = calls.take_events();
+        // The softphone's own calls, for the "eyeBeam call" method (its log lines are already written by `calls`).
+        let softphone_apps: Vec<String> = apps.iter().filter(|a| crate::call_session::is_softphone(a)).cloned().collect();
+        let _ = self.softphone_calls.tick(&softphone_apps, Vec::new(), "");
+        let softphone_events = self.softphone_calls.take_events();
+        let eyebeam = method == crate::call_session::METHOD_EYEBEAM;
+        let vstate = match method {
+            METHOD_SCREEN => self.screen.state(),
+            METHOD_API => self.vicidial.state(),
+            _ => None,
+        };
+        let routed = h.recorder.caller_audio_flowing();
+        *host.record_signal.lock().unwrap() = if eyebeam && on {
+            if self.softphone_calls.in_call() {
+                "eyeBeam call in progress.".into()
+            } else {
+                "Waiting for an eyeBeam call (noticed when eyeBeam opens the microphone).".into()
+            }
+        } else {
+            signal_line(on, method, api_set_up, vstate.as_ref(), routed)
+        };
+        let actions = self.session.tick(&crate::call_session::Inputs {
+            record_calls: on,
+            mic_events: if eyebeam { &softphone_events } else { &all_events },
+            mic_in_call: if eyebeam { self.softphone_calls.in_call() } else { calls.in_call() },
+            mic_apps: if eyebeam { &softphone_apps } else { apps },
+            vicidial: vstate.as_ref(),
+            // eyeBeam's own start and end decide; the caller side is still recorded when it is routed.
+            caller_routed: routed && !eyebeam,
+            caller_heard_secs_ago: h.recorder.caller_heard_secs_ago(),
+        });
+        for a in actions {
+            self.apply(host, a);
+        }
+        // After the call: the transcript goes off once its last sentence is written (or after a minute at most).
+        if let Some(t0) = self.transcript_off_from {
+            let waited = t0.elapsed();
+            if (waited >= Duration::from_secs(3) && h.transcript.pending() == 0) || waited >= Duration::from_secs(60) {
+                self.transcript_off_from = None;
+                // Not if the agent switched the live transcript on meanwhile.
+                if std::mem::take(&mut self.transcript_auto) && !settings.transcript_on {
+                    h.transcript.set_enabled(false);
+                }
+            }
+        }
+        if self.call_mode_off_pending && self.transcript_off_from.is_none() && !self.session.recording() && h.transcript.pending() == 0 {
+            self.call_mode_off_pending = false;
+            h.transcript.set_call_mode(false);
+        }
+    }
+
+    fn apply(&mut self, host: &Host, action: crate::call_session::Action) {
+        use crate::call_session::Action;
+        let h = &host.handles;
+        let mut wire = host.recording.lock().unwrap();
+        match action {
+            Action::Start { app, number, pre_roll_secs } => {
+                self.stamp = asr_onnx::pipeline::local_stamp();
+                let dir = setup::app_data_dir().join("transcripts");
+                let stem = dir.join(crate::call_session::file_stem(&self.stamp, &app, number.as_deref()));
+                h.recorder.start(asr_onnx::pipeline::stem_with(&stem, "wav"), pre_roll_secs);
+                let mut header = format!("Call {}  App: {app}", self.stamp);
+                if let Some(n) = &number {
+                    header.push_str(&format!("  Caller: {n}"));
+                }
+                // Timed like the WAV: from the start of its pre-roll.
+                h.transcript.begin_call(stem, &header, pre_roll_secs as u32);
+                self.transcript_off_from = None;
+                if !h.transcript.enabled() {
+                    h.transcript.set_enabled(true);
+                    self.transcript_auto = true;
+                }
+                let caller_side = h.recorder.caller_audio_flowing();
+                crate::log_info!(
+                    "[call] recording started: {} in {app}, {}{}",
+                    self.stamp,
+                    if number.is_some() { "caller's number known" } else { "no caller number" },
+                    if caller_side { "" } else { " - call audio does not reach ClearSpeak, so only the agent's side is recorded" }
+                );
+                *wire = Some(ipc::RecordingWire { app, secs: 0, paused: false, caller_side });
+            }
+            Action::Pause => {
+                h.recorder.pause();
+                h.transcript.pause_call();
+                crate::log_info!("[call] recording paused (on hold): {}", self.stamp);
+                if let Some(w) = wire.as_mut() {
+                    w.paused = true;
+                }
+            }
+            Action::Resume => {
+                h.recorder.resume();
+                h.transcript.resume_call();
+                crate::log_info!("[call] recording resumed: {}", self.stamp);
+                if let Some(w) = wire.as_mut() {
+                    w.paused = false;
+                }
+            }
+            Action::Stop => {
+                h.recorder.stop();
+                h.transcript.end_call();
+                crate::log_info!("[call] recording stopped: {}", self.stamp);
+                if self.transcript_auto {
+                    self.transcript_off_from = Some(std::time::Instant::now());
+                }
+                *wire = None;
+            }
+        }
+    }
+}
+
+/// What the Call recording tab says about the chosen method right now.
+fn signal_line(on: bool, method: u8, api_set_up: bool, state: Option<&crate::vicidial::AgentState>, routed: bool) -> String {
+    use crate::call_session::{METHOD_API, METHOD_SCREEN};
+    use crate::vicidial::AgentState;
+    if !on {
+        return "Off: calls are not recorded.".into();
+    }
+    let fallback = if routed {
+        "the caller's voice is used meanwhile"
+    } else {
+        "the microphone is used meanwhile (call audio is not set up)"
+    };
+    match (method, state) {
+        (METHOD_SCREEN | METHOD_API, Some(AgentState::InCall { .. })) => "VICIdial: customer connected.".into(),
+        (METHOD_SCREEN | METHOD_API, Some(AgentState::NoCustomer(_))) => "VICIdial: waiting for a customer.".into(),
+        (METHOD_SCREEN, None) => format!("VICIdial page not found - open it in the browser, on the visible tab; {fallback}."),
+        (METHOD_API, None) if !api_set_up => format!("VICIdial API not set up - fill in all four fields; {fallback}."),
+        (METHOD_API, None) => format!("VICIdial is not answering; {fallback}."),
+        _ if routed => "Call audio reaches ClearSpeak: a recording starts when the caller is heard.".into(),
+        _ => "Call audio is not set up: a recording starts when a call app opens the microphone (only your side is recorded).".into(),
+    }
+}
+
+/// An admin may type the VICIdial API password into settings.json as plain text: encrypt it for this Windows user.
+fn protect_vicidial_password(host: &Host) {
+    let mut s = host.settings.lock().unwrap();
+    if s.vicidial_api_pass.is_empty() || s.vicidial_api_pass.starts_with("dpapi1:") {
+        return;
+    }
+    s.vicidial_api_pass = crate::dpapi::protect(&s.vicidial_api_pass);
+    match settings::save(&s) {
+        Ok(()) => crate::log_info!("[vicidial] API password encrypted in the settings file"),
+        Err(e) => crate::log_error!("[vicidial] could not save the encrypted API password: {e:#}"),
+    }
 }
 
 /// What this connection has already been told about the transcript.
 #[derive(Default)]
 struct TxState {
     sent_lines: usize,
+    /// The transcript's clear count when lines were last sent.
+    clear_gen: u32,
 }
 
 impl Host {
@@ -222,15 +432,21 @@ impl Host {
             rtf: ts.rtf,
             ..Default::default()
         };
-        if ts.line_count < tx.sent_lines {
-            // The transcript was cleared (or restarted): tell the window to start over.
-            transcript.reset = true;
+        let gen = h.transcript.clear_gen();
+        let mut taken = h.transcript.since(tx.sent_lines);
+        // A clear: the count went down, or (when many new lines came in since) the clear count moved.
+        if taken.0 < tx.sent_lines || gen != tx.clear_gen {
+            tx.clear_gen = gen;
             tx.sent_lines = 0;
+            // The transcript was cleared (or restarted): tell the window to start over, with everything there is now.
+            transcript.reset = true;
+            taken = h.transcript.since(0);
         }
-        let (lines, partial) = h.transcript.snapshot(ts.line_count - tx.sent_lines);
+        let (total, lines, partial) = taken;
+        transcript.new_sides = lines.iter().map(|l| l.side.to_u8()).collect();
         transcript.new_lines = lines.into_iter().map(|l| (l.at_secs, l.text)).collect();
         transcript.partial = partial;
-        tx.sent_lines = ts.line_count;
+        tx.sent_lines = total;
 
         let cpu = self.cpu_tenths.load(Ordering::Relaxed);
         Status {
@@ -275,6 +491,11 @@ impl Host {
                 shocks: h.exposure.shocks.load(Ordering::Relaxed),
                 volume_known: h.exposure.volume_known.load(Ordering::Relaxed),
             },
+            recording: self.recording.lock().unwrap().clone().map(|mut r| {
+                r.secs = h.recorder.recording_secs().unwrap_or(0);
+                r
+            }),
+            record_signal: self.record_signal.lock().unwrap().clone(),
         }
     }
 
@@ -359,6 +580,8 @@ impl Host {
     /// Tells every window to close, then ends the process at once (see `sysutil::terminate_process`).
     fn quit(&self) -> ! {
         crate::log_info!("[clearspeakrt] engine quitting");
+        // A call being recorded: finish its file so it plays to the end.
+        self.handles.recorder.stop_and_wait(Duration::from_secs(2));
         for w in self.writers.lock().unwrap().iter() {
             let _ = send(w, &ServerMsg::Shutdown);
         }
@@ -663,6 +886,8 @@ pub fn run_engine() {
         bvc_extraction_error: booted.bvc_extraction_error,
         writers: Mutex::new(Vec::new()),
         cpu_tenths: AtomicU32::new(u32::MAX),
+        recording: Mutex::new(None),
+        record_signal: Mutex::new(String::new()),
     });
 
     // Accent voice "Auto": male / female detection picks the matching voice (see `voice_auto`).
@@ -723,6 +948,7 @@ pub fn run_engine() {
             let mut perf_frames = [0u64; 2];
             let mut sys_cpu_prev = crate::sysutil::system_cpu_times_100ns();
             let mut calls = crate::call_log::CallTracker::default();
+            let mut auto_record = AutoRecord::default();
             let mut watch = crate::diag::StateWatch::default();
             let (mut cpu_sum, mut cpu_max, mut cpu_n) = (0.0f32, 0.0f32, 0u32);
             loop {
@@ -755,6 +981,7 @@ pub fn run_engine() {
                     for line in calls.tick(&apps, call_features(&host.handles), &call_stats(&host.handles)) {
                         crate::log_info!("{line}");
                     }
+                    auto_record.second(&host, &mut calls, &apps);
                 }
                 if ticks % 10 == 0 {
                     if let Some(p) = cpu.sample() {

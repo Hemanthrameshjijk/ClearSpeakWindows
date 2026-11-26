@@ -423,7 +423,7 @@ const GRID_MIN: f32 = 960.0;
 pub fn view_full(state: &MainState) -> Element<'_, Message> {
     iced::widget::responsive(move |size| {
         if size.width >= WIDE_MIN {
-            wide_layout(state, size.width >= GRID_MIN, size.width)
+            wide_layout(state, size.width >= GRID_MIN, size.width, size.height)
         } else {
             narrow_layout(state, size.width)
         }
@@ -437,6 +437,7 @@ fn tab_body(state: &MainState, wide: bool, win_w: f32) -> Element<'_, Message> {
         Tab::Microphone => microphone_tab(state, wide),
         Tab::CallAudio => call_audio_tab(state),
         Tab::Transcript => transcript_tab(state),
+        Tab::Recording => recording_tab(state),
         Tab::Devices => devices_tab(state, wide),
         Tab::Advanced => advanced_tab(state, wide),
         Tab::Profile => profile_tab(state),
@@ -450,6 +451,7 @@ fn page_text(tab: Tab) -> (&'static str, &'static str, &'static str) {
         Tab::Microphone => ("MICROPHONE", "Shape what others hear.", "Clean up your voice before it reaches your meeting or call."),
         Tab::CallAudio => ("CALL AUDIO", "Make the caller easier to hear.", "Control incoming audio cleanup separately from your microphone."),
         Tab::Transcript => ("TRANSCRIPT", "Keep the conversation in view.", "Search and save a live transcript from your calls."),
+        Tab::Recording => ("CALL RECORDING", "Every call, recorded on its own.", "Choose how ClearSpeak knows when each call starts and ends."),
         Tab::Devices => ("DEVICES", "Route your audio clearly.", "Choose which devices ClearSpeak should listen to and play through."),
         Tab::Advanced => ("ADVANCED", "Fine-tune your workspace.", "Choose the models, shortcuts, and system behavior that fit your setup."),
         Tab::Profile => ("PROFILE", "Who is using ClearSpeak.", "Your name and license. They stay on this PC."),
@@ -463,6 +465,7 @@ fn nav_hint(tab: Tab) -> &'static str {
         Tab::Microphone => "Voice processing",
         Tab::CallAudio => "Incoming sound",
         Tab::Transcript => "Live captions",
+        Tab::Recording => "Every call saved",
         Tab::Devices => "Audio routing",
         Tab::Advanced => "Fine-tune ClearSpeak",
         Tab::Profile => "Your account",
@@ -476,6 +479,7 @@ fn nav_icon(tab: Tab) -> &'static [u8] {
         Tab::Microphone => icons::MIC,
         Tab::CallAudio => icons::PHONE,
         Tab::Transcript => icons::DOC,
+        Tab::Recording => icons::PHONE,
         Tab::Devices => icons::DEVICES,
         Tab::Advanced => icons::SLIDERS,
         Tab::Profile => icons::USER,
@@ -510,6 +514,12 @@ fn page_action(state: &MainState) -> Element<'_, Message> {
                 chip("Off", ChipKind::Off, dark)
             }
         }
+        Tab::Recording => match state.handles.recording() {
+            Some(r) if r.paused => chip("On hold", ChipKind::Warn, dark),
+            Some(_) => chip("Recording", ChipKind::Bad, dark),
+            None if state.settings.record_calls => chip("Waiting for a call", ChipKind::Ok, dark),
+            None => chip("Off", ChipKind::Off, dark),
+        },
         Tab::Devices => icon_button(super::icons::REFRESH, "Refresh devices", Message::RefreshDevices, style::outline, t.muted_strong),
         Tab::Advanced => chip(if state.settings.profile.is_empty() { "Custom profile" } else { state.settings.profile.as_str() }, ChipKind::Off, dark),
         Tab::Profile => match license_status(state) {
@@ -786,7 +796,11 @@ fn sidebar_row<'a>(icon: &'static [u8], label: &'a str, right: Option<String>, m
     btn(r).width(Length::Fill).padding([9, 10]).on_press(msg).style(style::nav_item(false)).into()
 }
 
-fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message> {
+/// Below this window height the sidebar entries drop their second line, so all of them fit without scrolling (with
+/// both lines only the first four showed at the usual window size, hiding Call recording, Devices and Advanced).
+const NAV_FULL_MIN_H: f32 = 1000.0;
+
+fn wide_layout(state: &MainState, grid: bool, win_w: f32, win_h: f32) -> Element<'_, Message> {
     use super::icons;
     let dark = state.settings.theme_dark;
     let t = style::tokens_for(dark);
@@ -828,21 +842,26 @@ fn wide_layout(state: &MainState, grid: bool, win_w: f32) -> Element<'_, Message
     .width(Length::Fill)
     .style(style::card);
 
-    let mut nav = column![].spacing(4);
+    let roomy = win_h >= NAV_FULL_MIN_H;
+    let mut nav = column![].spacing(if roomy { 4 } else { 2 });
     for tab in Tab::ALL {
         let current = tab == state.tab;
         let ink = if current { t.primary } else { t.muted_strong };
-        let mut entry = row![
-            glyph_icon(nav_icon(tab), 19.0, ink),
-            column![text(tab.label()).size(14).font(bold()), text(nav_hint(tab)).size(11).color(if current { t.primary } else { t.muted })].spacing(2),
-            container(text("")).width(Length::Fill),
-        ]
-        .spacing(13)
-        .align_y(iced::Alignment::Center);
+        let label: Element<'_, Message> = if roomy {
+            column![text(tab.label()).size(14).font(bold()), text(nav_hint(tab)).size(11).color(if current { t.primary } else { t.muted })]
+                .spacing(2)
+                .into()
+        } else {
+            text(tab.label()).size(14).font(bold()).into()
+        };
+        let mut entry = row![glyph_icon(nav_icon(tab), if roomy { 19.0 } else { 17.0 }, ink), label, container(text("")).width(Length::Fill)]
+            .spacing(13)
+            .align_y(iced::Alignment::Center);
         if current {
             entry = entry.push(glyph_icon(icons::CHEVRON_RIGHT, 15.0, t.primary));
         }
-        nav = nav.push(btn(entry).width(Length::Fill).padding([10, 12]).on_press(Message::SelectTab(tab)).style(style::nav_item(current)));
+        let pad = if roomy { [10, 12] } else { [7, 12] };
+        nav = nav.push(btn(entry).width(Length::Fill).padding(pad).on_press(Message::SelectTab(tab)).style(style::nav_item(current)));
     }
 
     let theme_row = sidebar_row(
@@ -995,7 +1014,9 @@ fn narrow_layout(state: &MainState, win_w: f32) -> Element<'_, Message> {
     column![
         header,
         alert_banner(state),
-        container(tab_bar).padding([0, 12]),
+        // Sideways scrolling: on a narrow window the seven tabs never get cut off.
+        container(scrollable(tab_bar).direction(iced::widget::scrollable::Direction::Horizontal(iced::widget::scrollable::Scrollbar::new().width(3).scroller_width(3))))
+            .padding([0, 12]),
         iced::widget::rule::horizontal(1),
         scrollable(column![body, warning_banner(state)].spacing(18).padding(18)).height(Length::Fill),
     ]
@@ -2338,9 +2359,14 @@ fn transcript_tab(state: &MainState) -> Element<'_, Message> {
     .spacing(24)
     .align_y(iced::Alignment::Center)]
     .spacing(20);
-    if state.settings.transcript_on {
+    // A call being recorded automatically (switched on and set up in the Call recording tab).
+    let recording = state.handles.recording();
+    if let Some(rec) = &recording {
+        col = col.push(recording_line(rec, &t));
+    }
+    if state.settings.transcript_on || recording.is_some() {
         let (lines, partial) = state.handles.transcript.snapshot(500);
-        let all: Vec<(u32, String)> = lines.iter().map(|l| (l.at_secs, l.text.clone())).collect();
+        let all: Vec<(u32, String)> = ui_logic::labelled_lines(&lines);
         let shown = ui_logic::filter_lines(&all, &state.transcript_query);
         let mut body = column![].spacing(7);
         if all.is_empty() && partial.is_empty() {
@@ -2349,7 +2375,9 @@ fn transcript_tab(state: &MainState) -> Element<'_, Message> {
             body = body.push(text("No lines match your search.").size(14).color(t.muted));
         }
         for (secs, line) in shown {
-            body = body.push(text(format!("[{}] {}", asr_onnx::pipeline::fmt_time(*secs), line)).size(14));
+            // Two colours: the caller's lines stand out from the agent's own.
+            let who = if line.starts_with("Caller:") { t.primary } else { t.text };
+            body = body.push(text(format!("[{}] {}", asr_onnx::pipeline::fmt_time(*secs), line)).size(14).color(who));
         }
         if !partial.is_empty() && state.transcript_query.trim().is_empty() {
             body = body.push(text(format!("... {partial}")).size(14).color(t.muted));
@@ -2379,9 +2407,166 @@ fn transcript_tab(state: &MainState) -> Element<'_, Message> {
             )
             .push(text("Saved automatically for this call").size(12).color(t.muted));
     }
+    // Saved files: how long to keep them, and delete them all (works with the transcript on or off).
+    {
+        use crate::transcript_files::{keep_name, KEEP_NAMES};
+        col = col.push(
+            row![
+                text("Keep saved transcripts").size(13).color(t.muted),
+                pick_list(&KEEP_NAMES[..], Some(keep_name(state.settings.transcript_keep_days)), Message::SelectTranscriptKeep)
+                    .width(Length::Fixed(120.0))
+                    .padding([6, 10])
+                    .text_size(13)
+                    .style(style::select),
+                container(text("")).width(Length::Fill),
+                icon_button(
+                    icons::TRASH,
+                    if state.delete_transcripts_armed.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(10)) {
+                        "Confirm delete all"
+                    } else {
+                        "Delete all"
+                    },
+                    Message::DeleteAllTranscripts,
+                    style::danger,
+                    Color::WHITE
+                ),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+        );
+    }
     if let Some(note) = &state.transcript_note {
         col = col.push(text(note.as_str()).size(12).color(t.muted));
     }
+    card(col)
+}
+
+/// "● Recording call in eyeBeam - 02:13" (red), or "● On hold" (amber).
+fn recording_line<'a>(rec: &crate::ipc::RecordingWire, t: &style::Tokens) -> Element<'a, Message> {
+    let (color, what) = if rec.paused { (t.warning, "On hold") } else { (t.danger, "Recording") };
+    row![
+        text("\u{25CF}").size(11).color(color),
+        text(format!("{what} call in {} - {}", rec.app, asr_onnx::pipeline::fmt_time(rec.secs))).size(13).color(color),
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
+
+/// Call recording: on/off, and which of the three ways finds where each call starts and ends.
+fn recording_tab(state: &MainState) -> Element<'_, Message> {
+    use crate::call_session::{METHOD_API, METHOD_EYEBEAM, METHOD_SCREEN, METHOD_VOICE};
+    let t = style::tokens_for(state.settings.theme_dark);
+    let s = &state.settings;
+    let mut col = column![row![
+        column![
+            text("Record calls automatically").size(16).font(bold()),
+            text("Each call gets its own files: audio (you on the left, the caller on the right) and the transcript.")
+                .size(13)
+                .color(t.muted),
+        ]
+        .spacing(4)
+        .width(Length::Fill),
+        toggler(s.record_calls).on_toggle(Message::ToggleRecordCalls).size(26).style(style::toggle),
+    ]
+    .spacing(24)
+    .align_y(iced::Alignment::Center)]
+    .spacing(18);
+
+    match state.handles.recording() {
+        Some(rec) => {
+            col = col.push(recording_line(&rec, &t));
+            if !rec.caller_side {
+                col = col.push(
+                    text("Only your side is being recorded: the call app's speaker does not go through ClearSpeak (set up call audio in Devices).")
+                        .size(12)
+                        .color(t.warning),
+                );
+            }
+        }
+        None if s.record_calls => col = col.push(text("Waiting for a call.").size(13).color(t.muted)),
+        None => {}
+    }
+
+    col = col.push(text("How calls are found").size(15).font(bold()));
+    let option = |m: u8, title: &'static str, about: &'static str| -> Element<'_, Message> {
+        column![
+            iced::widget::radio(title, m, Some(s.record_method), Message::SelectRecordMethod).size(18).text_size(14),
+            container(text(about).size(12).color(t.muted)).padding(iced::Padding { left: 30.0, ..Default::default() }),
+        ]
+        .spacing(4)
+        .into()
+    };
+    col = col
+        .push(option(
+            METHOD_SCREEN,
+            "1. VICIdial agent screen (no password)",
+            "Reads the VICIdial page open in the browser: a recording per customer, named with their number. Keep the VICIdial page on the visible tab.",
+        ))
+        .push(option(
+            METHOD_VOICE,
+            "2. Caller's voice",
+            "A recording starts when a call app has the mic and the caller is heard, and stops after 60 s without the caller. Needs call audio set up (Devices); without it the microphone alone is used.",
+        ))
+        .push(option(
+            METHOD_API,
+            "3. VICIdial API (needs an API password)",
+            "Asks the dialer directly, once a second. Most exact; needs an API user from the VICIdial admin.",
+        ))
+        .push(option(
+            METHOD_EYEBEAM,
+            "4. eyeBeam call (no VICIdial)",
+            "For eyeBeam without VICIdial: a recording starts when eyeBeam starts a call and stops when it hangs up (a hold of up to 2 min stays in the same file). Other call apps are not recorded.",
+        ));
+
+    if s.record_method == METHOD_API {
+        let field = |label: &'static str, hint: &'static str, value: &str, msg: fn(String) -> Message| -> Element<'_, Message> {
+            row![
+                text(label).size(13).width(Length::Fixed(150.0)),
+                text_input(hint, value).on_input(msg).padding([8, 10]).size(13),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center)
+            .into()
+        };
+        let pass_hint = if s.vicidial_api_pass.is_empty() { "Password" } else { "Saved - type to replace" };
+        let mut api = column![
+            field("Server address", "http://dialer/vicidial/non_agent_api.php", &s.vicidial_url, Message::VicidialUrl),
+            field("API user", "API user", &s.vicidial_api_user, Message::VicidialApiUser),
+            row![
+                text("API password").size(13).width(Length::Fixed(150.0)),
+                text_input(pass_hint, &state.vici_pass_input)
+                    .secure(true)
+                    .on_input(Message::VicidialPassInput)
+                    .on_submit(Message::SaveVicidialPass)
+                    .padding([8, 10])
+                    .size(13),
+                btn(text("Save password").size(13)).padding([8, 14]).on_press(Message::SaveVicidialPass).style(style::outline),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+            field("Agent's VICIdial ID", "e.g. 1001", &s.vicidial_agent_user, Message::VicidialAgentUser),
+        ]
+        .spacing(10)
+        .padding(iced::Padding { left: 30.0, ..Default::default() });
+        if let Some(note) = &state.vici_note {
+            api = api.push(text(note.as_str()).size(12).color(t.muted));
+        }
+        col = col.push(api);
+    }
+
+    let signal = state.handles.record_signal();
+    if !signal.is_empty() {
+        col = col.push(row![text("Now:").size(13).font(bold()), text(signal).size(13).color(t.muted)].spacing(8));
+    }
+    if !crate::call_session::METHODS.contains(&s.record_method) {
+        col = col.push(text("Pick one of the four.").size(12).color(t.warning));
+    }
+    col = col.push(
+        text("Files are kept in the transcripts folder (Transcript tab: Open folder, Keep saved transcripts, Delete all).")
+            .size(12)
+            .color(t.muted),
+    );
     card(col)
 }
 
@@ -2594,7 +2779,7 @@ fn advanced_tab(state: &MainState, wide: bool) -> Element<'_, Message> {
         .push(setting_row(
             state,
             "Save CPU automatically",
-            Some("When this PC can't keep up, pause Studio and Transcript, then caller voice removal, then use lighter noise removal, one at a time, and bring them back when it can. Accent pauses and resumes by itself. Your switches stay as you set them."),
+            Some("When this PC can't keep up, pause Studio (and let Transcript catch up later), then caller voice removal, then use lighter noise removal, one at a time, and bring them back when it can. Accent pauses and resumes by itself. Your switches stay as you set them."),
             h.perf_auto.is_on(),
             Message::TogglePerfAuto,
         ))

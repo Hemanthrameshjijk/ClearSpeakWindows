@@ -9,8 +9,22 @@
 
 /// The app must hold the mic this long before it counts as a call (short tests and sound checks are not calls).
 pub const START_AFTER_SECS: u32 = 3;
-/// The mic must be free this long before the call counts as ended (apps reopen the mic when switching devices).
+/// The mic must be free this long before the call counts as on hold (apps reopen the mic when switching devices).
 pub const END_AFTER_SECS: u32 = 5;
+/// A call whose app takes the mic again within this long after letting it go (a hold) is the same call; after that
+/// it has ended.
+pub const HOLD_GRACE_SECS: u32 = 120;
+
+/// What happened to the call this second (for automatic call recording).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CallEvent {
+    Started { apps: Vec<String> },
+    /// The app let go of the mic: on hold, or hung up (decided after [`HOLD_GRACE_SECS`]).
+    Held,
+    Resumed,
+    /// `secs`: how long the call lasted, up to the last second the mic was in use.
+    Ended { secs: u32 },
+}
 
 /// One switch or setting as it is right now.
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +55,8 @@ struct Call {
     /// `secs` and `on_secs` at the last second the mic was in use: the call ends there, not when the wait ends.
     used_secs: u32,
     used_on: Vec<u32>,
+    /// The mic has been free for [`END_AFTER_SECS`] or more.
+    held: bool,
 }
 
 #[derive(Default)]
@@ -48,6 +64,7 @@ pub struct CallTracker {
     call: Option<Call>,
     busy: u32,
     free: u32,
+    events: Vec<CallEvent>,
 }
 
 /// "on: a, b | off: c | accent: American male 2, mic boost dB: 12".
@@ -71,6 +88,11 @@ impl CallTracker {
         self.call.is_some()
     }
 
+    /// The events since the last call (normally the one tick before).
+    pub fn take_events(&mut self) -> Vec<CallEvent> {
+        std::mem::take(&mut self.events)
+    }
+
     /// Call once a second with the apps using a microphone now, the features as they are now and a few figures that
     /// are only printed at the start and the end (exposure, loud sounds blocked). Returns the lines to log.
     pub fn tick(&mut self, apps: &[String], features: Vec<Feature>, stats: &str) -> Vec<String> {
@@ -88,11 +110,26 @@ impl CallTracker {
                     }
                     // The mic was already in use for the START_AFTER_SECS before this line.
                     let on_secs: Vec<u32> = features.iter().map(|f| f.on.unwrap_or(false) as u32 * self.busy).collect();
-                    let call = Call { apps: apps.to_vec(), secs: self.busy, last: features, used_secs: self.busy, used_on: on_secs.clone(), on_secs };
+                    let call =
+                        Call { apps: apps.to_vec(), secs: self.busy, last: features, used_secs: self.busy, used_on: on_secs.clone(), on_secs, held: false };
                     self.call = Some(call);
+                    self.events.push(CallEvent::Started { apps: apps.to_vec() });
                 }
             }
+            Some(call) if call.held && self.busy >= START_AFTER_SECS && !apps.iter().any(|a| call.apps.contains(a)) => {
+                // Another app has held the mic as long as a call needs while this call was on hold: that is a new
+                // call, this one is over. (A moment's use, such as a sound check, is not.)
+                out.extend(self.end(stats));
+            }
             Some(call) => {
+                let own_app = apps.iter().any(|a| call.apps.contains(a));
+                if call.held && busy_now && own_app {
+                    call.held = false;
+                    out.push(format!("[call] resumed after {} on hold", duration(call.secs - call.used_secs)));
+                    self.events.push(CallEvent::Resumed);
+                }
+                // Only the call's own app keeps it going: another app using the mic during the hold does not.
+                let busy_now = busy_now && !call.held;
                 if busy_now && apps != call.apps.as_slice() {
                     out.push(format!("[call] apps using the mic now: {}", apps.join(" + ")));
                     call.apps = apps.to_vec();
@@ -127,7 +164,12 @@ impl CallTracker {
                     call.used_secs = call.secs;
                     call.used_on.clone_from(&call.on_secs);
                 }
-                if self.free >= END_AFTER_SECS {
+                if self.free >= END_AFTER_SECS && !call.held {
+                    call.held = true;
+                    out.push(format!("[call] mic free: on hold, or ended if it stays free for {} s", HOLD_GRACE_SECS));
+                    self.events.push(CallEvent::Held);
+                }
+                if self.free >= HOLD_GRACE_SECS {
                     out.extend(self.end(stats));
                 }
             }
@@ -139,6 +181,7 @@ impl CallTracker {
     pub fn end(&mut self, stats: &str) -> Vec<String> {
         let Some(call) = self.call.take() else { return Vec::new() };
         let secs = call.used_secs.max(1);
+        self.events.push(CallEvent::Ended { secs });
         let (mut whole, mut part, mut never) = (Vec::new(), Vec::new(), Vec::new());
         for (i, l) in call.last.iter().enumerate() {
             if l.on.is_none() {
@@ -184,8 +227,21 @@ fn is_ours(name: &str) -> bool {
 }
 
 /// Apps other than ClearSpeak that have a microphone open right now, sorted. Empty when it cannot be read.
+///
+/// Two sources: Windows' privacy record (the registry, below) and the audio sessions capturing from each microphone
+/// right now (`sessions`). The record alone is not enough: on some Windows builds it stops being updated.
 #[cfg(windows)]
 pub fn mic_users() -> Vec<String> {
+    let mut out = registry_mic_users();
+    out.extend(sessions::capturing_apps());
+    out.retain(|n| !is_ours(n));
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[cfg(windows)]
+fn registry_mic_users() -> Vec<String> {
     use reg::*;
     let mut out = Vec::new();
     let Some(root) = Key::open(None, r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone") else {
@@ -213,6 +269,58 @@ pub fn mic_users() -> Vec<String> {
 #[cfg(not(windows))]
 pub fn mic_users() -> Vec<String> {
     Vec::new()
+}
+
+/// Which programs are capturing from a microphone right now: every active capture device's audio sessions in the
+/// "active" state (streaming), by the program's file name.
+#[cfg(windows)]
+mod sessions {
+    use windows::core::Interface;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Media::Audio::{
+        eCapture, AudioSessionStateActive, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator,
+        DEVICE_STATE_ACTIVE,
+    };
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    fn exe_name(pid: u32) -> Option<String> {
+        // SAFETY: the handle is closed below; the buffer length is passed in and updated.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+            let _ = CloseHandle(h);
+            ok.then(|| String::from_utf16_lossy(&buf[..len as usize]).rsplit('\\').next().unwrap_or_default().to_string())
+        }
+    }
+
+    pub fn capturing_apps() -> Vec<String> {
+        let mut out = Vec::new();
+        // SAFETY: COM calls on interfaces that stay alive for the call; errors end the scan of that device.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let Ok(en) = CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) else { return out };
+            let Ok(devices) = en.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) else { return out };
+            for i in 0..devices.GetCount().unwrap_or(0) {
+                let Ok(dev) = devices.Item(i) else { continue };
+                let Ok(mgr) = dev.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else { continue };
+                let Ok(list) = mgr.GetSessionEnumerator() else { continue };
+                for j in 0..list.GetCount().unwrap_or(0) {
+                    let Ok(s) = list.GetSession(j) else { continue };
+                    if s.GetState().ok() != Some(AudioSessionStateActive) {
+                        continue;
+                    }
+                    let Ok(s2) = s.cast::<IAudioSessionControl2>() else { continue };
+                    if let Some(name) = s2.GetProcessId().ok().filter(|&p| p != 0).and_then(exe_name) {
+                        out.push(name);
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(windows)]
@@ -341,11 +449,12 @@ mod tests {
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].contains("accent changed: off -> on"));
         assert!(lines[1].contains("accent voice changed: off -> American male 2"));
-        let end = run(&mut t, &[], END_AFTER_SECS, &feats(true, "American male 2"));
-        assert!(end[0].starts_with("[call] ended in ms-teams.exe after 1 min 40 s"), "{}", end[0]);
-        assert!(end[1].contains("on the whole call: mic voices"), "{}", end[1]);
-        assert!(end[1].contains("on part of it: accent 50%"), "{}", end[1]);
-        assert!(end[1].contains("off the whole call: caller noise"), "{}", end[1]);
+        let end = run(&mut t, &[], HOLD_GRACE_SECS, &feats(true, "American male 2"));
+        assert!(end[0].starts_with("[call] mic free: on hold"), "{}", end[0]);
+        assert!(end[1].starts_with("[call] ended in ms-teams.exe after 1 min 40 s"), "{}", end[1]);
+        assert!(end[2].contains("on the whole call: mic voices"), "{}", end[2]);
+        assert!(end[2].contains("on part of it: accent 50%"), "{}", end[2]);
+        assert!(end[2].contains("off the whole call: caller noise"), "{}", end[2]);
         assert!(!t.in_call());
     }
 
@@ -353,9 +462,54 @@ mod tests {
     fn a_brief_mic_gap_does_not_end_the_call() {
         let mut t = CallTracker::default();
         run(&mut t, &["Zoom.exe"], 10, &feats(true, "off"));
+        t.take_events();
         assert!(run(&mut t, &[], END_AFTER_SECS - 1, &feats(true, "off")).is_empty());
         run(&mut t, &["Zoom.exe"], 5, &feats(true, "off"));
         assert!(t.in_call());
+        assert!(t.take_events().is_empty(), "not even a hold");
+    }
+
+    #[test]
+    fn events_start_hold_resume_and_end_once_each() {
+        let mut t = CallTracker::default();
+        run(&mut t, &["eyeBeam.exe"], START_AFTER_SECS - 1, &feats(true, "off"));
+        assert!(t.take_events().is_empty(), "too short to be a call yet");
+        run(&mut t, &["eyeBeam.exe"], 30, &feats(true, "off"));
+        assert_eq!(t.take_events(), [CallEvent::Started { apps: vec!["eyeBeam.exe".into()] }]);
+        // On hold for a minute: the same call goes on.
+        run(&mut t, &[], 60, &feats(true, "off"));
+        assert_eq!(t.take_events(), [CallEvent::Held]);
+        let lines = run(&mut t, &["eyeBeam.exe"], 10, &feats(true, "off"));
+        assert!(lines[0].starts_with("[call] resumed after"), "{lines:?}");
+        assert_eq!(t.take_events(), [CallEvent::Resumed]);
+        run(&mut t, &[], HOLD_GRACE_SECS, &feats(true, "off"));
+        assert_eq!(t.take_events(), [CallEvent::Held, CallEvent::Ended { secs: START_AFTER_SECS - 1 + 30 + 60 + 10 }]);
+        assert!(!t.in_call());
+    }
+
+    #[test]
+    fn another_app_taking_the_mic_during_a_hold_ends_the_call() {
+        let mut t = CallTracker::default();
+        run(&mut t, &["eyeBeam.exe"], 20, &feats(true, "off"));
+        run(&mut t, &[], 30, &feats(true, "off"));
+        t.take_events();
+        run(&mut t, &["ms-teams.exe"], START_AFTER_SECS + 1, &feats(true, "off"));
+        let ev = t.take_events();
+        assert!(matches!(ev[0], CallEvent::Ended { secs: 20 }), "{ev:?}");
+        assert_eq!(ev[1], CallEvent::Started { apps: vec!["ms-teams.exe".into()] });
+    }
+
+    #[test]
+    fn a_moments_mic_use_by_another_app_during_a_hold_keeps_the_call() {
+        let mut t = CallTracker::default();
+        run(&mut t, &["eyeBeam.exe"], 20, &feats(true, "off"));
+        run(&mut t, &[], 30, &feats(true, "off"));
+        t.take_events();
+        run(&mut t, &["SoundCheck.exe"], 1, &feats(true, "off"));
+        run(&mut t, &[], 10, &feats(true, "off"));
+        assert!(t.take_events().is_empty(), "no end, no resume");
+        run(&mut t, &["eyeBeam.exe"], 5, &feats(true, "off"));
+        assert_eq!(t.take_events(), [CallEvent::Resumed]);
     }
 
     #[test]

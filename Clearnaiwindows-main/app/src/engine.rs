@@ -821,16 +821,34 @@ pub fn start(
         stage
     };
 
-    // Live transcript: a pure tap (never changes the audio) right before the Accent stage; the speech model is
-    // loaded lazily the first time the toggle is switched on.
-    let transcript_stage = {
+    // Live transcript, two sides: the agent tap (never changes the audio) sits right before the Accent stage, the
+    // caller tap in the call-audio thread after its cleanup. Lines are labelled by stream, so who spoke is exact. The
+    // speech model is loaded lazily the first time the toggle is switched on.
+    let (transcript_stage, caller_transcript_stage) = {
         let mut cfg = asr_onnx::pipeline::TranscriptConfig::new(crate::setup::onnxruntime_dll_path(bvc_assets_dir));
         cfg.initial_enabled = settings.transcript_on;
         crate::log_info!("[clearspeakrt] transcript ORT threads = {}", cfg.threads);
-        cfg.save_dir = Some(crate::setup::app_data_dir().join("transcripts"));
-        let (stage, transcript_handle) = asr_onnx::pipeline::start(cfg);
+        let dir = crate::setup::app_data_dir().join("transcripts");
+        let gone = crate::transcript_files::delete_older_than(&dir, settings.transcript_keep_days, std::time::SystemTime::now());
+        if gone > 0 {
+            crate::log_info!("[transcript] deleted {gone} saved transcript file(s) older than {} days", settings.transcript_keep_days);
+        }
+        cfg.save_dir = Some(dir);
+        let (agent, caller, transcript_handle) = asr_onnx::pipeline::start_two_sided(cfg);
+        // Automatic call recording: the speech model is loaded now, so a call's first words are not lost to loading.
+        transcript_handle.set_preload(settings.record_calls);
+        transcript_handle.set_call_mode(settings.record_calls);
         handles.transcript = transcript_handle;
-        stage
+        (agent, caller)
+    };
+
+    // Call audio recording: the agent tap at the very end of the mic chain (what the caller heard), the caller tap at
+    // the end of the call-audio chain (what the agent heard). Both only copy the frame.
+    let (recorder_agent_tap, recorder_caller_tap) = {
+        let (agent, caller, recorder) = crate::call_recorder::start();
+        recorder.set_armed(settings.record_calls);
+        handles.recorder = recorder;
+        (agent, caller)
     };
 
     // --- Ring buffers. 2 seconds of headroom at 48kHz is generous relative
@@ -994,6 +1012,7 @@ pub fn start(
         driver_writer,
         driver_pipe,
         echo_ref_c,
+        recorder_agent_tap,
     )?;
 
     // --- Pipeline 2 (speaker outbound): capture from a second, independent
@@ -1059,7 +1078,9 @@ pub fn start(
         speaker_noise_stage,
         speaker_bvc_stage,
         speaker_studio_stage,
+        caller_transcript_stage,
         echo_ref_p,
+        recorder_caller_tap,
     )?;
 
     handles.device_switcher = Arc::new(LiveAudioSwitcher {
@@ -1223,6 +1244,7 @@ fn spawn_mic_pipeline(
     driver_writer: Option<driver_transport::SharedRingWriter>,
     mut driver_pipe: Option<crate::driver_pipe::DriverSink>,
     mut echo_ref: dsp_core::Consumer<f32>,
+    mut recorder_tap: crate::call_recorder::RecorderTap,
 ) -> Result<()> {
     thread::Builder::new()
         .name("clearspeak-mic-pipeline".into())
@@ -1266,6 +1288,8 @@ fn spawn_mic_pipeline(
                 if trimmed > 0 {
                     // Dropped on purpose to cut the delay: drift correction must not stretch the voice to put it back.
                     drift.skip(trimmed);
+                    // The call recording fills the same length with silence, so its two sides stay in step.
+                    recorder_tap.gap(trimmed);
                 }
                 let started = Instant::now();
                 // Echo removal runs first, on the raw mic, where the echo is still a linear copy of the call
@@ -1343,11 +1367,12 @@ fn spawn_mic_pipeline(
                 // switches are untouched; this only skips work.
                 let perf = handles.perf_step.load();
                 let light = crate::perf_governor::light_mic_noise(perf);
+                // A busy PC holds the speech model back but the transcript still gets every frame (copying is
+                // cheap), so nothing said meanwhile is lost; it catches up later.
+                transcript_stage.set_busy(crate::perf_governor::skip_transcript(perf));
                 if handles.mic_bvc.is_on() && !light {
                     bvc_stage.process(&mut frame);
-                    if !crate::perf_governor::skip_transcript(perf) {
-                        transcript_stage.process(&mut frame); // tap only: what you said, after BVC cleanup
-                    }
+                    transcript_stage.process(&mut frame); // tap only: what you said, after BVC cleanup
                     // Tap only: the cleaned voice, for the Accent voice "Auto" (off = one atomic load).
                     gender_stage.process(&mut frame);
                     // Accent conversion sits right after BVC (which does the cleanup) and before AutoGain.
@@ -1358,9 +1383,9 @@ fn spawn_mic_pipeline(
                     // BVC off: Accent (if switched on) gets the post-voice-gate mic signal - never the
                     // RNNoise output, which runs after it. Cleaner input = better conversion, so BVC on is
                     // still recommended.
-                    if !crate::perf_governor::skip_transcript(perf) {
-                        transcript_stage.process(&mut frame);
-                    }
+                    // Tap before Accent (it must hear what you said, not the converted voice), so it gets no
+                    // RNNoise, which runs after Accent; ASR models are trained on noisy speech anyway.
+                    transcript_stage.process(&mut frame);
                     gender_stage.process(&mut frame);
                     accent_stage.process(&mut frame);
                     auto_gain.process(&mut frame);
@@ -1406,6 +1431,8 @@ fn spawn_mic_pipeline(
                 if !handles.mic_master_enabled.is_on() {
                     frame.copy_from_slice(&silence);
                 }
+                // Call recording, agent side: exactly what goes out to the call (copy only; off = one atomic load).
+                recorder_tap.push(&frame);
 
                 // Keep the outputs in step with real time: a slow or gappy mic clock (Bluetooth call mode) is
                 // stretched by up to 1 % instead of letting the driver/cable buffers run dry into silence (cut
@@ -1568,7 +1595,9 @@ fn spawn_speaker_pipeline(
     mut noise_stage: Box<dyn Stage>,
     mut bvc_stage: Box<dyn Stage>,
     mut studio_stage: Box<dyn Stage>,
+    mut caller_transcript: asr_onnx::pipeline::TranscriptStage,
     mut echo_ref: Producer<f32>,
+    mut recorder_tap: crate::call_recorder::RecorderTap,
 ) -> Result<()> {
     thread::Builder::new()
         .name("clearspeak-speaker-pipeline".into())
@@ -1597,6 +1626,7 @@ fn spawn_speaker_pipeline(
                 if trimmed > 0 {
                     // Dropped on purpose to cut the delay: drift correction must not stretch it back in.
                     drift.skip(trimmed);
+                    recorder_tap.gap(trimmed);
                 }
                 let started = Instant::now();
                 let in_peak = frame.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
@@ -1614,6 +1644,8 @@ fn spawn_speaker_pipeline(
                 if !crate::perf_governor::skip_speaker_bvc(perf) {
                     run_if_enabled(bvc_stage.as_mut(), &handles.speaker_bvc, &mut frame);
                 }
+                // Tap only: the caller's words for the transcript, after cleanup and before the tone shaping.
+                caller_transcript.process(&mut frame);
                 if !crate::perf_governor::skip_studio(perf) {
                     run_if_enabled(studio_stage.as_mut(), &handles.speaker_studio, &mut frame);
                 }
@@ -1630,6 +1662,8 @@ fn spawn_speaker_pipeline(
                         );
                     }
                 }
+                // Call recording, caller side: what the agent hears (copy only; off = one atomic load).
+                recorder_tap.push(&frame);
                 if handles.speaker_master_enabled.is_on() {
                     exposure_meter_frame(&handles, &mut exposure, &frame, &mut second_energy, &mut second_frames);
                 }

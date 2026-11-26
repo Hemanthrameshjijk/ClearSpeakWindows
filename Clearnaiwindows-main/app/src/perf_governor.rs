@@ -34,9 +34,9 @@ pub const MAX_UP_AFTER_SECS: u32 = 15 * 60;
 pub fn step_pauses(step: u8) -> &'static str {
     match step {
         0 => "nothing",
-        1 => "Studio and Transcript",
-        2 => "Studio, Transcript and caller voice removal",
-        _ => "Studio, Transcript and caller voice removal; your voice uses light noise removal",
+        1 => "Studio; Transcript catches up later",
+        2 => "Studio and caller voice removal; Transcript catches up later",
+        _ => "Studio and caller voice removal; your voice uses light noise removal; Transcript catches up later",
     }
 }
 
@@ -45,6 +45,7 @@ pub fn step_pauses(step: u8) -> &'static str {
 pub fn skip_studio(step: u8) -> bool {
     step >= 1
 }
+/// The transcript holds its speech model back (it keeps listening and catches up later; no audio is dropped).
 #[inline]
 pub fn skip_transcript(step: u8) -> bool {
     step >= 1

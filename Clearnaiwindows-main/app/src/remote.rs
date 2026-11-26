@@ -235,6 +235,10 @@ fn apply_observed(handles: &EngineHandles, hush: &Option<Arc<AtomicBool>>, bpo: 
     handles.voice_auto.gender.store(st.voice_auto[1], std::sync::atomic::Ordering::Relaxed);
     handles.voice_auto.confirmed.store(st.voice_auto_confirmed, std::sync::atomic::Ordering::Relaxed);
     handles.voice_auto.own_ready.store(st.own_voice_ready, std::sync::atomic::Ordering::Relaxed);
+    if let Some(live) = &handles.remote {
+        *live.recording.lock().unwrap() = st.recording.clone();
+        *live.record_signal.lock().unwrap() = st.record_signal.clone();
+    }
     shared::counters_from_array(&handles.speaker_counters, &st.speaker_counters);
     let ex = &handles.exposure;
     ex.dose_pct.store(st.exposure.dose_pct);
@@ -284,7 +288,15 @@ fn apply_observed(handles: &EngineHandles, hush: &Option<Arc<AtomicBool>>, bpo: 
         &t.message,
         t.rtf,
         t.reset,
-        t.new_lines.iter().map(|(at_secs, text)| TranscriptLine { at_secs: *at_secs, text: text.clone() }).collect(),
+        t.new_lines
+            .iter()
+            .enumerate()
+            .map(|(i, (at_secs, text))| TranscriptLine {
+                at_secs: *at_secs,
+                side: asr_onnx::pipeline::Side::from_u8(t.new_sides.get(i).copied().unwrap_or(0)),
+                text: text.clone(),
+            })
+            .collect(),
         &t.partial,
     );
 }

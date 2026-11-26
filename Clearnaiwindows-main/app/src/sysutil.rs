@@ -137,6 +137,23 @@ pub fn open_url(_url: &str) -> Result<(), String> {
     Err("opening a web page is only supported on Windows".to_string())
 }
 
+/// Below-normal priority for the calling thread: background work (file writing) must never compete with the audio
+/// threads for a core.
+#[cfg(windows)]
+pub fn lower_current_thread_priority() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentThread() -> isize;
+        fn SetThreadPriority(h: isize, p: i32) -> i32;
+    }
+    const THREAD_PRIORITY_BELOW_NORMAL: i32 = -1;
+    // SAFETY: the pseudo-handle of the current thread needs no closing.
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+}
+
+#[cfg(not(windows))]
+pub fn lower_current_thread_priority() {}
+
 #[cfg(windows)]
 mod win {
     use super::HOTKEY_PRESSED;
